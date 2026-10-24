@@ -1,0 +1,7 @@
+model:
+  provider: claude-subscription-directsdk-experimental
+  default: sonnet
+
+plugins:
+  enabled:
+    - claude-subscription-directsdk-experimental
