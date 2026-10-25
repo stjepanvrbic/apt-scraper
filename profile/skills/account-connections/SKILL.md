@@ -188,10 +188,10 @@ iMessage exists only on macOS, and texting is off elsewhere. `imsg` needs macOS 
    - that terminal app,
    - `/usr/bin/osascript`. In the file chooser, they press Command-Shift-G, type `/usr/bin/osascript` and press Enter, then **Open**.
 
-   macOS reads this grant only when a program starts, so the gateway must start again after your turn has ended. Tell the user that the chat pauses for about a minute, and that they then reload the dashboard page and say "continue the connection setup". Then, as the last command of your reply, run this with the terminal tool's `background=true`. It waits 30 seconds so your turn is over first, and `--yes` lets the restart interrupt a scheduled job that is running:
+   macOS reads this grant only when a program starts, so the gateway must start again after your turn has ended. Tell the user that the chat pauses for about a minute, and that they then reload the dashboard page and say "continue the connection setup". Then, as the last command of your reply, run this with the terminal tool's `background=true`. Hermes refuses a restart while any turn or scheduled job runs, so the command tries every 30 seconds for five minutes and restarts the gateway once nothing runs. It interrupts nothing, your own turn included:
 
    ```bash
-   sh -c 'sleep 30; hermes -p default gateway restart --yes' > "$HERMES_HOME/logs/gateway-restart.log" 2>&1
+   sh -c 'date; for attempt in 1 2 3 4 5 6 7 8 9 10; do sleep 30; hermes -p default gateway restart && exit 0; done; exit 1' > "$HERMES_HOME/logs/gateway-restart.log" 2>&1
    ```
 
    The stored results carry over.
@@ -203,7 +203,7 @@ Failures:
 | Reason in the check | Fix |
 |---|---|
 | The imsg command is not installed | Step 1 |
-| `unable to open database file`, or empty results | Read `$HERMES_HOME/logs/gateway-restart.log`. If the restart failed or was refused, show the user what it says and repeat the restart in step 3. Otherwise step 3 for the context that failed. If the entries are already on, switch them off and on again, because they go stale after macOS, Homebrew or terminal updates. If the terminal still fails, also add `/System/Applications/Utilities/Terminal.app`, which the imsg documentation says macOS sometimes consults |
+| `unable to open database file`, or empty results | Read `$HERMES_HOME/logs/gateway-restart.log`, whose first line is when the restart began. If its last attempt was refused or failed, show the user what it says and repeat the restart in step 3. Otherwise step 3 for the context that failed. If the entries are already on, switch them off and on again, because they go stale after macOS, Homebrew or terminal updates. If the terminal still fails, also add `/System/Applications/Utilities/Terminal.app`, which the imsg documentation says macOS sometimes consults |
 | `not authorized to send Apple events` | Open `x-apple.systempreferences:com.apple.preference.security?Privacy_Automation`, or **System Settings → Privacy & Security → Automation**. The user switches on **Messages** under the terminal app or `osascript`, then check again |
 | `not checked`, did not finish within 90 seconds | A permission dialog was waiting. The user answers it, then check again |
 | No test text has been sent from the terminal or the gateway yet | Step 5 in that context. For the terminal, first try `hermes -p default gateway start`: with the gateway service running, your commands run in the gateway |
