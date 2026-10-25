@@ -1,0 +1,127 @@
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
+
+from store import ListingStore
+
+
+def listing(**changes):
+    return {
+        'id': 'example:100',
+        'title': 'Courtyard apartment',
+        'price': 2100,
+        'currency': 'USD',
+        'rental_period': 'month',
+        'agent': {'name': 'Example Agent', 'email': 'agent@example.com'},
+        'size': '850 sq ft',
+        'rooms': '2 bedrooms, 1 bathroom',
+        'address': '100 Example Street, Chicago',
+        'description': 'Bright rooms facing a shared courtyard.',
+        'amenities': ['Laundry', 'Balcony'],
+        'photos': ['https://example.com/living.jpg', 'https://example.com/kitchen.jpg'],
+        'sources': [{'label': 'Example Homes', 'url': 'https://example.com/listings/100'}],
+        'first_seen': '2026-10-20',
+        'status': 'available',
+        **changes,
+    }
+
+
+class ListingStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name) / 'listings.sqlite3'
+        self.store = ListingStore(self.path)
+
+    def test_imported_listing_survives_reopening_with_all_details(self):
+        self.store.upsert_listing(listing())
+        saved = ListingStore(self.path).state()['listings'][0]
+        for field, value in listing().items():
+            self.assertEqual(saved[field], value)
+
+    def test_partial_listing_and_price_on_request_are_preserved(self):
+        self.store.upsert_listing({'id': 'partial', 'sources': listing()['sources'], 'price': 'Price on request'})
+        saved = self.store.listing('partial')
+        self.assertIsNone(saved['price'])
+        self.assertEqual(saved['price_note'], 'Price on request')
+        self.assertIsNone(saved['size'])
+        self.assertIsNone(saved['rooms'])
+        self.assertEqual(saved['photos'], [])
+        self.store.upsert_listing(listing())
+        self.assertEqual(len(self.store.state()['listings']), 2)
+
+    def test_feedback_and_notes_survive_refresh_and_restart(self):
+        self.store.upsert_listing(listing())
+        self.store.feedback('example:100', favorite=True)
+        self.store.add_note('Quiet, but the bedroom is small.', listing_id='example:100')
+        self.store.upsert_listing(listing(price=2050))
+        saved = ListingStore(self.path).state()['listings'][0]
+        self.assertTrue(saved['favorite'])
+        self.assertEqual(saved['price'], 2050)
+        self.assertEqual(saved['notes'][0]['text'], 'Quiet, but the bedroom is small.')
+        self.store.feedback('example:100', favorite=False)
+        self.assertFalse(ListingStore(self.path).state()['listings'][0]['favorite'])
+        self.store.feedback('example:100', favorite=True)
+        self.store.feedback('example:100', dismissed=True)
+        saved = ListingStore(self.path).state()['listings'][0]
+        self.assertTrue(saved['dismissed'])
+        self.assertFalse(saved['favorite'])
+        self.assertEqual(len(saved['notes']), 1)
+
+    def test_contact_and_viewing_history_remains_when_listing_is_gone(self):
+        self.store.upsert_listing(listing())
+        self.store.request_contact('example:100')
+        self.store.request_contact('example:100')
+        self.assertEqual(self.store.state()['listings'][0]['contact']['status'], 'pending')
+        self.store.correspond('example:100', 'outgoing', 'email', 'May I view it on Friday?', external_message_id='message-one', external_thread_id='thread-one')
+        self.store.set_contact('example:100', 'contacted', channel='email')
+        self.store.book_viewing('example:100', '2026-10-30T15:00:00-05:00', 'Meet at the lobby.', 'event-100')
+        self.store.upsert_listing(listing(status='unavailable'))
+        self.store.feedback('example:100', dismissed=True)
+        saved = ListingStore(self.path).state()['listings'][0]
+        self.assertEqual(saved['contact']['status'], 'contacted')
+        self.assertEqual(saved['correspondence'][0]['text'], 'May I view it on Friday?')
+        self.assertEqual(saved['viewings'][0]['time'], '2026-10-30T20:00:00+00:00')
+        self.assertEqual(saved['status'], 'unavailable')
+
+    def test_listing_notes_keep_both_authors(self):
+        self.store.upsert_listing(listing())
+        self.store.add_note('I prefer quieter streets.', listing_id='example:100')
+        self.store.add_note('I will prioritize side streets.', listing_id='example:100', role='agent')
+        notes = ListingStore(self.path).listing('example:100')['notes']
+        self.assertEqual([note['role'] for note in notes], ['user', 'agent'])
+        self.assertEqual(notes[0]['text'], 'I prefer quieter streets.')
+
+    def test_invalid_import_does_not_replace_saved_listing(self):
+        self.store.upsert_listing(listing())
+        for changes in [
+            {'price': -1}, {'price': float('nan')}, {'photos': ['javascript:alert(1)']},
+            {'sources': [{'label': 'Unsafe', 'url': 'file:///private'}]},
+            {'status': 'unknown'}, {'rank': 0}, {'amenities': 'Laundry'},
+            {'first_seen': 'yesterday'}, {'first_seen': '20261020'}, {'first_seen': '2026-W43-1'},
+            {'currency': 'INVALID'}, {'favorite': True},
+        ]:
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.store.upsert_listing(listing(**changes))
+        self.assertEqual(self.store.state()['listings'][0]['price'], 2100)
+
+    def test_invalid_actions_and_missing_listings_are_reported(self):
+        self.store.upsert_listing(listing())
+        for action in [
+            lambda: self.store.add_note('   ', listing_id='example:100'),
+            lambda: self.store.feedback('example:100', favorite='yes'),
+            lambda: self.store.add_note('Note', listing_id='example:100', role='system'),
+            lambda: self.store.book_viewing('example:100', 'tomorrow', '', 'event-100'),
+            lambda: self.store.correspond('example:100', 'unknown', 'email', 'Hello', external_message_id='bad'),
+        ]:
+            with self.subTest(action=action), self.assertRaises(ValueError):
+                action()
+        with self.assertRaises(KeyError):
+            self.store.feedback('missing', favorite=True)
+
+
+if __name__ == '__main__':
+    unittest.main()
