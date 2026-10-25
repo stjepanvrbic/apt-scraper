@@ -5,8 +5,11 @@ Features are a JSON object saved against the listing's content fingerprint:
   facts       written by the search from the listing site's structured data:
               areas     the criteria areas whose search found the listing
               currency  three-letter code of the unit prices
+              latitude, longitude  of the listing, both null when the site gives none
+              stories   floors in the building
               units     one entry per rentable unit, each with price, period (day, week, month, year
-                        or total), bedrooms, size_sqft and available_on (YYYY-MM-DD), any of them null
+                        or total), bedrooms, bathrooms, size_sqft, available_on (YYYY-MM-DD), label (the
+                        unit's number or name, such as "Unit G2") and floor, any of them null
   must_haves  the model's judgments, by phrase: true when the listing meets it, false when the listing
               rules it out, null when the listing does not say. The phrases are the must-haves in
               criteria.other, and for a listing without facts, such as one imported by hand, also one

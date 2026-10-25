@@ -67,7 +67,7 @@ def floor_plan(zpid, price, beds, sqft, name='2 Bedroom'):
 
 def building_page(units, plans=()):
     building = {
-        'buildingName': 'Lake Tower', 'fullAddress': '300 W Example Ave, Chicago, IL 60657', 'currency': 'USD',
+        'buildingName': 'Lake Tower', 'fullAddress': '300 W Example Ave, Chicago, IL 60657', 'currency': 'USD', 'latitude': 41.94, 'longitude': -87.65,
         'description': 'A tower by the lake.', 'buildingPhoneNumber': '(312) 555-0100',
         'contactInfo': {'agentFullName': None},
         'photos': [photo('b1'), photo('b2')],
@@ -82,10 +82,10 @@ def building_page(units, plans=()):
     return page({'props': {'pageProps': {'componentProps': {'initialReduxState': {'gdp': {'building': building}}}}}})
 
 
-def home_page(zpid, status='FOR_RENT', price=2385, **facts):
+def home_page(zpid, status='FOR_RENT', price=2385, latitude=41.927895, longitude=-87.723366, **facts):
     key = f'ForRentShopperPlatformFullRenderQuery{{"zpid":{zpid}}}'
     home = {'zpid': zpid, 'homeStatus': status, 'price': price, 'currency': 'USD', 'bedrooms': 2, 'bathrooms': 1, 'livingArea': 700,
-            'livingAreaUnitsShort': 'sqft', 'streetAddress': '2476 N Example Ave APT 1F', 'city': 'Chicago', 'state': 'IL', 'zipcode': '60614',
+            'livingAreaUnitsShort': 'sqft', 'streetAddress': '2476 N Example Ave APT 1F', 'latitude': latitude, 'longitude': longitude, 'city': 'Chicago', 'state': 'IL', 'zipcode': '60614',
             'description': 'New kitchen.\nCourtyard with grill.', 'hdpUrl': f'/homedetails/2476-N-Example-Ave/{zpid}_zpid/',
             'attributionInfo': {'agentName': 'Pat Manager', 'agentPhoneNumber': '312-555-0199', 'agentEmail': None},
             'originalPhotos': [photo('h1')],
@@ -93,6 +93,11 @@ def home_page(zpid, status='FOR_RENT', price=2385, **facts):
                                                                               {'factLabel': 'Heating', 'factValue': None}],
                           'appliances': ['Dishwasher'], 'laundryFeatures': ['Shared'], 'parkingFeatures': [], 'interiorFeatures': None, **facts}}
     return page({'props': {'pageProps': {'componentProps': {'gdpClientCache': json.dumps({key: {'property': home}})}}}})
+
+
+def unit_fact(price, bedrooms, size, available_on, label, bathrooms=1):
+    return {'price': price, 'period': 'month', 'bedrooms': bedrooms, 'bathrooms': bathrooms, 'size_sqft': size, 'available_on': available_on,
+            'label': label, 'floor': None}
 
 
 class FakeClient:
@@ -226,9 +231,9 @@ class ZillowReadTests(unittest.TestCase):
         self.assertEqual(listing['agent'], {'name': 'Lake Tower', 'phone': '(312) 555-0100', 'contact_form': card['url']})
         self.assertEqual(facts['currency'], 'USD')
         self.assertEqual(facts['units'], [
-            {'price': 1950, 'period': 'month', 'bedrooms': 2, 'size_sqft': 900, 'available_on': None},
-            {'price': 1500, 'period': 'month', 'bedrooms': 0, 'size_sqft': 450, 'available_on': '2026-12-15'},
-            {'price': 3100, 'period': 'month', 'bedrooms': 3, 'size_sqft': 1300, 'available_on': '2026-11-18'}])
+            unit_fact(1950, 2, 900, None, 'Unit 4B'), unit_fact(1500, 0, 450, '2026-12-15', 'Unit 2A'),
+            unit_fact(3100, 3, 1300, '2026-11-18', 'Unit 2A')])
+        self.assertEqual((facts['latitude'], facts['longitude'], facts['stories']), (41.94, -87.65, None))
 
     def test_a_unit_card_is_read_from_its_building_page(self):
         card = zillow.card(unit_card(12))
@@ -238,7 +243,7 @@ class ZillowReadTests(unittest.TestCase):
         self.assertEqual(listing['title'], 'Lake Tower, Unit 9C')
         self.assertEqual((listing['price'], listing['rooms'], listing['size']), (2100, '2 bd, 1 ba', '850 sqft'))
         self.assertEqual(listing['photos'], ['https://photos.zillowstatic.com/fp/unit12-cc_ft_1536.jpg'])
-        self.assertEqual(facts['units'], [{'price': 2100, 'period': 'month', 'bedrooms': 2, 'size_sqft': 850, 'available_on': '2026-11-15'}])
+        self.assertEqual(facts['units'], [unit_fact(2100, 2, 850, '2026-11-15', 'Unit 9C')])
 
     def test_floor_plans_listed_without_units_are_offers_and_a_card_can_be_one_plan(self):
         plans = [floor_plan(30, 1350, 0, 265, name='Studio'), floor_plan(31, 2350, 2, 730, name='2 Bedroom')]
@@ -251,7 +256,7 @@ class ZillowReadTests(unittest.TestCase):
         validate_listing(listing)
         self.assertEqual((listing['title'], listing['price'], listing['rooms'], listing['size']), ('Lake Tower, 2 Bedroom', 2350, '2 bd, 1 ba', '730 sqft'))
         self.assertEqual(listing['photos'], ['https://photos.zillowstatic.com/fp/plan31-cc_ft_1536.jpg'])
-        self.assertEqual(facts['units'], [{'price': 2350, 'period': 'month', 'bedrooms': 2, 'size_sqft': 730, 'available_on': '2026-11-15'}])
+        self.assertEqual(facts['units'], [unit_fact(2350, 2, 730, '2026-11-15', None)])
 
     def test_units_listed_outside_floor_plans_are_offers(self):
         ungrouped = [{'listingType': 'FOR_RENT', 'unitNumber': 'Unit 1F', 'zpid': '41', 'price': 2100, 'beds': 3, 'baths': 2, 'sqft': None,
@@ -260,7 +265,7 @@ class ZillowReadTests(unittest.TestCase):
         page = building_page([]).replace('"floorPlans": []', '"floorPlans": [], "ungroupedUnits": ' + json.dumps(ungrouped))
         building, facts = zillow.read(zillow.card(building_card(77)), FakeClient((200, page)))
         self.assertEqual((building['price'], building['rooms']), (2100, '3 bd'))
-        self.assertEqual(facts['units'], [{'price': 2100, 'period': 'month', 'bedrooms': 3, 'size_sqft': None, 'available_on': None}])
+        self.assertEqual(facts['units'], [unit_fact(2100, 3, None, None, 'Unit 1F', bathrooms=2)])
         unit, _ = zillow.read(zillow.card(unit_card(41)), FakeClient((200, page)))
         self.assertEqual((unit['title'], unit['photos']), ('Lake Tower, Unit 1F', ['https://photos.zillowstatic.com/fp/u41-p_i.jpg']))
 
@@ -292,7 +297,41 @@ class ZillowReadTests(unittest.TestCase):
         self.assertEqual(listing['agent'], {'name': 'Pat Manager', 'phone': '312-555-0199', 'contact_form': card['url']})
         self.assertEqual(listing['amenities'], ['Pets: Cats, Small Dogs', 'Dishwasher', 'Laundry: Shared'])
         self.assertEqual(listing['description'], 'New kitchen.\nCourtyard with grill.')
-        self.assertEqual(facts['units'], [{'price': 2385, 'period': 'month', 'bedrooms': 2, 'size_sqft': 700, 'available_on': '2026-10-30'}])
+        self.assertEqual(facts['units'], [unit_fact(2385, 2, 700, '2026-10-30', None)])
+        self.assertEqual((facts['latitude'], facts['longitude'], facts['stories']), (41.927895, -87.723366, None))
+
+    def test_a_home_page_gives_the_floor_and_building_height_its_facts_state(self):
+        card = zillow.card(unit_card(5, detailUrl='/homedetails/x/5_zpid/'))
+        _, facts = zillow.read(card, FakeClient((200, home_page(5, entryLevel='3', storiesTotal=4))))
+        self.assertEqual((facts['units'][0]['floor'], facts['stories']), (3, 4))
+        for level, stories in [('Ground', 'four'), (0, None), (2.5, 0)]:
+            with self.subTest(level=level):
+                _, facts = zillow.read(card, FakeClient((200, home_page(5, entryLevel=level, storiesTotal=stories))))
+                self.assertEqual((facts['units'][0]['floor'], facts['stories']), (None, None))
+
+    def test_a_building_unit_gives_the_floor_its_page_states(self):
+        units = [{**floor_unit(11, 1950, 2, 900), 'floor': 7}, {**floor_unit(12, 2100, 2, 850), 'floor': None}]
+        _, facts = zillow.read(zillow.card(building_card(77)), FakeClient((200, building_page(units))))
+        self.assertEqual([unit['floor'] for unit in facts['units']], [7, None])
+
+    def test_coordinates_outside_the_globe_or_missing_are_unknown(self):
+        card = zillow.card(unit_card(5, detailUrl='/homedetails/x/5_zpid/'))
+        for latitude, longitude in [(None, -87.7), (95.0, -87.7), (41.9, 'west'), (41.9, float('nan')), (True, -87.7)]:
+            with self.subTest(latitude=latitude, longitude=longitude):
+                _, facts = zillow.read(card, FakeClient((200, home_page(5, latitude=latitude, longitude=longitude))))
+                self.assertEqual((facts['latitude'], facts['longitude']), (None, None))
+        page = building_page([floor_unit(11, 1950, 2, 900)]).replace('"latitude": 41.94, "longitude": -87.65, ', '')
+        _, facts = zillow.read(zillow.card(building_card(77)), FakeClient((200, page)))
+        self.assertEqual((facts['latitude'], facts['longitude']), (None, None))
+
+    def test_a_new_reader_version_reads_every_card_again(self):
+        before = zillow.card(unit_card(1))['signature']
+        original = zillow.READER
+        try:
+            zillow.READER = original + 1
+            self.assertNotEqual(zillow.card(unit_card(1))['signature'], before)
+        finally:
+            zillow.READER = original
 
     def test_listings_no_longer_for_rent_are_gone(self):
         unit = zillow.card(unit_card(12))

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from test_gallery_store import ListingStore, listing
 from store import ViewingConflict
-from schema import initial_schema
+from schema import MIGRATIONS, initial_schema
 
 
 class ContactStoreTests(unittest.TestCase):
@@ -30,7 +30,7 @@ class ContactStoreTests(unittest.TestCase):
                 connection.execute("INSERT INTO correspondence (listing_id, direction, channel, text, created_at, external_message_id) "
                                    "VALUES ('example:100', 'incoming', 'email', 'Hello', '2026-10-22', 'm1')")
         store = ListingStore(path)
-        self.assertEqual(store.schema_version, 2)
+        self.assertEqual(store.schema_version, len(MIGRATIONS))
         saved = store.listing('example:100')
         self.assertEqual((saved['contact']['status'], saved['correspondence'][0]['text']), ('contacted', 'Hello'))
         self.assertEqual(store.due_contacts(), [{'listing_id': 'example:100', 'reason': 'reply'}])

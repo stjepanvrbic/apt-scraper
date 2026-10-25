@@ -1,6 +1,8 @@
 import hashlib
 import json
 
+from code_features import store_code_features
+
 
 def content_fingerprint(listing):
     content = {key: value for key, value in listing.items() if key not in ('id', 'first_seen', 'status')}
@@ -45,7 +47,15 @@ def contact_workflow(connection):
         connection.execute(statement)
 
 
-MIGRATIONS = (initial_schema, contact_workflow)
+def code_derived_features(connection):
+    connection.execute("""CREATE TABLE code_features (listing_id TEXT PRIMARY KEY REFERENCES listings(id), fingerprint TEXT NOT NULL,
+        monthly_price REAL, currency TEXT, size_sqft REAL, price_per_sqft REAL, bedrooms INTEGER, bathrooms REAL, unit_label TEXT,
+        unit_floor INTEGER, unit_level TEXT, photo_count INTEGER NOT NULL, latitude REAL, longitude REAL)""")
+    for (listing_id,) in connection.execute('SELECT id FROM listings').fetchall():
+        store_code_features(connection, listing_id)
+
+
+MIGRATIONS = (initial_schema, contact_workflow, code_derived_features)
 
 
 def migrate(connection):
