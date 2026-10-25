@@ -1,9 +1,9 @@
 ---
 title: Account connections and checks
 type: Feature
-state: In Progress
+state: Done
 priority: 2
-assignee: agent
+assignee: Stjepan Vrbic
 milestone:
 parent:
 blocked_by: []
@@ -58,7 +58,7 @@ Hermes does not need a category directory. `hermes skills list` lists the skill 
 - The gateway needs a configured platform, a test message delivered by `hermes send` to a home channel, and a running gateway. It tries the platform that worked before first, then the others, and reports each failure. Liveness comes from `hermes_cli.profiles.list_profiles`, the same source as `hermes profile list`, because Hermes has no machine-readable gateway status.
 - iMessage needs `imsg`, a readable Messages history and a test text to the user's own number or Apple ID. macOS grants Full Disk Access and Automation to the program that starts `imsg`, so the script keeps one result for the terminal and one for the gateway. It tells them apart by whether `/usr/bin/osascript` is among its ancestor processes, because Hermes's launchd gateway runs under `osascript`. `require imessage` uses the result of the context it runs in.
 
-`status` and `require` check again any result that is missing, older than a day or `not checked`, and they never send a test message or test text in any state. Without test messages, the gateway passes only on the platform where an earlier `check` delivered one and while the gateway runs. iMessage passes only if an earlier `check` texted the same handle from the same context. Otherwise both report that a `check` is needed. Each command has a timeout, and a whole check stops after 150 seconds, inside Hermes's 180-second terminal limit. A timeout and a channel the check never reached both store `not checked`, kept apart from `not connected` and always checked again, so a network blip does not block a channel for a day. On a timeout the script kills the whole process tree, because `hermes.exe` runs Python as a child that holds the output pipes. The kill and the wait for the pipes are each bounded at 5 seconds. The results file is merged and replaced in one step, and a corrupt file is replaced. The skill declares `platforms: [windows, macos]`, the project's platforms, because the linter requires a declaration for a script that uses `osascript` and `signal.SIGKILL`. Exit code 0 means usable, and every other code means do not use the channel.
+`status` and `require` check again any result that is missing, older than a day or `not checked`, and they never send a test message or test text in any state. Without test messages, the gateway passes only on the platform where an earlier `check` delivered one and while the gateway runs. iMessage passes only if an earlier `check` texted the same handle from the same context. Otherwise both report that a `check` is needed. Each command has a timeout, and a whole check stops after 150 seconds, inside Hermes's 180-second terminal limit. A timeout and a channel the check never reached both store `not checked`, kept apart from `not connected` and always checked again, so a network blip does not block a channel for a day. On a timeout the script kills the whole process tree, because `hermes.exe` runs Python as a child that holds the output pipes. The kill and the wait for the pipes are each bounded at 5 seconds. The results file is merged and replaced in one step, and a corrupt file is replaced. The skill declares `platforms: [windows, macos]`, the project's platforms, because the linter warns without a declaration for a script that uses `osascript` and `signal.SIGKILL`. Exit code 0 means usable, and every other code means do not use the channel.
 
 Ran on this Windows machine with Hermes 0.22.5 and profile `apt-scraper`, installed with `hermes profile install` the way `install.ps1` does:
 
