@@ -7,7 +7,7 @@ assignee: agent
 milestone:
 parent: 0015
 blocked_by: []
-related: []
+related: [0030]
 ---
 
 ## Outcome
@@ -41,8 +41,10 @@ Capture is best effort during browser termination or a server outage: the queue 
 
 ## Result
 
-Schema migration 7 adds `implicit_signals`; authenticated `POST /api/signals` validates and atomically deduplicates batches. Existing Mantine hooks and the lightbox view callback capture opens, visible dwell increments, photo views and closes through the existing fetch layer. Signal writes do not change the gallery revision. Reranks report a separate weak-label leave-one-out result while retaining the ordinary ranks, explanations, exploration and Compare questions.
+Schema migration 8 adds `implicit_signals` after the distance-feature migration; authenticated `POST /api/signals` validates and atomically deduplicates batches. Existing Mantine hooks and the lightbox view callback capture opens, visible dwell increments, photo views and closes through the existing fetch layer. Signal writes do not change the gallery revision. Reranks report a separate weak-label leave-one-out result while retaining the ordinary ranks, explanations, exploration and Compare questions.
 
-Nine new Python tests cover storage, migration, authentication, batch validation, diagnostic isolation, held-out leakage and the two-second rerank budget with 300 listings, 50 favorites and 250 weak labels. Four new headless browser tests cover photo paging, hidden time, retries after lost responses, page exit, refreshes and reopened visits. The full Python suite passed 412 tests and the full headless Playwright suite passed 30 tests, including desktop/mobile accessibility and screenshots, with zero skipped tests. Lint, production build and `ruff check profile tests` passed. Independent review and merge remain pending.
+Ten new Python tests cover storage, migration, authentication, batch validation, diagnostic isolation, held-out leakage and the two-second CPU budget with 300 listings, 50 favorites and 250 weak labels. Four new headless browser tests cover photo paging, hidden time, retries after lost responses, page exit, refreshes and reopened visits. After rebasing onto the distance features, the full Python suite passed 456 tests and the full headless Playwright suite passed 30 tests, including desktop/mobile accessibility and screenshots, with zero skipped tests. Lint, production build and `ruff check profile tests` passed. Independent review and merge remain pending.
 
-The governing requirements are Spec Terms, Ranking and Gallery and the existing Spec Decisions; the repository has no separate ADR register. Adjacent cleanup stabilizes lightbox slides during rerenders and seeds the old-schema migration fixture directly instead of invoking the current reranker on an unmigrated database. Numerical dot products now use `math.sumprod` to meet the diagnostic timing budget, requiring Python 3.12 or newer outside Hermes; the supplied Hermes runtime is 3.14.9, as the [ranking guide](../ranking.md#implicit-signal-diagnostic) documents. A 40-listing characterization kept ranks, held-out ranks and exploration unchanged, with maximum weight difference 1.39e-17, and all 32 scoring tests passed. No new package was added. The owner's installed profiles were not used for verification.
+The governing requirements are Spec Terms, Ranking and Gallery and the existing Spec Decisions; the repository has no separate ADR register. Adjacent cleanup stabilizes lightbox slides during rerenders. Numerical dot products now use `math.sumprod` to meet the diagnostic timing budget, requiring Python 3.12 or newer outside Hermes; the supplied Hermes runtime is 3.14.9, as the [ranking guide](../ranking.md#implicit-signal-diagnostic) documents. A 40-listing characterization kept ranks, held-out ranks and exploration unchanged, with maximum weight difference 1.39e-17. No new package was added. The owner's installed profiles were not used for verification.
+
+The new signal timing test measures CPU time, following [0030: the rerank timing test fails on a busy machine](0030-rerank_timing_test_under_load.md). The existing timing test is unchanged. Verification uses an isolated temporary home so launcher tests do not access the owner's secrets directory.

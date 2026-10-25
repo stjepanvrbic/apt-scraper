@@ -85,6 +85,25 @@ class SignalStoreTests(unittest.TestCase):
         self.assertEqual((saved['rank'], saved['reason']), (1, 'Keep this reason.'))
         self.assertEqual(store.record_signals([event(store, fingerprint='a' * 64)]), 1)
 
+    def test_migration_preserves_distance_features_from_version_seven(self):
+        path = self.path.parent / 'version-seven.sqlite3'
+        connection = sqlite3.connect(path)
+        with connection:
+            for migration in MIGRATIONS[:7]:
+                migration(connection)
+            connection.execute('PRAGMA user_version = 7')
+        connection.close()
+        old = ListingStore.__new__(ListingStore)
+        old.path = path
+        old.upsert_listing(listing())
+        with old.connect(write=True) as connection:
+            connection.execute('''UPDATE code_features SET nearest_station = 'Central', station_distance_km = 0.25,
+                place_distances_km = '{"Work": 1.5}' WHERE listing_id = 'example:100' ''')
+        before = old.code_features()
+        migrated = ListingStore(path)
+        self.assertEqual(migrated.code_features(), before)
+        self.assertEqual(migrated.record_signals([event(migrated)]), 1)
+
 
 class SignalHTTPTests(unittest.TestCase):
     setUp = test_gallery_server.GalleryServerTests.setUp
@@ -106,16 +125,16 @@ class SignalHTTPTests(unittest.TestCase):
 
 
 class SignalRerankTests(StoreTestCase):
-    def test_rerank_with_signals_meets_the_two_second_budget(self):
+    def test_rerank_with_signals_meets_the_two_second_cpu_budget(self):
         identifiers = fill(self.store, 300, 50)
         for index, identifier in enumerate(identifiers[50:]):
             values = {'listing_id': identifier, 'visit_id': identifier}
             self.store.record_signals([event(self.store, **values),
                                       event(self.store, 'dwell', duration_ms=60000 if index < 50 else 1000, **values),
                                       event(self.store, 'close', **values)])
-        started = time.perf_counter()
+        started = time.process_time()
         result = rerank(self.store, seed=1)
-        elapsed = time.perf_counter() - started
+        elapsed = time.process_time() - started
         self.assertEqual(result['implicit_signals']['weak_labels'], 250)
         self.assertLess(elapsed, 2.0)
 
