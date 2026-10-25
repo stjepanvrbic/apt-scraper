@@ -61,11 +61,11 @@ def search_once(home, directory, run):
     from store import ListingStore, store_path
 
     path = store_path()
-    if ListingStore(path).missing_settings():
+    state = SearchState(path.parent / 'search.sqlite3')
+    if state.missing_settings(ListingStore(path)):
         print('The interview is not complete, so nothing was searched.')
         print(NO_WAKE)
         return
-    state = SearchState(path.parent / 'search.sqlite3')
     problem = None
     if not environment_python(directory).exists():
         problem = 'The search environment is missing. Rerun the apt-scraper installer.'

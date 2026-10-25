@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,12 +22,15 @@ specification = importlib.util.spec_from_file_location('search_run', LAUNCHER)
 launcher = importlib.util.module_from_spec(specification)
 specification.loader.exec_module(launcher)
 
+NOW = datetime(2026, 10, 25, 12, 0, tzinfo=timezone.utc)
 COMPLETE = {
     'criteria': {'location': ['North'], 'price': {'min': None, 'max': None}, 'size': {'min': None, 'max': None},
                  'rooms': {'min': None, 'max': None}, 'move_in': None, 'other': []},
     'preferences': {'likes': [], 'dislikes': []},
     'listing_sites': ['https://www.zillow.com'],
     'viewing_availability': {'timezone': 'America/Chicago', 'weekly': [{'day': 'saturday', 'start': '10:00', 'end': '14:00'}]},
+    'places': [],
+    'location_priorities': {'rapid_transit': 'low', 'areas': {'North': 'medium'}},
 }
 
 
@@ -96,6 +100,18 @@ class LauncherTests(unittest.TestCase):
         code, lines = self.launch()
         self.assertEqual((code, self.commands), (0, []))
         self.assertEqual(lines[-1], '{"wakeAgent": false}')
+
+    def test_a_search_that_has_run_keeps_running_while_the_interview_has_new_questions(self):
+        self.launch('install')
+        settings = {name: value for name, value in COMPLETE.items() if name not in ('places', 'location_priorities')}
+        ListingStore(self.home / 'workspace' / 'gallery' / 'listings.sqlite3').update_settings(**settings)
+        self.commands.clear()
+        self.launch()
+        self.assertEqual(self.commands, [])
+        state = SearchState(self.home / 'workspace' / 'gallery' / 'search.sqlite3')
+        state.finish_run(state.start_run(NOW), NOW, {'sites': [{'site': 'https://www.zillow.com', 'errors': []}]})
+        self.launch()
+        self.assertEqual([command[-1] for command in self.commands], ['run'])
 
     def test_a_missing_environment_is_recorded_for_status_without_waking_the_model(self):
         self.complete_interview()

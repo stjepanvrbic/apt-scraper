@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -29,7 +30,17 @@ SETTINGS = {
     'preferences': {'likes': [], 'dislikes': []},
     'listing_sites': ['https://fake.example'],
     'viewing_availability': {'timezone': 'America/Chicago', 'weekly': [{'day': 'saturday', 'start': '10:00', 'end': '14:00'}]},
+    'places': [],
+    'location_priorities': {'rapid_transit': 'low', 'areas': {'North': 'medium', 'South': 'medium'}},
 }
+
+
+def forget_settings(store, *names):
+    """Leaves the store as an installed profile whose interview predates the named settings."""
+    connection = sqlite3.connect(store.path)
+    with connection:
+        connection.executemany('DELETE FROM settings WHERE name = ?', [(name,) for name in names])
+    connection.close()
 
 
 class FakeSite:
@@ -239,7 +250,8 @@ class SearchRunTests(unittest.TestCase):
         self.assertEqual((report['sites'][0]['new'], report['sites'][0]['errors']), (1, []))
 
     def test_an_area_the_site_does_not_know_is_reported_and_the_others_are_searched(self):
-        self.store.update_settings(criteria={**SETTINGS['criteria'], 'location': ['Atlantis', 'North']}, judge=evaluate)
+        self.store.update_settings(criteria={**SETTINGS['criteria'], 'location': ['Atlantis', 'North']},
+                                   location_priorities={'rapid_transit': 'low', 'areas': {'Atlantis': 'low', 'North': 'medium'}}, judge=evaluate)
         self.site.results = {'North': [1], 'South': []}
         report = self.search()
         self.assertEqual(report['sites'][0]['new'], 1)
@@ -332,6 +344,27 @@ class SearchRunTests(unittest.TestCase):
         self.assertEqual(self.site.requests, [])
         self.assertIn('listing_sites', report['missing'])
 
+    def test_the_first_search_waits_for_the_whole_interview(self):
+        forget_settings(self.store, 'places', 'location_priorities')
+        self.site.results = {'North': [1], 'South': []}
+        report = self.search()
+        self.assertEqual(self.site.requests, [])
+        self.assertIn('places', report['missing'])
+
+    def test_a_search_that_has_run_keeps_running_while_the_interview_has_new_questions(self):
+        self.site.results = {'North': [1], 'South': []}
+        self.search()
+        forget_settings(self.store, 'places', 'location_priorities')
+        self.site.results = {'North': [1, 2], 'South': []}
+        report = self.search()
+        self.assertEqual(report['missing'], [])
+        self.assertEqual(report['sites'][0]['new'], 1)
+        self.assertEqual(self.store.missing_settings(), ['places', 'location_priorities.rapid_transit', 'location_priorities.areas'])
+        self.store.update_settings(listing_sites=[])
+        self.site.requests.clear()
+        self.assertEqual(self.search()['missing'], ['listing_sites'])
+        self.assertEqual(self.site.requests, [])
+
     def test_judgments_for_changed_content_or_unknown_must_haves_are_refused(self):
         self.site.results = {'North': [1], 'South': []}
         self.search()
@@ -362,6 +395,19 @@ class SearchScriptTests(unittest.TestCase):
         result = self.run_script('status')
         self.assertEqual(result.returncode, 3, result.stderr)
         self.assertIn('interview', json.loads(result.stdout)['problems'][0])
+
+    def test_status_waits_for_new_interview_questions_only_before_the_first_search(self):
+        self.store.update_settings(**SETTINGS)
+        forget_settings(self.store, 'places', 'location_priorities')
+        report = json.loads(self.run_script('status').stdout)
+        self.assertEqual(report['state'], 'waiting for the interview')
+        state = SearchState(self.home / 'workspace' / 'gallery' / 'search.sqlite3')
+        now = datetime.now(timezone.utc)
+        site = {'site': 'https://fake.example', 'errors': [], **{key: 0 for key in ('new', 'changed', 'unchanged', 'gone', 'deferred', 'unreadable')}}
+        state.finish_run(state.start_run(now), now, {'sites': [site]})
+        result = self.run_script('status')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(json.loads(result.stdout)['state'], 'running')
 
     def test_status_reports_a_search_that_never_ran_and_one_that_stopped(self):
         self.store.update_settings(**SETTINGS)

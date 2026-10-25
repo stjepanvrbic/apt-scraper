@@ -24,6 +24,9 @@ WEEKDAYS = ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 
 VIEWING_MINUTES = 60
 CRITERIA = ('location', 'price', 'size', 'rooms', 'move_in', 'other')
 PREFERENCES = ('likes', 'dislikes')
+PLACE_FIELDS = ('name', 'address', 'travel_mode', 'longest_trip_minutes', 'visits_per_week')
+TRAVEL_MODES = ('walk', 'bike', 'transit', 'car')
+IMPORTANCE = ('low', 'medium', 'high')
 
 
 class TimeZoneDataMissing(RuntimeError):
@@ -190,11 +193,65 @@ def validate_viewing_availability(availability):
             raise ValueError('An unavailable period must end on or after its start.')
 
 
+def require_positive(value, name):
+    if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+        raise ValueError(f'{name} must be a positive number.')
+
+
+def validate_places(places):
+    if not isinstance(places, list):
+        raise ValueError('Places must be an array.')
+    for place in places:
+        if not isinstance(place, dict) or set(place) != set(PLACE_FIELDS):
+            raise ValueError(f'A place has exactly {", ".join(PLACE_FIELDS)}.')
+        require_text(place['name'], 'Place name', limit=200)
+        require_text(place['address'], 'Place address', limit=1000)
+        if place['travel_mode'] not in TRAVEL_MODES:
+            raise ValueError(f'A place travel_mode is {", ".join(TRAVEL_MODES)}.')
+        require_positive(place['longest_trip_minutes'], 'Longest trip minutes')
+        require_positive(place['visits_per_week'], 'Visits per week')
+    if len({place['name'].strip().casefold() for place in places}) != len(places):
+        raise ValueError('Each place is named once.')
+
+
+def require_importance(value, name):
+    if not isinstance(value, str) or value not in IMPORTANCE:
+        raise ValueError(f'The importance of {name} is {", ".join(IMPORTANCE)}.')
+
+
+def validate_location_priorities(priorities):
+    require_object(priorities, 'Location priorities', ('places', 'rapid_transit', 'areas'))
+    for key in ('places', 'rapid_transit'):
+        if key in priorities:
+            require_importance(priorities[key], key)
+    if not isinstance(priorities.get('areas', {}), dict):
+        raise ValueError('Location priority areas must be an object from each area of the criteria to its importance.')
+    for area, importance in priorities.get('areas', {}).items():
+        require_importance(importance, area)
+
+
+def reconcile_area_priorities(saved, changed):
+    """The settings to save along with changed: the stored location priorities without the areas the criteria no longer name.
+    saved holds every setting after the change. A changed priority for an area the criteria do not name is rejected."""
+    priorities = saved.get('location_priorities')
+    if priorities is None:
+        return {}
+    areas = saved.get('criteria', {}).get('location', [])
+    unknown = [area for area in priorities.get('areas', {}) if area not in areas]
+    if 'location_priorities' in changed and unknown:
+        raise ValueError(f'Location priorities name areas the criteria do not: {", ".join(unknown)}.')
+    if not unknown:
+        return {}
+    return {'location_priorities': {**priorities, 'areas': {area: importance for area, importance in priorities['areas'].items() if area in areas}}}
+
+
 SETTINGS = {
     'criteria': validate_criteria,
     'preferences': validate_preferences,
     'listing_sites': validate_listing_sites,
     'viewing_availability': validate_viewing_availability,
+    'places': validate_places,
+    'location_priorities': validate_location_priorities,
 }
 
 
@@ -327,6 +384,8 @@ class ListingStore:
         with self.connect(write=True) as connection:
             if 'criteria' in settings and judge is None and connection.execute('SELECT 1 FROM listings LIMIT 1').fetchone():
                 raise ValueError('Stored listings must be judged against new criteria. Give a judge.')
+            saved = {row['name']: json.loads(row['value']) for row in connection.execute('SELECT * FROM settings')}
+            settings = {**settings, **reconcile_area_priorities({**saved, **settings}, settings)}
             connection.executemany('INSERT INTO settings VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
                                    [(name, json.dumps(value, allow_nan=False)) for name, value in settings.items()])
             return apply_criteria(connection, judge) if 'criteria' in settings and judge else None
@@ -337,14 +396,25 @@ class ListingStore:
         with self.connect(write=True) as connection:
             return apply_criteria(connection, judge)
 
-    def missing_settings(self):
+    def missing_settings(self, names=tuple(SETTINGS)):
+        """What the interview still needs, limited to the settings in names."""
         saved = self.settings()
         missing = [f'{name}.{key}' for name, keys in (('criteria', CRITERIA), ('preferences', PREFERENCES))
                    for key in keys if key not in saved.get(name, {})]
         if not saved.get('listing_sites'):
             missing.append('listing_sites')
         availability = saved.get('viewing_availability', {})
-        return missing + [f'viewing_availability.{key}' for key in ('timezone', 'weekly') if not availability.get(key)]
+        missing += [f'viewing_availability.{key}' for key in ('timezone', 'weekly') if not availability.get(key)]
+        priorities = saved.get('location_priorities', {})
+        if 'places' not in saved:
+            missing.append('places')
+        elif saved['places'] and 'places' not in priorities:
+            missing.append('location_priorities.places')
+        if 'rapid_transit' not in priorities:
+            missing.append('location_priorities.rapid_transit')
+        if not set(saved.get('criteria', {}).get('location', [])) <= set(priorities.get('areas', {})):
+            missing.append('location_priorities.areas')
+        return [item for item in missing if item.split('.')[0] in names]
 
     def analyze(self, listing_id, fingerprint, features):
         if not isinstance(features, dict):

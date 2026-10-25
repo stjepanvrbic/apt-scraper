@@ -95,7 +95,7 @@ Read the whole correspondence and the `answers`, then answer the latest messages
 
 Act on each answer first. If the user shared a value, it is in `approvals`. If they declined, tell the listing agent politely that the user prefers not to share it before the viewing. If they gave other wording or instructions, follow them within the rules below. If they accepted a time, run `agree` with `"user_confirmed": true` and confirm it to the agent.
 
-- Answer questions about the user's plans or preferences, such as the move-in date, from the saved settings.
+- Answer questions about the user's plans or preferences, such as the move-in date, from the saved settings. Never share the user's places or location priorities, such as where they work.
 - When the agent asks for personal information the approvals do not hold, such as a date of birth, income or a phone number, `ask` the user, naming the `field` and the `purpose`. Send nothing to the listing agent until they answer, not even a holding message.
 - For a viewing time, see Viewing times below.
 - Never agree to or negotiate anything about applications, deposits, payments, signing, or rent and terms. Say that the user would like to see the apartment first, and `tell` the user what the agent asked.

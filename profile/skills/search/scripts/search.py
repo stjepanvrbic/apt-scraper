@@ -60,7 +60,7 @@ class Search:
     def run(self, budget):
         started = self.now()
         run_id = self.state.start_run(started)
-        report = {'missing': self.store.missing_settings(), 'sites': [], 'awaiting_judgment': [], 'awaiting_total': 0, 'wake': False, 'error': None}
+        report = {'missing': self.state.missing_settings(self.store), 'sites': [], 'awaiting_judgment': [], 'awaiting_total': 0, 'wake': False, 'error': None}
         try:
             if not report['missing']:
                 settings = self.store.settings()
@@ -270,7 +270,7 @@ class Search:
 
     def status(self):
         problems = []
-        missing = self.store.missing_settings()
+        missing = self.state.missing_settings(self.store)
         last = self.state.last_run()
         now = self.now()
         if missing:
