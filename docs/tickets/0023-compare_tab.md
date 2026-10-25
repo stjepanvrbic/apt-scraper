@@ -18,7 +18,7 @@ The gallery's Compare tab asks pairwise questions on real listings whose order t
 
 - [x] Compare sits between Favorites and Contacted and shows one question at a time: both listings with their main photo, price, size, rooms and address. The user picks one or skips, and either listing opens to its details.
 - [x] Questions pair available listings whose order the posterior is least sure of. An answered pair is not asked again, and a skipped one not within the next 20 questions.
-- [ ] Answers are stored and count at the next rerank. Spec › Acceptance "Pairwise questions" passes.
+- [x] Answers are stored and count at the next rerank. Spec › Acceptance "Pairwise questions" passes.
 - [ ] On a fresh test profile, once the first listings have feature records after the interview, the agent asks the user through the messaging gateway to answer 5 to 8 questions in Compare.
 - [x] Headless Playwright tests with screenshots, against the production build. No owner browser is opened.
 - [x] `docs/gallery.md` updated. Open a reviewed pull request to `main` with screenshots; do not merge.
@@ -52,3 +52,5 @@ Review fixes centralize listing eligibility across Rankings, question selection 
 ## Comments
 
 2026-10-25: Live invitation delivery still needs an isolated test profile and messaging gateway. Recommended: provide a dedicated test profile so delivery can be checked without accessing the owner's profile or credentials. Alternatively, the owner can run the invitation check before merge and attach its result. No implementation decision is waiting on the owner.
+
+- 2026-10-25: The gateway invitation is verified in tests and by review, not yet on a connected profile. It is checked when the test profile has a Telegram connection.
