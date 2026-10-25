@@ -1,9 +1,9 @@
 ---
 title: The leave-one-out check refits the held-out favorite as a weak negative
 type: Bug
-state: Todo
+state: In Progress
 priority: 2
-assignee:
+assignee: agent
 milestone:
 parent: 0015
 blocked_by: []

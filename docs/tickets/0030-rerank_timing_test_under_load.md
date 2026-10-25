@@ -1,9 +1,9 @@
 ---
 title: The rerank timing test fails on a busy machine
 type: Bug
-state: Todo
+state: In Progress
 priority: 3
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []
