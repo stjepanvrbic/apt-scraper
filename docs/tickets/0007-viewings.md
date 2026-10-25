@@ -1,9 +1,9 @@
 ---
 title: Book viewings on Google Calendar
 type: Feature
-state: Todo
+state: In Progress
 priority: 2
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: [0006]
