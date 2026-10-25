@@ -125,7 +125,7 @@ class FeatureMigrationTests(unittest.TestCase):
                 connection.execute('PRAGMA user_version = 3')
                 connection.commit()
             store = ListingStore(path)
-            self.assertEqual(store.schema_version, 4)
+            self.assertEqual(store.schema_version, len(MIGRATIONS))
             fingerprint = store.upsert_listing(listing())['content_fingerprint']
             store.save_extraction('example:100', fingerprint, extraction(), photos=PHOTOS, phrases=[])
             self.assertIn('exposed brick', store.feature_record('example:100')['extraction']['traits'])

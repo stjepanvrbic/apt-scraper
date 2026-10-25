@@ -65,7 +65,20 @@ def listing_features(connection):
         connection.execute(statement)
 
 
-MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features)
+def scoring_model(connection):
+    statements = [
+        'ALTER TABLE ranking ADD COLUMN explanation TEXT',
+        'ALTER TABLE ranking ADD COLUMN exploration INTEGER NOT NULL DEFAULT 0',
+        'CREATE TABLE reranks (id INTEGER PRIMARY KEY, finished_at TEXT NOT NULL, result TEXT NOT NULL)',
+        'CREATE TABLE note_readings (note_id INTEGER PRIMARY KEY REFERENCES notes(id), reading TEXT NOT NULL, read_at TEXT NOT NULL)',
+        'CREATE TABLE preference_readings (kind TEXT NOT NULL, phrase TEXT NOT NULL, features TEXT NOT NULL, read_at TEXT NOT NULL, PRIMARY KEY (kind, phrase))',
+        'CREATE TABLE pairwise_answers (id INTEGER PRIMARY KEY, chosen TEXT NOT NULL REFERENCES listings(id), other TEXT NOT NULL REFERENCES listings(id), answered_at TEXT NOT NULL)',
+    ]
+    for statement in statements:
+        connection.execute(statement)
+
+
+MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model)
 
 
 def migrate(connection):

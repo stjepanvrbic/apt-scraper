@@ -9,6 +9,8 @@ Commands:
   features.py tags          the tag list, most used first, which the extraction child reads before choosing tags
   features.py preferences   the next listings waiting for judgments of preferences stated after their extraction
   features.py judge FILE    save those judgments from a JSON file in the scratch directory, then delete it
+  features.py readings      the user's notes and stated preferences waiting to be read into record features
+  features.py read FILE     save those readings from a JSON file in the scratch directory, then delete it
   features.py status        whether extraction needs the user's attention
   features.py retry         try again every extraction and judgment given up after 3 attempts
 
@@ -38,17 +40,19 @@ SKILLS = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SKILLS / 'gallery' / 'scripts'))
 
 from record import CATEGORIES, FLAGS, NOT_SHOWN, RATINGS, ROOM_TYPES, UNIT_LEVELS, choices, validate_judgments  # noqa: E402
+from scoring import stated_phrases  # noqa: E402
 from scratch import read_scratch_object, scratch_directory  # noqa: E402
-from store import ListingStore, store_path  # noqa: E402
+from store import READ_ATTEMPTS, ListingStore, extraction_read, store_path  # noqa: E402
 
 ATTENTION = 3
-ATTEMPTS = 3
 SEQUENTIAL_RECORDS = 5
 PARALLEL_TASKS = 10
+SUBAGENTS_PER_WAKE = 50
 PREPARE_BUDGET = timedelta(minutes=10)
 PHOTO_PATIENCE = timedelta(hours=1)
 DOWNLOADS = 8
 JUDGMENT_BATCH = 25
+NOTE_BATCH = 25
 TASK_DESCRIPTION_LIMIT = 6000
 JUDGMENT_DESCRIPTION_LIMIT = 2000
 TEMPLATE = Path(__file__).resolve().parents[1] / 'extraction.md'
@@ -82,10 +86,16 @@ def failure(error):
     return f'{type(error).__name__}: {error}'
 
 
-def stated_preferences(settings):
-    """Every stated like and dislike is judged per listing until the preferences are read into record features."""
-    preferences = settings.get('preferences', {})
-    return list(dict.fromkeys([*preferences.get('likes', []), *preferences.get('dislikes', [])]))
+def extracted_preferences(settings, readings):
+    """The stated likes and dislikes an extraction judges: every one whose reading names no record feature, or which
+    is not read yet."""
+    return list(dict.fromkeys(phrase for kind, phrase in stated_phrases(settings) if not readings.get((kind, phrase))))
+
+
+def judged_preferences(settings, readings):
+    """The stated likes and dislikes judged later for listings extracted before: those read as naming no record
+    feature, which the ranking counts through these judgments."""
+    return list(dict.fromkeys(phrase for kind, phrase in stated_phrases(settings) if readings.get((kind, phrase)) == []))
 
 
 def labeled(listing):
@@ -97,19 +107,16 @@ def needs_record(listing):
     return bool(listing['matches_criteria'] and listing['status'] == 'available' and not listing['dismissed'] or labeled(listing))
 
 
-def extraction_read(listing):
-    return json.dumps(['extraction', listing['id'], listing['content_fingerprint']])
-
-
 def judgment_read(listing, phrase):
     return json.dumps(['preference', listing['id'], listing['content_fingerprint'], phrase], ensure_ascii=False)
 
 
-def given_up_extractions(store):
-    """The listings whose current content failed extraction ATTEMPTS times. The ranking ranks them from code features."""
-    attempts = store.read_attempts()
-    return {listing['id'] for listing in store.state()['listings']
-            if attempts.get(extraction_read(listing), 0) >= ATTEMPTS and store.feature_record(listing['id']) is None}
+def note_read(note):
+    return json.dumps(['note', note['id']])
+
+
+def preference_read(kind, phrase):
+    return json.dumps(['preference reading', kind, phrase], ensure_ascii=False)
 
 
 def work_directory(workspace, listing_id, fingerprint):
@@ -170,28 +177,39 @@ class Features:
 
     def outstanding(self):
         """The listings without a record of their current content, and the extracted listings with stated preferences not
-        judged yet, each split into those still given to the agent and those given up after ATTEMPTS attempts. Listings the
+        judged yet, each split into those still given to the agent and those given up after READ_ATTEMPTS attempts. Listings the
         user labeled come first, then the longest known."""
         snapshot = self.store.state()
         records, attempts = self.store.feature_records(), self.store.read_attempts()
-        phrases = stated_preferences(snapshot['settings'])
+        readings = self.store.preference_readings()
+        phrases = extracted_preferences(snapshot['settings'], readings)
+        later = judged_preferences(snapshot['settings'], readings)
         listings = sorted((listing for listing in snapshot['listings'] if needs_record(listing)),
                           key=lambda listing: (not labeled(listing), listing['first_seen'], listing['id']))
         extract = [listing for listing in listings if listing['id'] not in records]
-        judge = [(listing, [phrase for phrase in phrases if phrase not in records[listing['id']]['preferences']])
+        judge = [(listing, [phrase for phrase in later if phrase not in records[listing['id']]['preferences']])
                  for listing in listings if listing['id'] in records]
         judge = [(listing, missing) for listing, missing in judge if missing]
+        notes = self.store.unread_notes()
+        unread = self.store.unread_preferences()
         return {
+            'notes': [note for note in notes if attempts.get(note_read(note), 0) < READ_ATTEMPTS],
+            'notes_given_up': [note for note in notes if attempts.get(note_read(note), 0) >= READ_ATTEMPTS],
+            'unread': [item for item in unread if attempts.get(preference_read(*item), 0) < READ_ATTEMPTS],
+            'unread_given_up': [item for item in unread if attempts.get(preference_read(*item), 0) >= READ_ATTEMPTS],
             'phrases': phrases, 'records': records,
-            'extract': [listing for listing in extract if attempts.get(extraction_read(listing), 0) < ATTEMPTS],
-            'extract_given_up': [listing for listing in extract if attempts.get(extraction_read(listing), 0) >= ATTEMPTS],
-            'judge': [(listing, [phrase for phrase in missing if attempts.get(judgment_read(listing, phrase), 0) < ATTEMPTS])
-                      for listing, missing in judge if any(attempts.get(judgment_read(listing, phrase), 0) < ATTEMPTS for phrase in missing)],
-            'judge_given_up': [(listing, [phrase for phrase in missing if attempts.get(judgment_read(listing, phrase), 0) >= ATTEMPTS])
-                               for listing, missing in judge if any(attempts.get(judgment_read(listing, phrase), 0) >= ATTEMPTS for phrase in missing)],
+            'extract': [listing for listing in extract if attempts.get(extraction_read(listing['id'], listing['content_fingerprint']), 0) < READ_ATTEMPTS],
+            'extract_given_up': [listing for listing in extract if attempts.get(extraction_read(listing['id'], listing['content_fingerprint']), 0) >= READ_ATTEMPTS],
+            'judge': [(listing, [phrase for phrase in missing if attempts.get(judgment_read(listing, phrase), 0) < READ_ATTEMPTS])
+                      for listing, missing in judge if any(attempts.get(judgment_read(listing, phrase), 0) < READ_ATTEMPTS for phrase in missing)],
+            'judge_given_up': [(listing, [phrase for phrase in missing if attempts.get(judgment_read(listing, phrase), 0) >= READ_ATTEMPTS])
+                               for listing, missing in judge if any(attempts.get(judgment_read(listing, phrase), 0) >= READ_ATTEMPTS for phrase in missing)],
         }
 
     def run(self):
+        """One pass of the job. A wake holds at most SUBAGENTS_PER_WAKE extractions, because Hermes blocks the agent's
+        delegate_task once one turn has spawned that many subagents (tool_loop_guardrails.loop_caps.max_subagents in
+        hermes_cli/config_defaults.py), which would end the wake before its readings and judgments."""
         if self.store.missing_settings():
             self.state.update(problem=None)
             return ['The interview is not complete, so no listing is extracted.'], False
@@ -203,7 +221,7 @@ class Features:
         deadline = now + PREPARE_BUDGET
         tasks, unavailable, deferred = [], {}, 0
         for listing in work['extract']:
-            if self.now() >= deadline:
+            if self.now() >= deadline or len(tasks) == SUBAGENTS_PER_WAKE:
                 deferred += 1
                 continue
             since = state['photos_unavailable'].get(listing['id'], {}).get('since')
@@ -212,26 +230,31 @@ class Features:
                 tasks.append((listing, self.prepare(listing, work['phrases'], leave_out_failing=overdue)))
             except PhotosUnavailable as error:
                 unavailable[listing['id']] = {'since': since or now.isoformat(), 'reason': str(error)}
-        handed = [extraction_read(listing) for listing, _ in tasks]
+        handed = [extraction_read(listing['id'], listing['content_fingerprint']) for listing, _ in tasks]
         handed += [judgment_read(listing, phrase) for listing, phrases in work['judge'] for phrase in phrases]
+        handed += [note_read(note) for note in work['notes']] + [preference_read(*item) for item in work['unread']]
         self.state.update(problem=None, photos_unavailable=unavailable, handed=handed)
         self.remove_work_directories({work_directory(self.workspace, listing['id'], listing['content_fingerprint'])
                                       for listing in work['extract']})
         lines = [f'{len(work["extract"])} listings wait for extraction: {len(tasks)} prepared below, {deferred + len(unavailable)} wait '
-                 f'for the next run, {len(work["extract_given_up"])} given up after {ATTEMPTS} attempts.']
+                 f'for the next run, {len(work["extract_given_up"])} given up after {READ_ATTEMPTS} attempts.']
         if unavailable:
             lines.append(f'The photos of {len(unavailable)} listings could not be downloaded now, so they wait for the next run.')
         if tasks:
             lines += ['Extraction calls, in order, one delegate_task call each:',
                       json.dumps(self.calls([task for _, task in tasks], len(work['records'])), ensure_ascii=False)]
+        if work['notes'] or work['unread']:
+            lines.append(f'{len(work["notes"])} notes and {len(work["unread"])} stated preferences wait for a reading.')
         if work['judge']:
             lines.append(f'{len(work["judge"])} listings wait for judgments of preferences stated after their extraction.')
-        return lines, bool(tasks or work['judge'])
+        return lines, bool(tasks or work['judge'] or work['notes'] or work['unread'])
 
     @staticmethod
     def reads(work):
         """Every model read that waits, given up or not."""
-        reads = {extraction_read(listing) for listing in work['extract'] + work['extract_given_up']}
+        reads = {extraction_read(listing['id'], listing['content_fingerprint']) for listing in work['extract'] + work['extract_given_up']}
+        reads |= {note_read(note) for note in work['notes'] + work['notes_given_up']}
+        reads |= {preference_read(*item) for item in work['unread'] + work['unread_given_up']}
         return reads | {judgment_read(listing, phrase) for listing, phrases in work['judge'] + work['judge_given_up'] for phrase in phrases}
 
     @staticmethod
@@ -395,20 +418,48 @@ class Features:
         self.store.judge_preferences([(entry['id'], entry['fingerprint'], entry['preferences'], list(entry['preferences'])) for entry in current])
         return {'saved': len(current), 'stale': [entry['id'] for entry in value['judgments'] if entry not in current]}
 
+    def readings(self):
+        """The next notes and every stated preference waiting for a reading, with the features a reading may name."""
+        work = self.outstanding()
+        batch = work['notes'][:NOTE_BATCH]
+        return {'vocabulary': self.store.reading_vocabulary(),
+                'preferences': [{'kind': kind, 'phrase': phrase} for kind, phrase in work['unread']],
+                'notes': [{'id': note['id'], 'listing': note['listing'], 'text': note['text']} for note in batch],
+                'remaining': len(work['notes']) - len(batch)}
+
+    def read(self, value):
+        if not isinstance(value, dict) or set(value) != {'preferences', 'notes'} or not all(isinstance(value[key], list) for key in value):
+            raise ValueError('The file must hold a JSON object with exactly "preferences" and "notes", both arrays.')
+        preferences, notes = [], []
+        for item in value['preferences']:
+            if not isinstance(item, dict) or set(item) != {'kind', 'phrase', 'features'}:
+                raise ValueError('Each preference reading has exactly kind, phrase and features.')
+            preferences.append((item['kind'], item['phrase'], item['features']))
+        for item in value['notes']:
+            if not isinstance(item, dict) or set(item) != {'id', 'sentiment', 'likes', 'dislikes'}:
+                raise ValueError('Each note reading has exactly id, sentiment, likes and dislikes.')
+            notes.append((item['id'], {key: item[key] for key in ('sentiment', 'likes', 'dislikes')}))
+        self.store.save_readings(notes=notes, preferences=preferences)
+        return {'preferences': len(preferences), 'notes': len(notes)}
+
     def status(self):
         state = self.state.load()
         problems = [state['problem']] if state['problem'] else []
         if self.store.missing_settings():
-            return {'problems': problems, 'records': 0, 'waiting': 0, 'given_up': [], 'awaiting_judgment': 0, 'photos_unavailable': {}}
+            return {'problems': problems, 'records': 0, 'waiting': 0, 'given_up': [], 'awaiting_judgment': 0, 'awaiting_reading': 0,
+                    'photos_unavailable': {}}
         work = self.outstanding()
         given_up = [listing['id'] for listing in work['extract_given_up']]
         if given_up:
-            problems.append(f'Extraction failed {ATTEMPTS} times for {len(given_up)} listings, so they are ranked only from what code reads '
+            problems.append(f'Extraction failed {READ_ATTEMPTS} times for {len(given_up)} listings, so they are ranked only from what code reads '
                             f'about them until their content changes or the user asks to retry: {", ".join(given_up)}.')
         if work['judge_given_up']:
-            problems.append(f'Preferences could not be judged in {ATTEMPTS} attempts for {len(work["judge_given_up"])} listings, so those '
+            problems.append(f'Preferences could not be judged in {READ_ATTEMPTS} attempts for {len(work["judge_given_up"])} listings, so those '
                             f'preferences do not count for them until the user asks to retry: '
                             f'{", ".join(listing["id"] for listing, _ in work["judge_given_up"])}.')
+        if work['notes_given_up'] or work['unread_given_up']:
+            problems.append(f'{len(work["notes_given_up"])} notes and {len(work["unread_given_up"])} stated preferences could not be read in '
+                            f'{READ_ATTEMPTS} attempts, so they do not count in the ranking until the user asks to retry.')
         now = self.now()
         stalled = {identifier: entry for identifier, entry in state['photos_unavailable'].items()
                    if now - datetime.fromisoformat(entry['since']) >= PHOTO_PATIENCE}
@@ -418,7 +469,8 @@ class Features:
                             + '; '.join(f'{identifier} since {datetime.fromisoformat(entry["since"]):%Y-%m-%d %H:%M} UTC ({entry["reason"]})'
                                         for identifier, entry in stalled.items()) + '.')
         return {'problems': problems, 'records': len(work['records']), 'waiting': len(work['extract']), 'given_up': given_up,
-                'awaiting_judgment': len(work['judge']), 'photos_unavailable': state['photos_unavailable']}
+                'awaiting_judgment': len(work['judge']), 'awaiting_reading': len(work['notes']) + len(work['unread']),
+                'photos_unavailable': state['photos_unavailable']}
 
     def retry(self):
         self.store.reset_read_attempts()
@@ -455,6 +507,9 @@ def main(argv):
     commands.add_parser('preferences')
     judging = commands.add_parser('judge')
     judging.add_argument('file', type=Path, help='JSON object {"judgments": [{id, fingerprint, preferences}]} in the scratch directory. Deleted once saved.')
+    commands.add_parser('readings')
+    reading = commands.add_parser('read')
+    reading.add_argument('file', type=Path, help='JSON object {"preferences": [...], "notes": [...]} in the scratch directory. Deleted once saved.')
     commands.add_parser('status')
     commands.add_parser('retry')
     arguments = parser.parse_args(argv)
@@ -473,9 +528,13 @@ def main(argv):
             print('\n'.join(features.tag_lines()))
         elif arguments.command == 'preferences':
             print(json.dumps(features.preferences(), ensure_ascii=False, indent=1))
+        elif arguments.command == 'readings':
+            print(json.dumps(features.readings(), ensure_ascii=False, indent=1))
         else:
-            file, value = read_scratch_object(arguments.file, 'The record' if arguments.command == 'save' else 'The judgments')
-            print(json.dumps(features.save(value) if arguments.command == 'save' else features.judge(value), ensure_ascii=False))
+            names = {'save': ('The record', features.save), 'judge': ('The judgments', features.judge), 'read': ('The readings', features.read)}
+            name, command = names[arguments.command]
+            file, value = read_scratch_object(arguments.file, name)
+            print(json.dumps(command(value), ensure_ascii=False))
             file.unlink()
         return 0
     except (ValueError, KeyError, OSError, sqlite3.Error) as error:

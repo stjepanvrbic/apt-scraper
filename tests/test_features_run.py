@@ -18,7 +18,7 @@ from test_feature_record import extraction  # noqa: E402
 from test_gallery_store import ListingStore, listing  # noqa: E402
 from test_listing_photos import picture, recompressed, zillow  # noqa: E402
 import features  # noqa: E402
-from features import ATTEMPTS, PHOTO_PATIENCE, SEQUENTIAL_RECORDS, Features, PhotosUnavailable, RunState  # noqa: E402
+from features import PHOTO_PATIENCE, READ_ATTEMPTS, SEQUENTIAL_RECORDS, SUBAGENTS_PER_WAKE, Features, PhotosUnavailable, RunState  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'profile/skills/listing-features/scripts/features.py'
@@ -73,6 +73,11 @@ class FeaturesTestCase(unittest.TestCase):
         self.state = RunState(self.home / 'workspace' / 'gallery' / 'features.json')
         self.features = Features(self.store, self.state, self.home / 'workspace' / 'gallery' / 'extraction', self.server.fetch, lambda: self.clock[0])
         self.store.update_settings(**SETTINGS)
+        self.read_unexpressed(('like', 'Hardwood floors'), ('dislike', 'Carpet'))
+
+    def read_unexpressed(self, *preferences):
+        """Saves readings that name no record feature, so each listing is judged on these preferences."""
+        self.store.save_readings(preferences=[(kind, phrase, []) for kind, phrase in preferences])
 
     def add(self, number, photos=3, **changes):
         urls = [self.server.add(zillow(f'n{number}p{index}'), picture(number * 100 + index)) for index in range(photos)]
@@ -283,6 +288,18 @@ class PreparationTests(FeaturesTestCase):
         self.assertIn('1 wait for the next run', report)
         self.assertEqual(len(self.state.load()['handed']), 2)
 
+    def test_a_wake_holds_no_more_extractions_than_hermes_lets_one_turn_delegate(self):
+        for number in range(SUBAGENTS_PER_WAKE + 2):
+            self.add(number, photos=1)
+        identifier = self.add(999, photos=1)
+        self.store.add_note('Too dark.', listing_id=identifier, role='user')
+        report, wake = self.run_job()
+        self.assertTrue(wake)
+        self.assertEqual(len(self.tasks(report)), SUBAGENTS_PER_WAKE)
+        self.assertIn('3 wait for the next run', report)
+        self.assertIn('1 notes and 0 stated preferences wait for a reading.', report)
+        self.assertEqual(len([read for read in self.state.load()['handed'] if read.startswith('["extraction"')]), SUBAGENTS_PER_WAKE)
+
     def test_prepared_photos_are_reused_and_removed_once_saved(self):
         self.add(1)
         [task] = self.tasks(self.run_job()[0])
@@ -339,7 +356,7 @@ class SaveTests(FeaturesTestCase):
 class AttemptTests(FeaturesTestCase):
     def test_after_three_failed_extractions_the_listing_is_given_up_and_reported_until_retried(self):
         identifier = self.add(1)
-        for _ in range(ATTEMPTS):
+        for _ in range(READ_ATTEMPTS):
             self.assertTrue(self.run_job()[1])
         report, wake = self.run_job()
         self.assertFalse(wake)
@@ -347,13 +364,13 @@ class AttemptTests(FeaturesTestCase):
         status = self.features.status()
         self.assertEqual(status['given_up'], [identifier])
         self.assertTrue(any(identifier in problem and 'code' in problem for problem in status['problems']))
-        self.assertEqual(features.given_up_extractions(self.store), {identifier})
+        self.assertEqual(self.store.given_up_extractions(), {identifier})
         self.features.retry()
         self.assertTrue(self.run_job()[1])
 
     def test_changed_content_starts_counting_again(self):
         self.add(1)
-        for _ in range(ATTEMPTS):
+        for _ in range(READ_ATTEMPTS):
             self.run_job()
         self.add(1, description='Changed.')
         self.assertTrue(self.run_job()[1])
@@ -372,6 +389,7 @@ class PreferenceTests(FeaturesTestCase):
         self.add(1)
         self.save(self.tasks(self.run_job()[0])[0])
         self.store.update_settings(preferences={'likes': ['Hardwood floors', 'Near a park'], 'dislikes': ['Carpet']})
+        self.read_unexpressed(('like', 'Near a park'))
         report, wake = self.run_job()
         self.assertTrue(wake)
         self.assertIn('1 listings wait for judgments of preferences', report)
@@ -390,7 +408,8 @@ class PreferenceTests(FeaturesTestCase):
         self.add(1)
         self.save(self.tasks(self.run_job()[0])[0])
         self.store.update_settings(preferences={'likes': ['Hardwood floors', 'Near a park'], 'dislikes': ['Carpet']})
-        for _ in range(ATTEMPTS):
+        self.read_unexpressed(('like', 'Near a park'))
+        for _ in range(READ_ATTEMPTS):
             self.assertTrue(self.run_job()[1])
             self.assertEqual(len(self.features.preferences()['listings']), 1)
             self.assertEqual(self.features.status()['problems'], [])
@@ -404,6 +423,7 @@ class PreferenceTests(FeaturesTestCase):
         for task in self.tasks(self.run_job()[0]):
             self.save(task)
         self.store.update_settings(preferences={'likes': ['Hardwood floors', 'Near a park'], 'dislikes': ['Carpet']})
+        self.read_unexpressed(('like', 'Near a park'))
         first, second = self.features.preferences()['listings']
         judgments = [{'id': entry['id'], 'fingerprint': entry['fingerprint'],
                       'preferences': {'Near a park': {'verdict': 'has', 'evidence': 'Faces a park.'}}} for entry in (first, second)]
@@ -418,11 +438,69 @@ class PreferenceTests(FeaturesTestCase):
         self.add(1)
         self.save(self.tasks(self.run_job()[0])[0])
         self.store.update_settings(preferences={'likes': ['Near a park', 'Quiet street'], 'dislikes': []})
+        self.read_unexpressed(('like', 'Near a park'), ('like', 'Quiet street'))
         [entry] = self.features.preferences()['listings']
         with self.assertRaisesRegex(ValueError, 'Quiet street'):
             self.features.judge({'judgments': [{'id': entry['id'], 'fingerprint': entry['fingerprint'],
                                                 'preferences': {'Near a park': {'verdict': 'has', 'evidence': ''}}}]})
         self.assertNotIn('Near a park', self.store.feature_record('zillow:1')['preferences'])
+
+
+class ReadingTests(FeaturesTestCase):
+    def test_a_stated_preference_is_read_once_and_one_a_feature_expresses_is_not_judged_per_listing(self):
+        self.add(1)
+        self.save(self.tasks(self.run_job()[0])[0])
+        self.store.update_settings(preferences={'likes': ['Hardwood floors', 'Lots of daylight', 'Near a park'], 'dislikes': ['Carpet']})
+        report, wake = self.run_job()
+        self.assertTrue(wake)
+        self.assertIn('0 notes and 2 stated preferences wait for a reading.', report)
+        self.assertNotIn('wait for judgments', report)
+        batch = self.features.readings()
+        self.assertEqual(batch['preferences'], [{'kind': 'like', 'phrase': 'Lots of daylight'}, {'kind': 'like', 'phrase': 'Near a park'}])
+        self.assertIn('rating:natural_light', batch['vocabulary'])
+        self.assertIn('tag:exposed brick', batch['vocabulary'])
+        file = self.write('readings.json', {'notes': [], 'preferences': [
+            {'kind': 'like', 'phrase': 'Lots of daylight', 'features': [{'feature': 'rating:natural_light', 'direction': 'like'}]},
+            {'kind': 'like', 'phrase': 'Near a park', 'features': []}]})
+        environment = {**os.environ, 'HERMES_HOME': str(self.home)}
+        result = subprocess.run([sys.executable, str(SCRIPT), 'read', str(file)], capture_output=True, text=True, env=environment, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(file.exists())
+        self.assertEqual(self.features.readings()['preferences'], [])
+        [entry] = self.features.preferences()['listings']
+        self.assertEqual(entry['unjudged'], ['Near a park'])
+        report, wake = self.run_job()
+        self.assertIn('1 listings wait for judgments', report)
+        self.add(2)
+        self.assertEqual(self.manifest(self.tasks(self.run_job()[0])[0])['phrases'], ['Hardwood floors', 'Near a park', 'Carpet'])
+
+    def test_a_note_by_the_user_is_read_once_into_a_sentiment_and_record_features(self):
+        identifier = self.add(1)
+        self.save(self.tasks(self.run_job()[0])[0])
+        self.store.add_note('Loved the light, but the kitchen is tiny.', listing_id=identifier, role='user')
+        self.store.add_note('Agent: viewing booked.', listing_id=identifier, role='agent')
+        report, wake = self.run_job()
+        self.assertTrue(wake)
+        self.assertIn('1 notes and 0 stated preferences wait for a reading.', report)
+        [note] = self.features.readings()['notes']
+        self.assertEqual((note['listing'], note['text']), ('Listing 1', 'Loved the light, but the kitchen is tiny.'))
+        with self.assertRaisesRegex(ValueError, 'not in the vocabulary'):
+            self.features.read({'preferences': [], 'notes': [{'id': note['id'], 'sentiment': 'mixed', 'likes': ['light'], 'dislikes': []}]})
+        self.assertEqual(self.store.note_readings(), {})
+        self.features.read({'preferences': [], 'notes': [{'id': note['id'], 'sentiment': 'mixed', 'likes': ['rating:natural_light'],
+                                                          'dislikes': ['rating:kitchen_size']}]})
+        self.assertEqual(self.store.note_readings()[note['id']]['dislikes'], ['rating:kitchen_size'])
+        self.assertFalse(self.run_job()[1])
+
+    def test_a_reading_is_handed_to_the_agent_three_times_before_it_is_given_up(self):
+        identifier = self.add(1)
+        self.save(self.tasks(self.run_job()[0])[0])
+        self.store.add_note('Too dark.', listing_id=identifier, role='user')
+        for _ in range(READ_ATTEMPTS):
+            self.assertTrue(self.run_job()[1])
+            self.assertEqual(self.features.status()['problems'], [])
+        self.assertFalse(self.run_job()[1])
+        self.assertTrue(any('1 notes and 0 stated preferences could not be read' in problem for problem in self.features.status()['problems']))
 
 
 class ShippedJobTests(unittest.TestCase):

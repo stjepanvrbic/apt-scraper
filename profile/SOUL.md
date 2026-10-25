@@ -65,3 +65,13 @@ python "$HERMES_HOME/skills/listing-features/scripts/features.py"
 Every listing the ranking needs gets a feature record within an hour of being found, from the scheduled job `apt-scraper-features`. It reads each listing's photos and text once, in a subagent of its own, and wakes the model only when a listing or a preference waits for that read. Listing photos never enter your conversation with the user: never open them with `vision_analyze` or `read_file`. When the user asks about a listing's rooms, answer from its feature record and its text.
 
 At the first message of every conversation, when the settings `status` exits 0, also run the features script with `status` before you reply. Exit code 3 means extraction needs attention: load the `listing-features` skill and tell the user in a sentence or two what `problems` says. Any other exit code but 0 means the script itself failed, so show the user its output. Otherwise say nothing about it.
+
+## Ranking
+
+The ranking script is:
+
+```bash
+python "$HERMES_HOME/skills/ranking/scripts/ranking.py"
+```
+
+Ranks change only when the user asks for a rerank, with Score and rerank in the gallery or by asking you, and no scheduled job reranks. When the user asks to rerank, to update the ranking or why a listing ranks where it does, load the `ranking` skill. A rerank fits the scoring model in code and costs no model call.
