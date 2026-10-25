@@ -104,6 +104,14 @@ Write-Step 'Listing correspondence and listing search jobs'
 Invoke-Checked $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-contact')
 Invoke-Checked $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-search')
 
+# Each listing is read once by a subagent of its own, pinned to Sonnet through delegation.model. A kept
+# config.yaml gains the pin only when it names no subagent model of its own.
+Write-Step 'Listing features job'
+if (-not (Invoke-Native $hermes @('-p', $ProfileName, 'config', 'get', 'delegation.model') | Out-String).Trim()) {
+    Invoke-Checked $hermes @('-p', $ProfileName, 'config', 'set', 'delegation.model', 'sonnet')
+}
+Invoke-Checked $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-features')
+
 Write-Step 'Claude subscription provider plugin'
 Invoke-Checked $hermes @('-p', $ProfileName, 'plugins', 'install', $PluginName, '--force', '--enable')
 

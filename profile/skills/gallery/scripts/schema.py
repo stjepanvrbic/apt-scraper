@@ -55,7 +55,17 @@ def code_derived_features(connection):
         store_code_features(connection, listing_id)
 
 
-MIGRATIONS = (initial_schema, contact_workflow, code_derived_features)
+def listing_features(connection):
+    statements = [
+        'CREATE TABLE feature_records (listing_id TEXT PRIMARY KEY REFERENCES listings(id), fingerprint TEXT NOT NULL, extraction TEXT NOT NULL, extracted_at TEXT NOT NULL, preferences TEXT NOT NULL)',
+        'CREATE TABLE tags (tag TEXT PRIMARY KEY, added_at TEXT NOT NULL)',
+        'CREATE TABLE model_reads (read TEXT PRIMARY KEY, attempts INTEGER NOT NULL)',
+    ]
+    for statement in statements:
+        connection.execute(statement)
+
+
+MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features)
 
 
 def migrate(connection):

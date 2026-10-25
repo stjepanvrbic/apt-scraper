@@ -22,6 +22,18 @@
       "deliver": "local",
       "failure_deliver": "origin",
       "enabled_toolsets": ["terminal", "file"]
+    },
+    {
+      "id": "apt-scraper-features",
+      "name": "Listing features",
+      "prompt": "Above is the report of the listing features job. Follow the listing-features skill: run every extraction task in the report as its section \"Running extraction tasks\" says, then, if the report says listings wait for judgments of preferences, judge them as its section \"Judging preferences stated later\" says, until none waits. Never look at a listing's photos yourself. Do not contact anyone and do not change any settings. End with one line saying how many listings were extracted and how many were judged.",
+      "skills": ["listing-features"],
+      "script": "features-run.py",
+      "schedule": "every 10m",
+      "schedule_display": "every 10m",
+      "deliver": "local",
+      "failure_deliver": "origin",
+      "enabled_toolsets": ["terminal", "file", "vision", "delegation"]
     }
   ]
 }

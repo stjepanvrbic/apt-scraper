@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 from code_features import FEATURES, store_code_features
 from schema import content_fingerprint, migrate
 from queries import browse, snapshot, validate_page
+from record import SEED_TAGS, known_spelling, validate_extraction, validate_judgments
 
 
 UNCHANGED = object()
@@ -454,6 +455,84 @@ class ListingStore:
                 ON CONFLICT(listing_id) DO UPDATE SET rank = excluded.rank, reason = excluded.reason,
                 features = CASE WHEN ranking.fingerprint = excluded.fingerprint THEN ranking.features END,
                 fingerprint = excluded.fingerprint''', (listing_id, fingerprint, rank, reason))
+
+    def save_extraction(self, listing_id, fingerprint, extraction, *, photos, phrases):
+        """Stores the model's part of the feature record of this content when it keeps the contract of record.py.
+        photos are the unique photo URLs the extraction numbered from 1, phrases the stated preferences it judged.
+        A trait spelled like a known tag but for hyphens and spaces takes the known spelling. New traits and concerns
+        join the tag list in the same transaction. Returns the new tags."""
+        extraction = validate_extraction(extraction, len(photos), phrases)
+        preferences = extraction.pop('preferences')
+        extraction['photos'] = [{**photo, 'url': photos[photo['index'] - 1]} for photo in extraction['photos']]
+        with self.connect(write=True) as connection:
+            self.require_fingerprint(connection, listing_id, fingerprint)
+            known = self.known_tags(connection)
+            for field in ('traits', 'concerns'):
+                extraction[field] = list(dict.fromkeys(known_spelling(tag, known) for tag in extraction[field]))
+            new_tags = sorted({*extraction['traits'], *extraction['concerns']} - known)
+            now = datetime.now(timezone.utc).isoformat()
+            connection.executemany('INSERT INTO tags VALUES (?, ?)', [(tag, now) for tag in new_tags])
+            connection.execute('''INSERT INTO feature_records VALUES (?, ?, ?, ?, ?) ON CONFLICT(listing_id) DO UPDATE SET
+                fingerprint = excluded.fingerprint, extraction = excluded.extraction, extracted_at = excluded.extracted_at,
+                preferences = CASE WHEN feature_records.fingerprint = excluded.fingerprint
+                              THEN json_patch(feature_records.preferences, excluded.preferences) ELSE excluded.preferences END''',
+                               (listing_id, fingerprint, json.dumps(extraction, ensure_ascii=False), now, json.dumps(preferences, ensure_ascii=False)))
+            return {'new_tags': new_tags}
+
+    def judge_preferences(self, entries):
+        """Adds judgments of stated preferences made after the extraction of a listing's content, from its record and text.
+        entries are (listing id, fingerprint, judgments, phrases judged). All are stored in one transaction, or none when
+        any is invalid or its listing has no record of that content."""
+        entries = [(listing_id, fingerprint, validate_judgments(judgments, phrases)) for listing_id, fingerprint, judgments, phrases in entries]
+        with self.connect(write=True) as connection:
+            for listing_id, fingerprint, judgments in entries:
+                self.require_fingerprint(connection, listing_id, fingerprint)
+                if not connection.execute('UPDATE feature_records SET preferences = json_patch(preferences, ?) WHERE listing_id = ? AND fingerprint = ?',
+                                          (json.dumps(judgments, ensure_ascii=False), listing_id, fingerprint)).rowcount:
+                    raise ValueError(f'{listing_id} has no feature record of its current content to judge preferences from.')
+
+    def feature_records(self):
+        """The feature record of every listing whose current content has one: its extraction, the preferences judged for
+        it and when it was extracted."""
+        return self.current_feature_records()
+
+    def feature_record(self, listing_id):
+        return self.current_feature_records(listing_id).get(listing_id)
+
+    def current_feature_records(self, listing_id=None):
+        with self.connect() as connection:
+            return {row['listing_id']: {'extraction': json.loads(row['extraction']), 'preferences': json.loads(row['preferences']),
+                                        'extracted_at': row['extracted_at']}
+                    for row in connection.execute('''SELECT r.* FROM feature_records r JOIN listings l ON l.id = r.listing_id
+                        AND l.fingerprint = r.fingerprint WHERE ? IS NULL OR r.listing_id = ?
+                        ORDER BY r.listing_id''', (listing_id, listing_id))}
+
+    def tags(self):
+        """The tag list: the seed tags of record.py and every tag an extraction added."""
+        with self.connect() as connection:
+            return sorted(self.known_tags(connection))
+
+    @staticmethod
+    def known_tags(connection):
+        return {*SEED_TAGS, *(row['tag'] for row in connection.execute('SELECT tag FROM tags'))}
+
+    def read_attempts(self):
+        """How many times each model read was handed to the agent without its result being saved."""
+        with self.connect() as connection:
+            return {row['read']: row['attempts'] for row in connection.execute('SELECT * FROM model_reads')}
+
+    def record_read_attempts(self, failed, waiting):
+        """Counts one more failed attempt for each read in failed and forgets every read not in waiting or failed."""
+        with self.connect(write=True) as connection:
+            keep = {*waiting, *failed}
+            connection.executemany('DELETE FROM model_reads WHERE read = ?',
+                                   [(read,) for (read,) in connection.execute('SELECT read FROM model_reads') if read not in keep])
+            connection.executemany('INSERT INTO model_reads VALUES (?, 1) ON CONFLICT(read) DO UPDATE SET attempts = attempts + 1',
+                                   [(read,) for read in failed])
+
+    def reset_read_attempts(self):
+        with self.connect(write=True) as connection:
+            connection.execute('DELETE FROM model_reads')
 
     @staticmethod
     def require_fingerprint(connection, listing_id, fingerprint):

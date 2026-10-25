@@ -82,6 +82,14 @@ step 'Listing correspondence and listing search jobs'
 hermes -p "$PROFILE_NAME" cron resume apt-scraper-contact
 hermes -p "$PROFILE_NAME" cron resume apt-scraper-search
 
+# Each listing is read once by a subagent of its own, pinned to Sonnet through delegation.model. A kept
+# config.yaml gains the pin only when it names no subagent model of its own.
+step 'Listing features job'
+if [ -z "$(hermes -p "$PROFILE_NAME" config get delegation.model)" ]; then
+    hermes -p "$PROFILE_NAME" config set delegation.model sonnet
+fi
+hermes -p "$PROFILE_NAME" cron resume apt-scraper-features
+
 step 'Claude subscription provider plugin'
 hermes -p "$PROFILE_NAME" plugins install "$PLUGIN_NAME" --force --enable
 
