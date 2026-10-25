@@ -9,14 +9,15 @@ Commands:
   ranking.py questions [--count N]   the pairwise questions the model is least sure of
   ranking.py run                     one pass of the scheduled job apt-scraper-review: writes the task of a waiting
                                      review for the agent and ends with a line that tells Hermes whether to wake it.
-                                     Never fails.
+                                     Fails only when it cannot record a failure on the waiting review.
   ranking.py review-save FILE        the review agent's command: check and apply its review from a JSON file in the
                                      scratch directory, then delete the file
 
 Exit codes: 0 done, 1 the input or a step failed, 2 usage error.
 
 Hermes wakes the model whenever a cron script fails (cron/scheduler_prompt.py, "Script Error"), so run records a
-failure on the waiting review and ends with {"wakeAgent": false} instead.
+failure on the waiting review, where status reports it, and ends with {"wakeAgent": false} instead. A failure it cannot
+record there exits 1 with the error on stderr, which Hermes reports.
 """
 
 import argparse
@@ -89,21 +90,34 @@ def review_run(store, workspace):
             f'Review task file: {task_file.as_posix()}'], True
 
 
+def record_failure(store, message):
+    """Ends the latest rerank's review with message when it waits, and returns whether it did."""
+    last = store.last_rerank()
+    if not (last and last['review'] and last['review']['state'] in ('waiting', 'running')):
+        return False
+    store.fail_review(last['id'], message)
+    return True
+
+
 def run():
-    """The cron job's command. Every failure ends here, recorded on the waiting review, so Hermes does not wake the
-    model for it."""
+    """The cron job's command. A failure recorded on the waiting review ends quietly with {"wakeAgent": false}. A
+    failure that cannot be recorded, because the store does not open, no review waits or recording fails, goes to
+    stderr with exit code 1."""
     store = None
     try:
         store = ListingStore(store_path())
         lines, wake = review_run(store, store.path.parent / 'review')
     except Exception as error:
-        lines, wake = [f'The review could not be prepared. {type(error).__name__}: {error}'], False
+        message = f'The review could not be prepared. {type(error).__name__}: {error}'
         try:
-            last = store.last_rerank() if store else None
-            if last and last['review'] and last['review']['state'] in ('waiting', 'running'):
-                store.fail_review(last['id'], lines[0])
+            recorded = store is not None and record_failure(store, message)
         except Exception as record_error:
-            lines.append(f'The failure could not be recorded on the review. {type(record_error).__name__}: {record_error}')
+            message += f'\nThe failure could not be recorded on the review. {type(record_error).__name__}: {record_error}'
+            recorded = False
+        if not recorded:
+            print(message, file=sys.stderr)
+            return 1
+        lines, wake = [message], False
     print('\n'.join([*lines, json.dumps({'wakeAgent': wake})]))
     return 0
 

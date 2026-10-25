@@ -5,7 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import closing, redirect_stdout
+from contextlib import closing, redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from unittest import mock
@@ -328,6 +328,17 @@ class JobTests(ReviewTestCase):
         self.assertEqual(review['state'], 'failed')
         self.assertIn('disk full', review['result']['error'])
 
+    def test_a_failure_that_cannot_be_recorded_on_the_review_fails_the_job_with_the_error_on_stderr(self):
+        output, errors = StringIO(), StringIO()
+        with (mock.patch.object(ranking, 'pending_review', side_effect=RuntimeError('disk full')),
+              mock.patch.object(ListingStore, 'fail_review', side_effect=sqlite3.OperationalError('database is locked')),
+              redirect_stdout(output), redirect_stderr(errors)):
+            self.assertEqual(ranking.run(), 1)
+        self.assertEqual(output.getvalue(), '')
+        self.assertEqual(errors.getvalue().splitlines(), ['The review could not be prepared. RuntimeError: disk full',
+                                                          'The failure could not be recorded on the review. OperationalError: database is locked'])
+        self.assertEqual(self.store.last_rerank()['review']['state'], 'waiting')
+
 
 class CommandTests(ReviewTestCase):
     listings, favorites = 24, 3
@@ -336,9 +347,12 @@ class CommandTests(ReviewTestCase):
         return subprocess.run([sys.executable, str(SCRIPT), *arguments], capture_output=True, text=True, timeout=120,
                               env={**os.environ, 'HERMES_HOME': str(self.home)})
 
-    def test_the_job_script_and_review_save_through_the_command_line(self):
-        gate = subprocess.run([sys.executable, str(ROOT / 'profile/scripts/review-run.py')], capture_output=True, text=True, timeout=120,
+    def run_gate(self):
+        return subprocess.run([sys.executable, str(ROOT / 'profile/scripts/review-run.py')], capture_output=True, text=True, timeout=120,
                               env={**os.environ, 'HERMES_HOME': str(self.home)})
+
+    def test_the_job_script_and_review_save_through_the_command_line(self):
+        gate = self.run_gate()
         self.assertEqual(gate.returncode, 0, gate.stderr)
         self.assertEqual(gate.stdout.strip().splitlines()[-1], '{"wakeAgent": true}')
         scratch = self.home / 'cache' / 'scratch'
@@ -359,6 +373,15 @@ class CommandTests(ReviewTestCase):
         outside = self.home / 'review.json'
         outside.write_text('{}', encoding='utf-8')
         self.assertIn('scratch directory', self.run_script('review-save', str(outside)).stderr)
+
+    def test_the_job_script_fails_with_the_error_on_stderr_when_the_store_does_not_open(self):
+        with closing(sqlite3.connect(self.store.path)) as connection:
+            connection.execute('PRAGMA user_version = 99')
+        gate = self.run_gate()
+        self.assertEqual(gate.returncode, 1)
+        self.assertEqual(gate.stdout, '')
+        self.assertEqual(gate.stderr.strip(), 'The review could not be prepared. ValueError: This database uses a newer schema. '
+                                              'Update the gallery before opening it.')
 
 
 class ShippedJobTests(unittest.TestCase):
