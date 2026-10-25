@@ -1,0 +1,130 @@
+[
+  {
+    "id": "sample:lincoln",
+    "title": "Sunlit home in Lincoln Park",
+    "price": 2450,
+    "currency": "USD",
+    "size": "920 sq ft",
+    "rooms": "2 bedrooms, 1 bathroom",
+    "address": "1800 Sample Avenue, Lincoln Park, Chicago",
+    "description": "South-facing windows, oak floors and space for a proper dining table. A quiet courtyard sits behind the building.",
+    "amenities": [
+      "In-unit laundry",
+      "Dishwasher",
+      "Courtyard",
+      "Cats welcome"
+    ],
+    "photos": [
+      "/media/living.jpg",
+      "/media/kitchen.jpg",
+      "/media/bedroom.jpg"
+    ],
+    "sources": [
+      {
+        "label": "Sample source",
+        "url": "https://example.com/listings/lincoln"
+      }
+    ],
+    "first_seen": "2026-10-20",
+    "status": "available",
+    "rank": 1,
+    "reason": "Natural light, a separate workspace and a walkable neighborhood.",
+    "rental_period": "month",
+    "agent": {}
+  },
+  {
+    "id": "sample:logan",
+    "title": "A loft above the square",
+    "price": 2275,
+    "currency": "USD",
+    "size": "1,050 sq ft",
+    "rooms": "2 bedrooms, 2 bathrooms",
+    "address": "2400 Example Boulevard, Logan Square, Chicago",
+    "description": "An open living room with high ceilings and exposed brick. The second bedroom works well as a home office.",
+    "amenities": [
+      "Elevator",
+      "Dishwasher",
+      "Bike storage",
+      "Central air"
+    ],
+    "photos": [
+      "/media/loft.jpg",
+      "/media/living.jpg"
+    ],
+    "sources": [
+      {
+        "label": "Sample source",
+        "url": "https://example.com/listings/logan"
+      }
+    ],
+    "first_seen": "2026-10-20",
+    "status": "available",
+    "rank": 2,
+    "reason": "Extra space for working from home, within the sample budget.",
+    "rental_period": "month",
+    "agent": {}
+  },
+  {
+    "id": "sample:lakeview",
+    "title": "Room to unwind in Lakeview",
+    "price": 1980,
+    "currency": "USD",
+    "size": "760 sq ft",
+    "rooms": "1 bedroom, 1 bathroom",
+    "address": "800 Demo Street, Lakeview, Chicago",
+    "description": "A compact apartment with a balcony and a separate kitchen. Close to the lakefront path and neighborhood shops.",
+    "amenities": [
+      "Balcony",
+      "Laundry in building",
+      "Bike storage"
+    ],
+    "photos": [
+      "/media/bedroom.jpg",
+      "/media/kitchen.jpg"
+    ],
+    "sources": [
+      {
+        "label": "Sample source",
+        "url": "https://example.com/listings/lakeview"
+      }
+    ],
+    "first_seen": "2026-10-20",
+    "status": "available",
+    "rank": 3,
+    "reason": "Lower monthly rent with outdoor space and lakefront access.",
+    "rental_period": "month",
+    "agent": {}
+  },
+  {
+    "id": "sample:andersonville",
+    "title": "A quiet corner in Andersonville",
+    "price": 2195,
+    "currency": "USD",
+    "size": "880 sq ft",
+    "rooms": "2 bedrooms, 1 bathroom",
+    "address": "1500 Sample Lane, Andersonville, Chicago",
+    "description": "A top-floor apartment on a residential side street. The living room faces mature trees and the shared garden.",
+    "amenities": [
+      "Shared garden",
+      "Dishwasher",
+      "Storage",
+      "Dogs welcome"
+    ],
+    "photos": [
+      "/media/kitchen.jpg",
+      "/media/loft.jpg"
+    ],
+    "sources": [
+      {
+        "label": "Sample source",
+        "url": "https://example.com/listings/andersonville"
+      }
+    ],
+    "first_seen": "2026-10-20",
+    "status": "available",
+    "rank": 4,
+    "reason": "A quieter street and a shared garden for time outside.",
+    "rental_period": "month",
+    "agent": {}
+  }
+]

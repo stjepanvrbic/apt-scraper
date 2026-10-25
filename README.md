@@ -35,6 +35,8 @@ Run it again after pulling changes. Your settings, memories, sessions and creden
 
 Open a new terminal and run `hermes -p apt-scraper`.
 
+Ask Hermes to open the apartment gallery. It opens a local browser app with listings, favorites and notes. Until search results exist, it opens a separate sample gallery. See [the gallery guide](docs/gallery.md) for direct launch commands, development and the shared listing store.
+
 ## Usage and billing
 
 Every message draws on your Claude subscription allowance, the same pool `claude -p` uses. Turn off extra usage in your Claude account settings if you don't want overage charges. The provider plugin is marked experimental by its maintainers.
