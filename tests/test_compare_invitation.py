@@ -1,6 +1,7 @@
+import json
 from unittest import mock
 
-from test_features_run import FeaturesTestCase
+from test_features_run import ROOT, FeaturesTestCase
 
 
 class CompareInvitationTests(FeaturesTestCase):
@@ -41,8 +42,6 @@ class CompareInvitationTests(FeaturesTestCase):
         self.assertFalse(self.features.compare_invitation_pending())
 
     def test_installed_job_requests_the_gateway_invitation_after_extractions(self):
-        from test_features_run import ROOT
-        import json
         job = next(job for job in json.loads((ROOT / 'profile/cron/jobs.json').read_text())['jobs']
                    if job['id'] == 'apt-scraper-features')
         self.assertIn('invite-compare', job['prompt'])

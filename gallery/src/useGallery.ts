@@ -83,7 +83,7 @@ export function useCompare() {
     if (saving.current || updating || query.isFetching || query.isError) return;
     saving.current = true;
     try { await mutation.mutateAsync(action); }
-    catch { return false; }
+    catch { return; }
     finally { saving.current = false; }
   };
   return { query, mutation, pending, busy: updating || query.isFetching, announcement, save };

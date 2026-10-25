@@ -8,10 +8,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 from chat import ChatController
-from rerank import comparison
+from rerank import pairwise_questions
 
 
 STATIC = Path(__file__).resolve().parents[1] / 'web'
+
+
+def comparison(store):
+    pairs = pairwise_questions(store, 1)
+    question = None
+    if pairs:
+        question = {'listings': [store.listing(identifier, visible_only=True) for identifier in pairs[0]['listings']]}
+    return {'question': question, 'answered': len(store.pairwise_answers())}
 
 
 def make_server(store, port=8765, chat_runner=None, install_id='development'):

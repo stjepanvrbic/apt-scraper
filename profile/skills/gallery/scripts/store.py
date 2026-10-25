@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from code_features import FEATURES, store_code_features
 from schema import content_fingerprint, migrate
-from queries import browse, snapshot, validate_page
+from queries import RANKABLE, browse, snapshot, validate_page
 from record import SEED_TAGS, known_spelling, validate_extraction, validate_judgments
 from scoring import reading_vocabulary, stated_phrases, validate_note_reading, validate_preference_reading
 
@@ -482,14 +482,15 @@ class ListingStore:
             pairs = [(row['chosen'], row['other']) for row in connection.execute('SELECT chosen, other FROM pairwise_answers ORDER BY id')]
             paired = {identifier for pair in pairs for identifier in pair}
             listings = []
-            for row in connection.execute('SELECT * FROM listings ORDER BY id'):
+            for row in connection.execute(f'''SELECT l.*, {RANKABLE} AS rankable FROM listings l
+                    LEFT JOIN feedback f ON f.listing_id = l.id ORDER BY l.id'''):
                 data, identifier = json.loads(row['data']), row['id']
                 record = records.get(identifier)
                 choice = feedback.get(identifier)
                 dismissed = bool(choice and choice['dismissed'])
                 listings.append({
                     'id': identifier, 'fingerprint': row['fingerprint'], 'title': data.get('title'), 'address': data.get('address'),
-                    'rankable': row['status'] == 'available' and bool(row['matches_criteria']) and not dismissed,
+                    'rankable': bool(row['rankable']),
                     'record': json.loads(record['extraction']) if record else None,
                     'judgments': json.loads(record['preferences']) if record else {},
                     'code': code.get(identifier, {}),
@@ -615,8 +616,8 @@ class ListingStore:
             raise ValueError('A pairwise question compares two different listings.')
         for identifier in (first, second):
             self.require_listing(connection, identifier)
-            available = connection.execute('''SELECT 1 FROM listings l LEFT JOIN feedback f ON f.listing_id = l.id
-                WHERE l.id = ? AND l.status = 'available' AND l.matches_criteria = 1 AND COALESCE(f.dismissed, 0) = 0''',
+            available = connection.execute(f'''SELECT 1 FROM listings l LEFT JOIN feedback f ON f.listing_id = l.id
+                WHERE l.id = ? AND {RANKABLE}''',
                                            (identifier,)).fetchone()
             if not available:
                 raise ValueError('This listing is no longer available to compare. Refresh Compare.')

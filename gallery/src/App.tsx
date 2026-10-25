@@ -14,12 +14,12 @@ import { Compare } from './Compare';
 const NotesChat = lazy(() => import('./NotesChat'));
 
 const tabs = [
-  { name: 'Rankings', icon: IconLayoutGrid, description: 'Apartments ordered by how well they fit you.' },
-  { name: 'Favorites', icon: IconHeart, description: 'The places you want to keep coming back to.' },
-  { name: 'Compare', icon: IconArrowsDiff, description: 'Help your rankings reflect what you like.' },
-  { name: 'Contacted', icon: IconMessageCircle, description: 'Your contact requests and listing correspondence.' },
-  { name: 'Viewings', icon: IconCalendar, description: 'Booked visits, with the details in one place.' },
-  { name: 'Notes', icon: IconNotes, description: 'Tell Hermes what makes a place feel right for you.' },
+  { name: 'Rankings', showsListings: true, icon: IconLayoutGrid, description: 'Apartments ordered by how well they fit you.' },
+  { name: 'Favorites', showsListings: true, icon: IconHeart, description: 'The places you want to keep coming back to.' },
+  { name: 'Compare', showsListings: false, icon: IconArrowsDiff, description: 'Help your rankings reflect what you like.' },
+  { name: 'Contacted', showsListings: true, icon: IconMessageCircle, description: 'Your contact requests and listing correspondence.' },
+  { name: 'Viewings', showsListings: true, icon: IconCalendar, description: 'Booked visits, with the details in one place.' },
+  { name: 'Notes', showsListings: false, icon: IconNotes, description: 'Tell Hermes what makes a place feel right for you.' },
 ];
 
 function NoteForm({ save, path }: { save: Save; path: string }) {
@@ -129,12 +129,12 @@ export default function App() {
         <Tabs.List mb={32}>{tabs.map(item => <Tabs.Tab key={item.name} value={item.name} leftSection={<item.icon size={18} />}>{item.name}</Tabs.Tab>)}</Tabs.List>
         <Group justify="space-between" align="flex-end" mb="xl"><div><Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={6}>Your apartment search</Text>
           <Title order={1}>{dismissed ? 'Dismissed listings' : current.name}</Title><Text c="dimmed" mt="xs">{current.description}</Text></div>
-          {tab !== 'Notes' && tab !== 'Compare' && <Text c="dimmed" size="sm">{state?.total ?? 0} {state?.total === 1 ? 'place' : 'places'}</Text>}</Group>
+          {current.showsListings && <Text c="dimmed" size="sm">{state?.total ?? 0} {state?.total === 1 ? 'place' : 'places'}</Text>}</Group>
         {tab === 'Rankings' && <Button variant="subtle" mb="md" onClick={() => { setDismissed(!dismissed); setPage(1); }}>{dismissed ? 'Back to rankings' : 'Dismissed listings'}</Button>}
         {readError && <Alert color="red" title="Could not load gallery" mb="lg">{readError}</Alert>}
         {saveError && !selected && <Alert color="red" title="Could not save" mb="lg">{saveError}</Alert>}
-        {!state && tab !== 'Notes' && tab !== 'Compare' && !readError && <Loader aria-label="Loading listings" />}
-        {(state || tab === 'Notes' || tab === 'Compare') && tabs.map(item => <Tabs.Panel key={item.name} value={item.name}>
+        {!state && current.showsListings && !readError && <Loader aria-label="Loading listings" />}
+        {(state || !current.showsListings) && tabs.map(item => <Tabs.Panel key={item.name} value={item.name}>
           {item.name === 'Compare' ? <Compare open={setSelected} /> : item.name === 'Notes' ? <Suspense fallback={<Loader aria-label="Loading conversation" />}><NotesChat /></Suspense> :
             listings.length ? <Stack gap="xl">{groups.filter(group => group.items.length).map(group => <div key={group.heading ?? 'listings'}>
               {group.heading && <Title order={2} size="h3" mb="md">{group.heading}</Title>}

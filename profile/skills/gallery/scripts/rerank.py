@@ -27,11 +27,3 @@ def pairwise_questions(store, count):
     hyperparameters = (last['prior_scale'], last['unlabeled_weight']) if last else DEFAULT_HYPERPARAMETERS
     inputs = store.ranking_inputs()
     return questions(inputs, hyperparameters, count, [*inputs['pairs'], *store.skipped_pairs()])
-
-
-def comparison(store):
-    pairs = pairwise_questions(store, 1)
-    question = None
-    if pairs:
-        question = {'listings': [store.listing(identifier, visible_only=True) for identifier in pairs[0]['listings']]}
-    return {'question': question, 'answered': len(store.pairwise_answers())}

@@ -72,6 +72,17 @@ class CompareTests(CompareTestCase):
         self.assertEqual(self.store.pairwise_answers(), [tuple(pair)])
         self.assertNotIn(set(pair), [set(item['listings']) for item in pairwise_questions(self.store, 20)])
 
+    def test_answers_advance_the_skip_cooldown_but_retries_do_not(self):
+        pair = tuple(sorted(pairwise_questions(self.store, 1)[0]['listings']))
+        self.store.skip_pair(*pair)
+        for _ in range(20):
+            self.assertIn(pair, self.store.skipped_pairs())
+            question = pairwise_questions(self.store, 1)[0]['listings']
+            self.assertNotEqual(set(question), set(pair))
+            self.store.answer_pair(*question)
+            self.store.answer_pair(*question)
+        self.assertNotIn(pair, self.store.skipped_pairs())
+
     def test_ineligible_and_malformed_choices_cannot_be_saved(self):
         for action in (self.store.answer_pair, self.store.skip_pair):
             for first, second in [('choice:00', 'choice:00'), ([], 'choice:01'), ('choice:00', None)]:
