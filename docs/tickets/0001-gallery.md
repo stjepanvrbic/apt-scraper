@@ -1,9 +1,9 @@
 ---
 title: Gallery with listings, favorites and notes
 type: Feature
-state: Todo
+state: In Progress
 priority: 2
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []

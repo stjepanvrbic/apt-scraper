@@ -1,9 +1,9 @@
 ---
 title: Log in to Claude with a pasted setup token
 type: Feature
-state: Todo
+state: In Progress
 priority: 4
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []
