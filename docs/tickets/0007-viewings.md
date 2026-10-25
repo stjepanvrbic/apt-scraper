@@ -1,9 +1,9 @@
 ---
 title: Book viewings on Google Calendar
 type: Feature
-state: In Progress
+state: Done
 priority: 2
-assignee: agent
+assignee: Stjepan Vrbic
 milestone:
 parent:
 blocked_by: [0006]
