@@ -1,9 +1,9 @@
 ---
 title: Contact listing agents
 type: Feature
-state: Todo
+state: In Progress
 priority: 2
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: [0001, 0005, 0009]

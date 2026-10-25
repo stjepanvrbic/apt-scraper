@@ -1,9 +1,9 @@
 ---
 title: Continuous search of the listing sites
 type: Feature
-state: Todo
+state: In Progress
 priority: 1
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: [0001, 0002]
