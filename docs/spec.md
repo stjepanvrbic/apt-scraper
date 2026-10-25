@@ -2,7 +2,7 @@
 
 ## Scope
 
-A Hermes Agent profile, its installer and a local gallery app that find, rank and pursue apartments for one user, per [the intent](intent.md). Actors: the user, listing sites, listing agents, a geocoding and routing service, and the user's Gmail, Google Calendar, messaging gateway and iMessage. Excluded: phone calls, applications, leases, payments, negotiation, merging one apartment across listing sites, and texting on Windows.
+A Hermes Agent profile, its installer and a local gallery app that find, rank and pursue apartments for one user, per [the intent](intent.md). Actors: the user, listing sites, listing agents, a geocoding service, and the user's Gmail, Google Calendar, messaging gateway and iMessage. Excluded: phone calls, applications, leases, payments, negotiation, merging one apartment across listing sites, and texting on Windows.
 
 ## Terms
 
@@ -15,8 +15,8 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 - **Contact request**: the user's action asking the agent to pursue a listing.
 - **Viewing**: an agreed time to see a listing, held as a Google Calendar event.
 - **Note**: text the user attaches to a listing.
-- **Place**: a location the user travels to regularly, such as work or a gym, with how they get there, the longest trip they accept and how often they go.
-- **Location priorities**: how much the places, nearness to rapid transit and each area of the criteria matter to the user.
+- **Place**: a location the user goes to regularly, such as work or a gym, and how much being near it matters.
+- **Location priorities**: how much the places, nearness to a rapid-transit station and each area of the criteria matter to the user.
 - **Feature record**: what is stored about one listing content for ranking: what extraction read from its photos and text, and what code computed from the listing.
 - **Extraction**: the one model read of a listing content that produces the model's part of its feature record.
 - **Trait**: a short tag for something about a listing that the ratings and flags of a feature record do not cover.
@@ -55,7 +55,7 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 - Extraction reads the listing's text and every one of its photos, after exact and near duplicates are removed. It opens a photo at full resolution only when a detail needs it.
 - The model's part of the record has the room type of each photo; ratings from 1 to 5, each with a confidence, or "not shown", for qualities such as light, condition, kitchen, bathroom and ceiling height; flags read from the text, such as in-unit laundry, air conditioning, pets and utilities included; traits; and, for each stated preference the rest of the record does not express, whether the listing has it, rules it out or does not say.
 - Extraction uses a trait from the tag list when one fits. A new trait joins the tag list, so later listings use the same word for the same thing.
-- Code adds what it reads reliably: monthly price, size, price per square foot, rooms, unit level from unit labels such as `#G` or "Garden", days since first seen, photo count, coordinates, distance to the nearest rapid-transit stop, and the travel time to each place by the user's way of getting there.
+- Code adds what it reads reliably: monthly price, size, price per square foot, rooms, unit level from unit labels such as `#G` or "Garden", days since first seen, photo count, coordinates, straight-line distance to the nearest rapid-transit station, and straight-line distance to each place.
 - A stated preference added later is judged for each listing from its feature record and text, without the photos. Until then the listing counts as not saying.
 - When extraction of one content fails three times, it stops. The listing is ranked from its code-derived features alone, its reason says so, and the agent reports it to the user.
 
@@ -65,7 +65,7 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 - A rerank ranks every available listing that has a feature record, and gives each a rank and a one-line reason. A listing found or changed since the last rerank, or waiting for its feature record, shows after the ranked listings, marked as not ranked yet with the reason why.
 - Favorites and contact requests count for their listings, and dismissals against them, so listings with similar photos, price, description, location and amenities rise or fall. A note is read once into a sentiment, which labels its listing, and into likes and dislikes on the feature record's ratings, flags and traits. A pairwise answer counts the chosen listing over the other.
 - Stated likes and dislikes, and the likes and dislikes read from notes, set the starting weight of the features they name. Labels can outweigh them: when the favorites keep having something the user said they dislike, it stops counting against listings.
-- Location counts through the areas of the criteria, nearness to the favorites' locations, distance to rapid transit and the travel time to each place, each weighted by the location priorities. A listing beyond a place's longest accepted trip counts down by how much the place matters.
+- Location counts through the areas of the criteria, nearness to the favorites' locations, distance to the nearest rapid-transit station and distance to each place, each weighted by the location priorities.
 - A listing's reason names the features that moved its score most and the favorite it most resembles, citing only its feature record. Its details show the full explanation: each feature's contribution to its score, computed from the scoring model, and that favorite.
 - Each rerank runs the leave-one-out check.
 - When more than 20 listings are ranked, two of the top 20 are exploration listings, marked as shown to learn the user's taste. An exploration listing has no label from the user.
@@ -104,12 +104,12 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 
 - Installer: a fresh Windows machine and a fresh Mac each finish `install` with the test message passing.
 - Search: of the matching listings a manual search of the listing sites finds that were posted more than a day earlier, the agent has already found at least 90%.
-- Interview: a first interview stores places, each with its way of getting there, longest accepted trip and frequency, and the location priorities.
+- Interview: a first interview stores places and the location priorities.
 - Listing features: every unique photo of a test listing has a room type in its feature record, the agent's main conversation holds no image, and searching the unchanged listing again makes no extraction.
 - Ranking: the tester favorites five listings they consider alike, and the unseen listings the tester judges alike to them rank above the rest of similar price.
 - Rerank: with 300 listings and 50 favorites, pressing Score and rerank shows the new order and the leave-one-out check within 2 seconds, and Hermes's session usage shows no model call before the review pass.
 - Overruled preference: with the stated dislike "Carpet" and five carpeted favorites, carpet does not count against an unseen carpeted listing in its explanation.
-- Location: of two test listings alike except for the travel time to a place, the one within the place's longest accepted trip ranks higher.
+- Location: of two test listings alike except for the distance to a place, the closer one ranks higher.
 - Exploration: with more than 20 ranked listings, exactly two of the top 20 are marked as exploration listings, and neither has a label from the user.
 - Pairwise questions: on a fresh profile, the agent asks for 5 to 8 pairwise answers once the first feature records exist, and a single answer ranks the chosen listing above the other at the next rerank.
 - Review pass: a review whose moves make the favorites' held-out ranks worse is reverted, and the gallery shows the reverted moves.
