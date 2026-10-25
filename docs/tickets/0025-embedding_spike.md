@@ -39,7 +39,7 @@ Option B of the [research](../research/preference_learning_for_listing_ranking.m
 - A listing without embeddings carries no information: its similarity column takes the column mean and its embedding-kernel row is zero but for its own variance.
 - The real Chicago store of the scoring model's experiment no longer exists, so the ranking comparison has not run (Comments). Costs were measured on the 67 stored photos of 5 real Chicago listings from an older test store, and the whole measurement ran on synthetic stand-in stores.
 - `scoring.fit_model` is split into `fit_model(inputs)` and `fit_design(design, inputs)`, so the similarity terms fit and tune exactly as the scoring model does. Behavior unchanged, the existing tests pass.
-- The embedding cache is migration 7 of the listing store (`embeddings` table), after the Compare tab's `pairwise_skips`.
+- The embedding cache is migration 8 of the listing store (`embeddings` table), after the distance features' `distances`.
 - The embedding environment uses Hermes's Python 3.14, as the search environment does. `requirements-embeddings.txt` is one hash-pinned file for Windows x64 and macOS arm64 (macOS 14 or later, which PyTorch 2.14 requires), resolved separately for each and identical but for `colorama` on Windows.
 
 ## Result
@@ -51,13 +51,13 @@ profile/skills/ranking/scripts/embeddings.py          CLIP per photo, averaged p
 profile/skills/ranking/scripts/embedding_models.py    Gaussian-process model and similarity terms over the scoring model's design
 profile/skills/ranking/scripts/measure_embeddings.py  costs, leave-one-out and the five-favorites experiment on a read-only store copy
 profile/skills/ranking/requirements-embeddings.txt    48 packages pinned with hashes, Windows x64 and macOS arm64, Python 3.14
-profile/skills/gallery/scripts/store.py, schema.py    migration 7, embedding_inputs, save_embeddings, embeddings
+profile/skills/gallery/scripts/store.py, schema.py    migration 8, embedding_inputs, save_embeddings, embeddings
 profile/skills/gallery/scripts/scoring.py             fit_model split into fit_model and fit_design
 docs/research/embedding_preference_model.md, docs/ranking.md, docs/gallery.md
 tests/test_embedding_store.py, tests/embeddings/
 ```
 
-Checks: `python -m unittest discover -s tests` (Python 3.12.10) 408 passed, 0 skipped. `tests/embeddings` in the embedding environment (Hermes's Python 3.14.9) 20 passed, 0 skipped, with the real pinned models. `ruff check profile tests` clean. The environment was built from `requirements-embeddings.txt` with `--require-hashes --only-binary :all: --no-deps` on Windows. The macOS resolution was checked with `uv pip compile` for `aarch64-apple-darwin` and needs only hashes the file holds, but no Mac install ran.
+Checks: `python -m unittest discover -s tests` (Python 3.12.10) 451 passed, 0 skipped. `tests/embeddings` in the embedding environment (Hermes's Python 3.14.9) 20 passed, 0 skipped, with the real pinned models. `ruff check profile tests` clean. The environment was built from `requirements-embeddings.txt` with `--require-hashes --only-binary :all: --no-deps` on Windows. The macOS resolution was checked with `uv pip compile` for `aarch64-apple-darwin` and needs only hashes the file holds, but no Mac install ran.
 
 Measured on this machine (numbers and conditions in the research): the environment is 1,064 MB from 221 MB of wheels, the models 664 MB from Hugging Face, peak memory 1.64 GB, CLIP 32 photos per second at 4 threads and 55 at 16, 1.9 CPU seconds per listing of 13.4 photos at 4 threads. The Gaussian-process fit with its check takes 0.3 to 0.4 s at 128 listings and 5 favorites, 8 to 13 s at 300 listings and 50 favorites. On the synthetic stores, where garden units share one listing's photos, the Gaussian process with photos at amplitude 2 put 13 of 15 unseen garden units above every similar-price listing, the scoring model 0, and the similarity term 0.
 
