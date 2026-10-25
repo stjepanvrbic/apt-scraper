@@ -1,9 +1,9 @@
 ---
 title: Code-derived listing features and coordinates
 type: Feature
-state: Todo
+state: In Progress
 priority: 2
-assignee:
+assignee: agent
 milestone:
 parent: 0015
 blocked_by: []

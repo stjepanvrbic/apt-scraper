@@ -1,9 +1,9 @@
 ---
 title: Feature records extracted from every photo and the text
 type: Feature
-state: Todo
+state: In Progress
 priority: 2
-assignee:
+assignee: agent
 milestone:
 parent: 0015
 blocked_by: []
