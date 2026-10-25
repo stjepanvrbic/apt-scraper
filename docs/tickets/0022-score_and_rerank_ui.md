@@ -37,3 +37,5 @@ The button could show how many listings and labels changed since the last rerank
 ## Deviations
 
 ## Result
+
+- 2026-10-25: Show "© OpenStreetMap contributors" where place distances appear, as the Nominatim usage policy asks.
