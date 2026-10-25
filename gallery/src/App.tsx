@@ -1,69 +1,26 @@
 import { lazy, Suspense, useState } from 'react';
 import {
-  ActionIcon, Alert, Anchor, AspectRatio, Badge, Box, Button, Card, Container, Divider, Drawer,
-  Group, Image, Loader, Paper, Pagination, SimpleGrid, Stack, Tabs, Text, Textarea, Title, UnstyledButton,
+  Alert, Anchor, Badge, Box, Button, Container, Divider, Drawer,
+  Group, Loader, Paper, Pagination, SimpleGrid, Stack, Tabs, Text, Textarea, Title,
 } from '@mantine/core';
-import { IconArrowUpRight, IconBuilding, IconCalendar, IconHeart, IconLayoutGrid, IconMessageCircle, IconNotes, IconPhoto, IconRefresh } from '@tabler/icons-react';
+import { IconArrowsDiff, IconArrowUpRight, IconBuilding, IconCalendar, IconHeart, IconLayoutGrid, IconMessageCircle, IconNotes, IconPhoto, IconRefresh } from '@tabler/icons-react';
 import Lightbox from 'yet-another-react-lightbox';
 import Counter from 'yet-another-react-lightbox/plugins/counter';
-import { date, period, price, title, viewingTime, type ListingSummary } from './model';
+import { date, period, price, title, viewingTime } from './model';
 import { useGallery, useListing } from './useGallery';
+import { ListingCard, Photo, listingPath, type Save } from './ListingCard';
+import { Compare } from './Compare';
 
 const NotesChat = lazy(() => import('./NotesChat'));
 
-type Save = (path: string, body: Record<string, unknown>) => Promise<boolean>;
-const listingPath = (listing: ListingSummary, action: string) => `/api/listings/${encodeURIComponent(listing.id)}/${action}`;
-
 const tabs = [
-  { name: 'Rankings', icon: IconLayoutGrid, description: 'Apartments ordered by how well they fit you.' },
-  { name: 'Favorites', icon: IconHeart, description: 'The places you want to keep coming back to.' },
-  { name: 'Contacted', icon: IconMessageCircle, description: 'Your contact requests and listing correspondence.' },
-  { name: 'Viewings', icon: IconCalendar, description: 'Booked visits, with the details in one place.' },
-  { name: 'Notes', icon: IconNotes, description: 'Tell Hermes what makes a place feel right for you.' },
+  { name: 'Rankings', showsListings: true, icon: IconLayoutGrid, description: 'Apartments ordered by how well they fit you.' },
+  { name: 'Favorites', showsListings: true, icon: IconHeart, description: 'The places you want to keep coming back to.' },
+  { name: 'Compare', showsListings: false, icon: IconArrowsDiff, description: 'Help your rankings reflect what you like.' },
+  { name: 'Contacted', showsListings: true, icon: IconMessageCircle, description: 'Your contact requests and listing correspondence.' },
+  { name: 'Viewings', showsListings: true, icon: IconCalendar, description: 'Booked visits, with the details in one place.' },
+  { name: 'Notes', showsListings: false, icon: IconNotes, description: 'Tell Hermes what makes a place feel right for you.' },
 ];
-
-function Photo({ listing }: { listing: ListingSummary }) {
-  const [failedSource, setFailedSource] = useState<string>();
-  return <AspectRatio ratio={4 / 3}>
-    {listing.photos.length && failedSource !== listing.photos[0] ? <Image src={listing.photos[0]} alt={title(listing)} loading="lazy" radius={20}
-      onError={() => setFailedSource(listing.photos[0])} /> :
-      <Paper bg="gray.1" radius={20} aria-hidden="true"><Stack align="center" gap="xs"><IconPhoto /><Text c="dimmed">{listing.photos.length ? 'Photo unavailable' : 'No photos available'}</Text></Stack></Paper>}
-  </AspectRatio>;
-}
-
-function ListingCard({ listing, open, save, busy, headingOrder = 2 }: { listing: ListingSummary; open: () => void; save: Save; busy: boolean; headingOrder?: 2 | 3 }) {
-  return <Card component="article" padding={0} radius={20} className="listing-card">
-    <Box pos="relative">
-    <UnstyledButton onClick={open} aria-label={`View ${title(listing)}`} className="photo-button">
-      <Photo listing={listing} />
-    </UnstyledButton>
-      <Badge className="rank-badge" color="dark" variant="white" radius="sm">{listing.analysis_current && listing.rank ? `#${listing.rank} match` : 'Awaiting ranking'}</Badge>
-      <ActionIcon className="favorite-button" variant="white" color={listing.favorite ? 'pink' : 'dark'} size={44} radius="xl"
-        aria-label={`${listing.favorite ? 'Unfavorite' : 'Favorite'} ${title(listing)}`} aria-pressed={listing.favorite}
-        disabled={busy || listing.dismissed} onClick={() => save(listingPath(listing, 'feedback'), { favorite: !listing.favorite })}>
-        <IconHeart size={22} fill={listing.favorite ? 'currentColor' : 'none'} />
-      </ActionIcon>
-    </Box>
-    <Stack gap={8} p="md">
-      <Group justify="space-between"><Text fw={700} size="lg">{price(listing)} <Text component="span" fw={400} c="dimmed" size="sm">{period(listing, '/')}</Text></Text>
-        {listing.id.startsWith('sample:') && <Text size="xs" c="dimmed">Sample</Text>}
-      </Group>
-      <UnstyledButton onClick={open}><Title order={headingOrder} size="md" fw={600}>{title(listing)}</Title></UnstyledButton>
-      <Text size="sm" c="dimmed">{listing.rooms ?? 'Rooms not listed'} · {listing.size ?? 'Size not listed'}</Text>
-      <Text size="sm" lineClamp={1}>{listing.address ?? 'Address not listed'}</Text>
-      <Divider />
-      <Text size="sm" c="dimmed" mih={42}>{listing.analysis_current ? listing.reason : 'Awaiting ranking.'}</Text>
-      <Badge variant="light" color={listing.status === 'available' ? 'green' : 'gray'}>{listing.status === 'available' ? 'Available' : 'Unavailable'}</Badge>
-      {listing.viewing && <Text size="sm" fw={600}>{viewingTime(listing.viewing.time)}</Text>}
-      {listing.contact && <Badge variant="light" color={listing.contact.status === 'pending' ? 'gray' : 'blue'}>
-        {({pending: 'Contact requested', in_progress: 'Contact in progress', contacted: 'Contacted', failed: 'Contact failed', closed: 'Contact closed'})[listing.contact.status]}
-      </Badge>}
-      {!!listing.correspondence.length && <Stack gap="xs"><Text size="sm" fw={600}>Latest correspondence</Text>
-        {listing.correspondence.map(message => <div key={message.id}><Text size="xs" c="dimmed">{message.direction === 'incoming' ? 'Listing agent' : 'You'} · {message.channel}</Text><Text size="sm" className="preserve-lines">{message.text}</Text></div>)}
-        <Button variant="subtle" onClick={open}>View all {listing.correspondence_total} messages</Button></Stack>}
-    </Stack>
-  </Card>;
-}
 
 function NoteForm({ save, path }: { save: Save; path: string }) {
   const [text, setText] = useState('');
@@ -81,13 +38,13 @@ function NoteForm({ save, path }: { save: Save; path: string }) {
   </form>;
 }
 
-function Details({ id, close, save, busy, saveError, readError }: { id: string | undefined; close: () => void; save: Save; busy: boolean; saveError: string; readError: string }) {
+function Details({ id, close, save, busy, saveError, readError, compare }: { compare: boolean; id: string | undefined; close: () => void; save: Save; busy: boolean; saveError: string; readError: string }) {
   const [photo, setPhoto] = useState(-1);
   const [pages, setPages] = useState({ notes_page: 1, correspondence_page: 1, viewings_page: 1 });
   const details = useListing(id, pages);
   const listing = details.data;
   return <>
-    <Drawer opened={!!id} onClose={close} position="right" size="min(760px, 100%)" padding="xl"
+    <Drawer opened={!!id} onClose={() => { setPhoto(-1); setPages({ notes_page: 1, correspondence_page: 1, viewings_page: 1 }); close(); }} position="right" size="min(760px, 100%)" padding="xl"
       attributes={{ header: { role: 'presentation' } }}
       title="Listing details" closeButtonProps={{ 'aria-label': 'Close listing details' }}
       trapFocus={photo < 0} closeOnEscape={photo < 0}>
@@ -118,7 +75,7 @@ function Details({ id, close, save, busy, saveError, readError }: { id: string |
         {listing.contact?.status === 'failed' && <Alert color="red" title="Contact failed">{listing.contact.error}</Alert>}
         {listing.contact?.status === 'pending' && <Text size="sm" c="dimmed">Request saved. No message has been sent yet.</Text>}
         {listing.dismissed && <Text size="sm" c="dimmed">Hidden from Rankings and Favorites. Your notes and contact history are kept.</Text>}
-        <Paper p="md" bg="gray.0" radius="md"><Text size="sm" fw={600} mb={4}>{listing.analysis_current && listing.rank ? `Why it ranks #${listing.rank}` : 'Awaiting ranking'}</Text><Text size="sm">{listing.analysis_current ? listing.reason : 'The listing is waiting for analysis of its current content.'}</Text></Paper>
+        {!compare && <Paper p="md" bg="gray.0" radius="md"><Text size="sm" fw={600} mb={4}>{listing.analysis_current && listing.rank ? `Why it ranks #${listing.rank}` : 'Awaiting ranking'}</Text><Text size="sm">{listing.analysis_current ? listing.reason : 'The listing is waiting for analysis of its current content.'}</Text></Paper>}
         <div><Title order={3} size="h4" mb="xs">About this apartment</Title><Text className="preserve-lines">{listing.description ?? 'No description provided.'}</Text></div>
         <div><Title order={3} size="h4" mb="sm">Amenities</Title><Group gap="xs">{listing.amenities.map(amenity =>
           <Badge key={amenity} variant="light" color="gray" size="lg" tt="none" fw={400}>{amenity}</Badge>)}
@@ -172,13 +129,13 @@ export default function App() {
         <Tabs.List mb={32}>{tabs.map(item => <Tabs.Tab key={item.name} value={item.name} leftSection={<item.icon size={18} />}>{item.name}</Tabs.Tab>)}</Tabs.List>
         <Group justify="space-between" align="flex-end" mb="xl"><div><Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={6}>Your apartment search</Text>
           <Title order={1}>{dismissed ? 'Dismissed listings' : current.name}</Title><Text c="dimmed" mt="xs">{current.description}</Text></div>
-          {tab !== 'Notes' && <Text c="dimmed" size="sm">{state?.total ?? 0} {state?.total === 1 ? 'place' : 'places'}</Text>}</Group>
+          {current.showsListings && <Text c="dimmed" size="sm">{state?.total ?? 0} {state?.total === 1 ? 'place' : 'places'}</Text>}</Group>
         {tab === 'Rankings' && <Button variant="subtle" mb="md" onClick={() => { setDismissed(!dismissed); setPage(1); }}>{dismissed ? 'Back to rankings' : 'Dismissed listings'}</Button>}
         {readError && <Alert color="red" title="Could not load gallery" mb="lg">{readError}</Alert>}
         {saveError && !selected && <Alert color="red" title="Could not save" mb="lg">{saveError}</Alert>}
-        {!state && tab !== 'Notes' && !readError && <Loader aria-label="Loading listings" />}
-        {(state || tab === 'Notes') && tabs.map(item => <Tabs.Panel key={item.name} value={item.name}>
-          {item.name === 'Notes' ? <Suspense fallback={<Loader aria-label="Loading conversation" />}><NotesChat /></Suspense> :
+        {!state && current.showsListings && !readError && <Loader aria-label="Loading listings" />}
+        {(state || !current.showsListings) && tabs.map(item => <Tabs.Panel key={item.name} value={item.name}>
+          {item.name === 'Compare' ? <Compare open={setSelected} /> : item.name === 'Notes' ? <Suspense fallback={<Loader aria-label="Loading conversation" />}><NotesChat /></Suspense> :
             listings.length ? <Stack gap="xl">{groups.filter(group => group.items.length).map(group => <div key={group.heading ?? 'listings'}>
               {group.heading && <Title order={2} size="h3" mb="md">{group.heading}</Title>}
               <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="xl">{group.items.map(listing =>
@@ -196,6 +153,6 @@ export default function App() {
       {listings.some(listing => listing.id.startsWith('sample:')) && <Text size="xs" c="dimmed" mt="xl">
         Sample listings with stock photos. Addresses, prices and rankings are examples, not search results.</Text>}
     </Container>
-    <Details key={selected} id={selected} close={() => setSelected(undefined)} save={save} busy={busy} saveError={saveError} readError={readError} />
+    <Details compare={tab === 'Compare'} id={selected} close={() => setSelected(undefined)} save={save} busy={busy} saveError={saveError} readError={readError} />
   </>;
 }

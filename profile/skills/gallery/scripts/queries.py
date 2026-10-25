@@ -1,6 +1,9 @@
 import json
 
 
+RANKABLE = "l.matches_criteria = 1 AND l.status = 'available' AND COALESCE(f.dismissed, 0) = 0"
+
+
 def validate_page(page, page_size):
     if type(page) is not int or page < 1 or type(page_size) is not int or not 1 <= page_size <= 100:
         raise ValueError('Page must be positive and page_size must be between 1 and 100.')
@@ -9,7 +12,7 @@ def validate_page(page, page_size):
 def browse(connection, view, page, page_size):
     validate_page(page, page_size)
     conditions = {
-        'Rankings': "l.status = 'available' AND COALESCE(f.dismissed, 0) = 0",
+        'Rankings': RANKABLE,
         'Favorites': 'f.favorite = 1 AND f.dismissed = 0',
         'Contacted': 'c.listing_id IS NOT NULL',
         'Viewings': "v.status = 'booked'",
@@ -20,7 +23,7 @@ def browse(connection, view, page, page_size):
     joins = 'FROM listings l LEFT JOIN ranking r ON r.listing_id = l.id LEFT JOIN feedback f ON f.listing_id = l.id LEFT JOIN contacts c ON c.listing_id = l.id'
     if view == 'Viewings':
         joins += ' JOIN viewings v ON v.listing_id = l.id'
-    where = ' WHERE ' + ('' if view in ('Contacted', 'Viewings') else 'l.matches_criteria = 1 AND ') + conditions[view]
+    where = ' WHERE ' + ('' if view in ('Rankings', 'Contacted', 'Viewings') else 'l.matches_criteria = 1 AND ') + conditions[view]
     order = 'v.time, v.id' if view == 'Viewings' else 'CASE WHEN r.rank IS NOT NULL AND r.fingerprint = l.fingerprint THEN 0 ELSE 1 END, CASE WHEN r.fingerprint = l.fingerprint THEN r.rank END, l.id'
     fields = ['id', 'title', 'price', 'price_note', 'currency', 'rental_period', 'size', 'rooms', 'address', 'status', 'first_seen']
     summary = ', '.join(f"'{field}', json_extract(l.data, '$.{field}')" for field in fields)

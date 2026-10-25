@@ -38,7 +38,7 @@ Each prints JSON and exits 0. Any other exit code means the script failed: show 
 
 `explain` prints the listing's `rank`, `reason`, `exploration` and `explanation`: its `score`, every feature's `contribution` with its `value` as the listing's record states it, largest first, and the `similar_favorite`. The contributions add up to the score. Explain from these, citing only the values given. A rank of null means the listing changed or appeared since the last rerank.
 
-`questions` prints the pairwise questions the model is least sure of, each the two `listings` and the model's `probability_first_above`. The gallery's Compare tab asks them.
+`questions` prints the pairwise questions the model is least sure of, each the two `listings` and the model's `probability_first_above`. Answered pairs are excluded. A skipped pair is excluded until twenty other questions have been answered or skipped, including across restarts. The gallery's Compare tab asks them.
 
 ## Changing what the ranking weighs
 

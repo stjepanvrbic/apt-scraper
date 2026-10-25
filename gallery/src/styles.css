@@ -19,3 +19,6 @@ button:focus-visible, a:focus-visible { outline: 2px solid #0f68ea; outline-offs
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; }
 }
+@media (max-width: 36em) {
+  .mantine-Tabs-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; }
+}
