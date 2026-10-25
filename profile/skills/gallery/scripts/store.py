@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
-from code_features import FEATURES, store_code_features
+from code_features import FEATURES, configured_transit_feed, store_all_code_features, store_code_features
 from schema import content_fingerprint, migrate
 from queries import RANKABLE, browse, snapshot, validate_page
 from record import SEED_TAGS, known_spelling, validate_extraction, validate_judgments
@@ -26,8 +26,7 @@ WEEKDAYS = ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 
 VIEWING_MINUTES = 60
 CRITERIA = ('location', 'price', 'size', 'rooms', 'move_in', 'other')
 PREFERENCES = ('likes', 'dislikes')
-PLACE_FIELDS = ('name', 'address', 'travel_mode', 'longest_trip_minutes', 'visits_per_week')
-TRAVEL_MODES = ('walk', 'bike', 'transit', 'car')
+PLACE_FIELDS = ('name', 'address')
 IMPORTANCE = ('low', 'medium', 'high')
 READ_ATTEMPTS = 3
 
@@ -196,11 +195,6 @@ def validate_viewing_availability(availability):
             raise ValueError('An unavailable period must end on or after its start.')
 
 
-def require_positive(value, name):
-    if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
-        raise ValueError(f'{name} must be a positive number.')
-
-
 def validate_places(places):
     if not isinstance(places, list):
         raise ValueError('Places must be an array.')
@@ -209,10 +203,6 @@ def validate_places(places):
             raise ValueError(f'A place has exactly {", ".join(PLACE_FIELDS)}.')
         require_text(place['name'], 'Place name', limit=200)
         require_text(place['address'], 'Place address', limit=1000)
-        if place['travel_mode'] not in TRAVEL_MODES:
-            raise ValueError(f'A place travel_mode is {", ".join(TRAVEL_MODES)}.')
-        require_positive(place['longest_trip_minutes'], 'Longest trip minutes')
-        require_positive(place['visits_per_week'], 'Visits per week')
     if len({place['name'].strip().casefold() for place in places}) != len(places):
         raise ValueError('Each place is named once.')
 
@@ -255,6 +245,7 @@ SETTINGS = {
     'viewing_availability': validate_viewing_availability,
     'places': validate_places,
     'location_priorities': validate_location_priorities,
+    'transit_feed': require_url,
 }
 
 
@@ -382,7 +373,8 @@ class ListingStore:
             connection.execute('UPDATE listings SET matches_criteria = ? WHERE id = ? AND matches_criteria != ?', (matches, listing_id, matches))
 
     def update_settings(self, *, judge=None, **settings):
-        """Saving criteria applies them to every stored listing in the same transaction, with judge as in apply_criteria."""
+        """Saving criteria applies them to every stored listing in the same transaction, with judge as in apply_criteria.
+        Saving places or the transit feed computes every listing's distances again, to the places with stored geocodes."""
         if not settings or not set(settings) <= set(SETTINGS):
             raise ValueError(f'Settings are {", ".join(SETTINGS)}, and at least one is required.')
         for name, value in settings.items():
@@ -396,6 +388,8 @@ class ListingStore:
             settings = {**settings, **reconcile_area_priorities({**saved, **settings}, settings)}
             connection.executemany('INSERT INTO settings VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
                                    [(name, json.dumps(value, allow_nan=False)) for name, value in settings.items()])
+            if {'places', 'transit_feed'} & set(settings):
+                store_all_code_features(connection)
             return apply_criteria(connection, judge) if 'criteria' in settings and judge else None
 
     def apply_criteria(self, judge):
@@ -403,6 +397,48 @@ class ListingStore:
         features is the listing's current analysis or None. Returns the count of each verdict, or None without criteria."""
         with self.connect(write=True) as connection:
             return apply_criteria(connection, judge)
+
+    def save_geocodes(self, geocodes):
+        """Keeps the coordinates a geocoder found for place addresses, by address: {latitude, longitude, found}, where
+        found is how the geocoder named the location."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self.connect(write=True) as connection:
+            connection.executemany('''INSERT INTO geocodes VALUES (?, ?, ?, ?, ?) ON CONFLICT(address) DO UPDATE SET
+                latitude = excluded.latitude, longitude = excluded.longitude, found = excluded.found, geocoded_at = excluded.geocoded_at''',
+                                   [(address, found['latitude'], found['longitude'], found['found'], now) for address, found in geocodes.items()])
+
+    def geocodes(self, addresses):
+        """The stored coordinates of each of the addresses that has them: {latitude, longitude, found}, by address."""
+        with self.connect() as connection:
+            return {row['address']: {'latitude': row['latitude'], 'longitude': row['longitude'], 'found': row['found']}
+                    for address in addresses for row in connection.execute('SELECT * FROM geocodes WHERE address = ?', (address,))}
+
+    def transit_feed(self):
+        """The rapid-transit feed the settings name, the default without one, and the stations fetched from it:
+        {url, fetched_at, stations}, with fetched_at None and no stations until they are fetched."""
+        with self.connect() as connection:
+            url = configured_transit_feed(connection)
+            fetched = connection.execute('SELECT * FROM transit_feed WHERE url = ?', (url,)).fetchone()
+            stations = [dict(row) for row in connection.execute('SELECT * FROM stations ORDER BY id')] if fetched else []
+            return {'url': url, 'fetched_at': fetched['fetched_at'] if fetched else None, 'stations': stations}
+
+    def save_stations(self, url, stations):
+        """Replaces the stored rapid-transit stations with those fetched from the feed at url, each {id, name, latitude,
+        longitude}, and computes every listing's distances again."""
+        with self.connect(write=True) as connection:
+            connection.execute('DELETE FROM stations')
+            connection.executemany('INSERT INTO stations VALUES (?, ?, ?, ?)',
+                                   [(station['id'], station['name'], station['latitude'], station['longitude']) for station in stations])
+            connection.execute('INSERT INTO transit_feed VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET url = excluded.url, fetched_at = excluded.fetched_at',
+                               (url, datetime.now(timezone.utc).isoformat()))
+            store_all_code_features(connection)
+
+    def places_without_coordinates(self):
+        """The names of the saved places whose address has no stored geocode, such as places saved before places were
+        geocoded. They count for no listing until they are saved again."""
+        places = self.settings().get('places', [])
+        located = self.geocodes({place['address'] for place in places})
+        return [place['name'] for place in places if place['address'] not in located]
 
     def missing_settings(self, names=tuple(SETTINGS)):
         """What the interview still needs, limited to the settings in names."""
@@ -450,6 +486,7 @@ class ListingStore:
         today = today or datetime.now(timezone.utc).date()
         with self.connect() as connection:
             return {row['listing_id']: {**{name: row[name] for name in ('fingerprint', *FEATURES, 'first_seen')},
+                                        'place_distances_km': json.loads(row['place_distances_km']),
                                         'days_since_first_seen': (today - date.fromisoformat(row['first_seen'])).days}
                     for row in connection.execute('''SELECT c.*, l.first_seen FROM code_features c
                         JOIN listings l ON l.id = c.listing_id AND l.fingerprint = c.fingerprint ORDER BY c.listing_id''')}
@@ -467,7 +504,7 @@ class ListingStore:
             attempts = {row['read']: row['attempts'] for row in connection.execute('SELECT * FROM model_reads')}
             records = {row['listing_id']: row for row in connection.execute(
                 'SELECT r.* FROM feature_records r JOIN listings l ON l.id = r.listing_id AND l.fingerprint = r.fingerprint')}
-            code = {row['listing_id']: dict(row) for row in connection.execute(
+            code = {row['listing_id']: {**dict(row), 'place_distances_km': json.loads(row['place_distances_km'])} for row in connection.execute(
                 'SELECT c.* FROM code_features c JOIN listings l ON l.id = c.listing_id AND l.fingerprint = c.fingerprint')}
             ranking = {row['listing_id']: row for row in connection.execute(
                 'SELECT r.* FROM ranking r JOIN listings l ON l.id = r.listing_id AND l.fingerprint = r.fingerprint')}
@@ -534,12 +571,14 @@ class ListingStore:
             return {**json.loads(row['result']), 'finished_at': row['finished_at']} if row else None
 
     def reading_vocabulary(self, connection=None):
-        """The features a reading may name: those of the feature record, the code features and the criteria areas."""
+        """The features a reading may name: those of the feature record, the code features, the criteria areas and the
+        places."""
         if connection is None:
             with self.connect() as connection:
                 return self.reading_vocabulary(connection)
-        criteria = connection.execute("SELECT value FROM settings WHERE name = 'criteria'").fetchone()
-        return reading_vocabulary(sorted(self.known_tags(connection)), json.loads(criteria['value']).get('location', []) if criteria else [])
+        settings = {row['name']: json.loads(row['value']) for row in connection.execute("SELECT * FROM settings WHERE name IN ('criteria', 'places')")}
+        return reading_vocabulary(sorted(self.known_tags(connection)), settings.get('criteria', {}).get('location', []),
+                                  [place['name'] for place in settings.get('places', [])])
 
     def unread_notes(self):
         """The user's notes without a reading, oldest first, with the title of their listing."""

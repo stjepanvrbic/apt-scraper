@@ -1,7 +1,7 @@
 import hashlib
 import json
 
-from code_features import store_code_features
+from code_features import store_all_code_features
 
 
 def content_fingerprint(listing):
@@ -51,8 +51,6 @@ def code_derived_features(connection):
     connection.execute("""CREATE TABLE code_features (listing_id TEXT PRIMARY KEY REFERENCES listings(id), fingerprint TEXT NOT NULL,
         monthly_price REAL, currency TEXT, size_sqft REAL, price_per_sqft REAL, bedrooms INTEGER, bathrooms REAL, unit_label TEXT,
         unit_floor INTEGER, unit_level TEXT, photo_count INTEGER NOT NULL, latitude REAL, longitude REAL)""")
-    for (listing_id,) in connection.execute('SELECT id FROM listings').fetchall():
-        store_code_features(connection, listing_id)
 
 
 def listing_features(connection):
@@ -84,7 +82,27 @@ def pairwise_skips(connection):
         remaining INTEGER NOT NULL CHECK (remaining > 0), PRIMARY KEY (first, second), CHECK (first < second))''')
 
 
-MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips)
+def distances(connection):
+    """Places become a name and an address, and the code features of every listing are computed again, now with its
+    distances. Code features are first computed here, so a store from before them gets them with every column."""
+    statements = [
+        'ALTER TABLE code_features ADD COLUMN nearest_station TEXT',
+        'ALTER TABLE code_features ADD COLUMN station_distance_km REAL',
+        "ALTER TABLE code_features ADD COLUMN place_distances_km TEXT NOT NULL DEFAULT '{}'",
+        'CREATE TABLE geocodes (address TEXT PRIMARY KEY, latitude REAL NOT NULL, longitude REAL NOT NULL, found TEXT NOT NULL, geocoded_at TEXT NOT NULL)',
+        'CREATE TABLE transit_feed (id INTEGER PRIMARY KEY CHECK (id = 1), url TEXT NOT NULL, fetched_at TEXT NOT NULL)',
+        'CREATE TABLE stations (id TEXT PRIMARY KEY, name TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL)',
+    ]
+    for statement in statements:
+        connection.execute(statement)
+    row = connection.execute("SELECT value FROM settings WHERE name = 'places'").fetchone()
+    if row:
+        places = [{'name': place['name'], 'address': place['address']} for place in json.loads(row[0])]
+        connection.execute("UPDATE settings SET value = ? WHERE name = 'places'", (json.dumps(places),))
+    store_all_code_features(connection)
+
+
+MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances)
 
 
 def migrate(connection):

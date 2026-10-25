@@ -18,7 +18,8 @@ from test_feature_record import extraction  # noqa: E402
 from test_gallery_store import ListingStore, listing  # noqa: E402
 from test_listing_photos import picture, recompressed, zillow  # noqa: E402
 import features  # noqa: E402
-from features import PHOTO_PATIENCE, READ_ATTEMPTS, SEQUENTIAL_RECORDS, SUBAGENTS_PER_WAKE, Features, PhotosUnavailable, RunState  # noqa: E402
+from features import PHOTO_PATIENCE, READ_ATTEMPTS, SEQUENTIAL_RECORDS, STATION_RETRY, SUBAGENTS_PER_WAKE, Features, PhotosUnavailable, RunState  # noqa: E402
+from geodata import SourceUnavailable  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'profile/skills/listing-features/scripts/features.py'
@@ -57,6 +58,20 @@ class PhotoServer:
         return self.photos.get(url)
 
 
+class TransitFeed:
+    """Answers the job's station fetches with the stations the test sets, or fails while failing is set, counting the
+    fetches."""
+
+    def __init__(self):
+        self.stations, self.failing, self.requests = [], False, []
+
+    def fetch(self, url):
+        self.requests.append(url)
+        if self.failing:
+            raise SourceUnavailable(f'The transit feed {url} could not be downloaded: timed out')
+        return self.stations
+
+
 class FeaturesTestCase(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
@@ -71,7 +86,9 @@ class FeaturesTestCase(unittest.TestCase):
         self.server = PhotoServer()
         self.clock = [NOW]
         self.state = RunState(self.home / 'workspace' / 'gallery' / 'features.json')
-        self.features = Features(self.store, self.state, self.home / 'workspace' / 'gallery' / 'extraction', self.server.fetch, lambda: self.clock[0])
+        self.transit = TransitFeed()
+        self.features = Features(self.store, self.state, self.home / 'workspace' / 'gallery' / 'extraction', self.server.fetch, lambda: self.clock[0],
+                                 self.transit.fetch)
         self.store.update_settings(**SETTINGS)
         self.read_unexpressed(('like', 'Hardwood floors'), ('dislike', 'Carpet'))
 
@@ -377,11 +394,61 @@ class AttemptTests(FeaturesTestCase):
 
     def test_a_failing_run_records_its_problem_and_does_not_wake_the_agent(self):
         broken = Features(mock.Mock(missing_settings=mock.Mock(side_effect=OSError('disk unplugged'))), self.state,
-                          self.home / 'extraction', self.server.fetch, lambda: NOW)
+                          self.home / 'extraction', self.server.fetch, lambda: NOW, self.transit.fetch)
         with mock.patch.object(features, 'open_features', return_value=broken), mock.patch('sys.stdout', new=io.StringIO()) as output:
             self.assertEqual(features.main(['run']), 0)
         self.assertEqual(output.getvalue().splitlines()[-1], '{"wakeAgent": false}')
         self.assertIn('disk unplugged', self.state.load()['problem'])
+
+
+class StationTests(FeaturesTestCase):
+    STATIONS = [{'id': '41020', 'name': 'Logan Square', 'latitude': 41.929728, 'longitude': -87.708541}]
+
+    def setUp(self):
+        super().setUp()
+        self.transit.stations = self.STATIONS
+        fingerprint = self.store.upsert_listing(listing(id='zillow:1'))['content_fingerprint']
+        self.store.analyze('zillow:1', fingerprint, {'facts': {'latitude': 41.927895, 'longitude': -87.723366}})
+
+    def nearest(self):
+        return self.store.code_features()['zillow:1']['nearest_station']
+
+    def test_the_stations_of_the_transit_feed_are_fetched_once_and_give_listings_their_distance(self):
+        report, wake = self.run_job()
+        self.assertEqual(self.transit.requests, ['https://www.transitchicago.com/downloads/sch_data/google_transit.zip'])
+        self.assertIn('1 rapid-transit stations fetched', report)
+        self.assertEqual(self.nearest(), 'Logan Square')
+        self.assertNotIn('rapid-transit', self.run_job()[0])
+        self.assertEqual(len(self.transit.requests), 1)
+        self.store.update_settings(transit_feed='https://transit.example/gtfs.zip')
+        self.assertIsNone(self.nearest())
+        self.run_job()
+        self.assertEqual(self.transit.requests[1:], ['https://transit.example/gtfs.zip'])
+        self.assertEqual(self.nearest(), 'Logan Square')
+
+    def test_a_failed_fetch_is_reported_and_tried_again_after_a_pause(self):
+        self.transit.failing = True
+        report, wake = self.run_job()
+        self.assertIn('could not be downloaded', report)
+        self.assertIn('1 listings wait for extraction: 1 prepared', report)
+        self.assertTrue(wake)
+        problems = self.features.status()['problems']
+        self.assertEqual(len(problems), 1)
+        self.assertIn('could not be fetched since 2026-10-25 12:00 UTC', problems[0])
+        self.clock[0] = NOW + STATION_RETRY - timedelta(minutes=1)
+        self.run_job()
+        self.assertEqual(len(self.transit.requests), 1)
+        self.transit.failing = False
+        self.clock[0] = NOW + STATION_RETRY
+        self.run_job()
+        self.assertEqual(len(self.transit.requests), 2)
+        self.assertEqual(self.features.status()['problems'], [])
+        self.assertEqual(self.nearest(), 'Logan Square')
+
+    def test_nothing_is_fetched_before_the_interview_is_complete(self):
+        self.store.update_settings(listing_sites=[])
+        self.run_job()
+        self.assertEqual(self.transit.requests, [])
 
 
 class PreferenceTests(FeaturesTestCase):

@@ -12,7 +12,8 @@ from test_gallery_store import ListingStore, listing
 from test_feature_record import extraction
 from rerank import pairwise_questions, rerank
 from server import make_server
-from schema import MIGRATIONS
+from schema import MIGRATIONS, content_fingerprint
+from store import validate_listing
 
 
 def add_choices(store, count=8):
@@ -33,20 +34,21 @@ class CompareTestCase(unittest.TestCase):
 class CompareTests(CompareTestCase):
     def test_version_five_migration_preserves_answers_and_ranks(self):
         path = self.store.path.parent / 'version-five.sqlite3'
-        with closing(sqlite3.connect(path)) as connection:
+        with closing(sqlite3.connect(path)) as connection, connection:
             for migration in MIGRATIONS[:5]:
                 migration(connection)
             connection.execute('PRAGMA user_version = 5')
-            connection.commit()
-        old = ListingStore.__new__(ListingStore)
-        old.path = path
-        add_choices(old, 2)
-        rerank(old, seed=1)
-        before = old.listing('choice:00')['rank']
-        with old.connect(write=True) as connection:
+            for rank, identifier in enumerate(('choice:00', 'choice:01'), 1):
+                data = validate_listing(listing(id=identifier, photos=[]))
+                fingerprint = content_fingerprint(data)
+                connection.execute('INSERT INTO listings (id, data, status, first_seen, fingerprint) VALUES (?, ?, ?, ?, ?)',
+                                   (identifier, json.dumps(data), 'available', data['first_seen'], fingerprint))
+                connection.execute('INSERT INTO ranking (listing_id, fingerprint, rank, reason) VALUES (?, ?, ?, ?)',
+                                   (identifier, fingerprint, rank, 'Ranked.'))
             connection.execute("INSERT INTO pairwise_answers (chosen, other, answered_at) VALUES ('choice:00', 'choice:01', '2026-10-25')")
         migrated = ListingStore(path)
-        self.assertEqual(migrated.listing('choice:00')['rank'], before)
+        self.assertEqual(migrated.schema_version, len(MIGRATIONS))
+        self.assertEqual((migrated.listing('choice:00')['rank'], migrated.listing('choice:01')['rank']), (1, 2))
         self.assertEqual(migrated.pairwise_answers(), [('choice:00', 'choice:01')])
         self.assertEqual(migrated.skipped_pairs(), [])
 
