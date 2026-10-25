@@ -90,11 +90,12 @@ def softplus(value):
 def cholesky(matrix):
     """The rows of the lower triangular L with L L^T = matrix, for a symmetric positive definite matrix, each up to its
     diagonal."""
-    lower = []
+    lower, prefixes = [], []
     for row, values in enumerate(matrix):
         current = []
         for column in range(row):
-            current.append((values[column] - dot(current, lower[column][:-1])) / lower[column][column])
+            current.append((values[column] - dot(current, prefixes[column])) / lower[column][column])
+        prefixes.append(current[:])
         current.append(math.sqrt(values[row] - dot(current, current)))
         lower.append(current)
     return lower
@@ -116,9 +117,13 @@ class Factor:
     def forward(self, vector):
         """L^-1 vector."""
         result = []
-        for index, row in enumerate(self.lower):
-            result.append((vector[index] - dot(row[:-1], result)) / row[index])
+        for index, row in enumerate(self.prefixes):
+            result.append((vector[index] - dot(row, result)) / self.lower[index][index])
         return result
+
+    @cached_property
+    def prefixes(self):
+        return [row[:-1] for row in self.lower]
 
     def backward(self, vector):
         """L^-T vector."""
