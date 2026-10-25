@@ -1,12 +1,15 @@
 import json
 import math
+import os
 import re
 import sqlite3
+import sys
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from schema import content_fingerprint, migrate
 from queries import browse, snapshot, validate_page
@@ -14,6 +17,14 @@ from queries import browse, snapshot, validate_page
 
 UNCHANGED = object()
 CONTACT_CHANNELS = {'email', 'imessage', 'contact_form'}
+RENTAL_PERIODS = ('day', 'week', 'month', 'year', 'total')
+WEEKDAYS = ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday')
+CRITERIA = ('location', 'price', 'size', 'rooms', 'move_in', 'other')
+PREFERENCES = ('likes', 'dislikes')
+
+
+class TimeZoneDataMissing(RuntimeError):
+    pass
 
 
 def require_text(value, name, *, limit=20000):
@@ -49,7 +60,7 @@ def validate_listing(listing):
         listing['price'] = None
     if listing['price'] is not None and (type(listing['price']) not in (int, float) or not math.isfinite(listing['price']) or listing['price'] < 0):
         raise ValueError('Price must be a finite nonnegative number.')
-    if listing['rental_period'] not in (None, 'day', 'week', 'month', 'year', 'total'):
+    if listing['rental_period'] not in (None, *RENTAL_PERIODS):
         raise ValueError('Rental period must be day, week, month, year or total.')
     validate_agent(listing['agent'])
     if listing['currency'] is not None and not re.fullmatch(r'[A-Z]{3}', listing['currency']):
@@ -74,6 +85,120 @@ def validate_listing(listing):
         require_text(source['label'], 'Source label')
         require_url(source['url'])
     return listing
+
+
+def require_object(value, name, keys):
+    if not isinstance(value, dict) or not set(value) <= set(keys):
+        raise ValueError(f'{name} must be an object with only {", ".join(keys)}.')
+
+
+def require_texts(value, name):
+    if not isinstance(value, list):
+        raise ValueError(f'{name} must be an array of text.')
+    for item in value:
+        require_text(item, name, limit=1000)
+
+
+def require_date(value, name):
+    if not isinstance(value, str) or date.fromisoformat(value).isoformat() != value:
+        raise ValueError(f'{name} must use YYYY-MM-DD.')
+
+
+def require_range(value, name, units=()):
+    require_object(value, name, ('min', 'max', *units))
+    bounds = [value.get('min'), value.get('max')]
+    for bound in bounds:
+        if bound is not None and (type(bound) not in (int, float) or not math.isfinite(bound) or bound < 0):
+            raise ValueError(f'{name} limits must be nonnegative numbers or null.')
+    if None not in bounds and bounds[0] > bounds[1]:
+        raise ValueError(f'{name} minimum exceeds its maximum.')
+    return bounds != [None, None]
+
+
+def validate_criteria(criteria):
+    require_object(criteria, 'Criteria', CRITERIA)
+    if 'location' in criteria:
+        require_texts(criteria['location'], 'Location')
+        if not criteria['location']:
+            raise ValueError('Location needs at least one area.')
+    if 'price' in criteria:
+        price = criteria['price']
+        limited = require_range(price, 'Price', ('currency', 'period'))
+        if (limited or 'currency' in price) and not (isinstance(price.get('currency'), str) and re.fullmatch(r'[A-Z]{3}', price['currency'])):
+            raise ValueError('A price limit needs a three-letter currency code.')
+        if (limited or 'period' in price) and price.get('period') not in RENTAL_PERIODS:
+            raise ValueError(f'A price limit needs a period: {", ".join(RENTAL_PERIODS)}.')
+    if 'size' in criteria:
+        size = criteria['size']
+        if (require_range(size, 'Size', ('unit',)) or 'unit' in size) and size.get('unit') not in ('m2', 'sqft'):
+            raise ValueError('A size limit needs the unit m2 or sqft.')
+    if 'rooms' in criteria:
+        require_range(criteria['rooms'], 'Rooms')
+    if criteria.get('move_in') is not None:
+        require_date(criteria['move_in'], 'Move-in date')
+    if 'other' in criteria:
+        require_texts(criteria['other'], 'Other criteria')
+
+
+def validate_preferences(preferences):
+    require_object(preferences, 'Preferences', PREFERENCES)
+    for key, value in preferences.items():
+        require_texts(value, key.capitalize())
+
+
+def validate_listing_sites(sites):
+    if not isinstance(sites, list):
+        raise ValueError('Listing sites must be an array of URLs.')
+    for url in sites:
+        require_url(url)
+    if len(set(sites)) != len(sites):
+        raise ValueError('Each listing site is named once.')
+
+
+def validate_viewing_availability(availability):
+    require_object(availability, 'Viewing availability', ('timezone', 'weekly', 'unavailable'))
+    if 'timezone' in availability:
+        try:
+            ZoneInfo(availability['timezone'])
+        except (TypeError, ValueError, ZoneInfoNotFoundError):
+            if not available_timezones():
+                raise TimeZoneDataMissing(f'{sys.executable} has no time zone database, so the time zone cannot be checked. '
+                                          'Run the script with a Python that has the tzdata package, such as the one Hermes runs on.') from None
+            raise ValueError('Timezone must be an IANA time zone such as Europe/Berlin.') from None
+    if not isinstance(availability.get('weekly', []), list) or not isinstance(availability.get('unavailable', []), list):
+        raise ValueError('Weekly and unavailable must be arrays.')
+    for window in availability.get('weekly', []):
+        if not isinstance(window, dict) or set(window) != {'day', 'start', 'end'} or window['day'] not in WEEKDAYS:
+            raise ValueError(f'A weekly window needs a day ({", ".join(WEEKDAYS)}), a start and an end.')
+        if not all(isinstance(window[key], str) and re.fullmatch(r'([01]\d|2[0-3]):[0-5]\d', window[key]) for key in ('start', 'end')):
+            raise ValueError('Window times use 24-hour HH:MM.')
+        if window['start'] >= window['end']:
+            raise ValueError('A window must end after it starts.')
+    for period in availability.get('unavailable', []):
+        if not isinstance(period, dict) or set(period) != {'from', 'to'}:
+            raise ValueError('An unavailable period needs from and to dates.')
+        require_date(period['from'], 'Unavailable from')
+        require_date(period['to'], 'Unavailable to')
+        if period['from'] > period['to']:
+            raise ValueError('An unavailable period must end on or after its start.')
+
+
+SETTINGS = {
+    'criteria': validate_criteria,
+    'preferences': validate_preferences,
+    'listing_sites': validate_listing_sites,
+    'viewing_availability': validate_viewing_availability,
+}
+
+
+def store_path(sample=False):
+    if os.environ.get('HERMES_HOME'):
+        directory = Path(os.environ['HERMES_HOME']) / 'workspace' / 'gallery'
+    elif sys.platform == 'win32':
+        directory = Path(os.environ['LOCALAPPDATA']) / 'apt-scraper'
+    else:
+        directory = Path.home() / 'Library' / 'Application Support' / 'apt-scraper'
+    return directory / ('sample.sqlite3' if sample else 'listings.sqlite3')
 
 
 def validate_agent(agent):
@@ -155,21 +280,37 @@ class ListingStore:
             self.require_listing(connection, listing_id)
             connection.execute('UPDATE listings SET matches_criteria = ? WHERE id = ? AND matches_criteria != ?', (matches, listing_id, matches))
 
-    def update_settings(self, **settings):
-        if not settings or not set(settings) <= {'criteria', 'preferences', 'listing_sites', 'viewing_availability'}:
-            raise ValueError('Unknown or empty settings.')
+    def update_settings(self, *, outside=None, **settings):
+        if not settings or not set(settings) <= set(SETTINGS):
+            raise ValueError(f'Settings are {", ".join(SETTINGS)}, and at least one is required.')
         for name, value in settings.items():
-            if name == 'listing_sites':
-                if not isinstance(value, list):
-                    raise ValueError('Listing sites must be an array of URLs.')
-                for url in value:
-                    require_url(url)
-            elif not isinstance(value, dict):
-                raise ValueError(f'{name} must be an object.')
-            json.dumps(value, allow_nan=False)
+            SETTINGS[name](value)
+        if outside is not None and 'criteria' not in settings:
+            raise ValueError('Listings outside the criteria are given only with the criteria they are judged against.')
         with self.connect(write=True) as connection:
+            exclusions = None
+            if 'criteria' in settings:
+                known = {row[0] for row in connection.execute('SELECT id FROM listings')}
+                if outside is None and known:
+                    raise ValueError('Stored listings must be judged against new criteria. Give the ids of those outside them in outside.')
+                outside = set(outside or ())
+                if unknown := sorted(outside - known):
+                    raise KeyError(f'Listing not found: {", ".join(unknown)}.')
+                connection.executemany('UPDATE listings SET matches_criteria = ? WHERE id = ? AND matches_criteria != ?',
+                                       [(identifier not in outside, identifier, identifier not in outside) for identifier in known])
+                exclusions = {'outside': len(outside), 'matching': len(known - outside)}
             connection.executemany('INSERT INTO settings VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
                                    [(name, json.dumps(value, allow_nan=False)) for name, value in settings.items()])
+            return exclusions
+
+    def missing_settings(self):
+        saved = self.settings()
+        missing = [f'{name}.{key}' for name, keys in (('criteria', CRITERIA), ('preferences', PREFERENCES))
+                   for key in keys if key not in saved.get(name, {})]
+        if not saved.get('listing_sites'):
+            missing.append('listing_sites')
+        availability = saved.get('viewing_availability', {})
+        return missing + [f'viewing_availability.{key}' for key in ('timezone', 'weekly') if not availability.get(key)]
 
     def analyze(self, listing_id, fingerprint, features):
         if not isinstance(features, dict):

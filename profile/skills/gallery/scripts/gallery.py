@@ -1,6 +1,5 @@
 import argparse
 import json
-import os
 import sys
 import webbrowser
 from pathlib import Path
@@ -8,15 +7,7 @@ from urllib.parse import urldefrag
 
 from server import make_server
 from launch import forget_connection, install_fingerprint, open_gallery, save_connection, stop_gallery
-from store import ListingStore, validate_listing
-
-
-def data_directory():
-    if os.environ.get('HERMES_HOME'):
-        return Path(os.environ['HERMES_HOME']) / 'workspace' / 'gallery'
-    if sys.platform == 'win32':
-        return Path(os.environ['LOCALAPPDATA']) / 'apt-scraper'
-    return Path.home() / 'Library' / 'Application Support' / 'apt-scraper'
+from store import ListingStore, store_path, validate_listing
 
 
 def main():
@@ -52,7 +43,7 @@ def main():
     viewing.add_argument('--event-id', required=True)
     viewing.add_argument('--id')
     arguments = parser.parse_args()
-    path = arguments.database or data_directory() / ('sample.sqlite3' if arguments.sample else 'listings.sqlite3')
+    path = arguments.database or store_path(arguments.sample)
     if arguments.command == 'stop':
         print(json.dumps({'stopped': stop_gallery(path, arguments.port)}))
         return

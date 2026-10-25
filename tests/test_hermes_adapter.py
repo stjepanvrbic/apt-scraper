@@ -70,4 +70,5 @@ class HermesAdapterTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(message['content'], 'Action denied.')
             self.assertIsNone(message['prompt'])
             self.assertEqual(commands, ['/approve approval deny'])
-            self.assertIn('update_settings', submitted[0])
+            self.assertIn('interview skill', submitted[0])
+            self.assertNotIn('update_settings', submitted[0])

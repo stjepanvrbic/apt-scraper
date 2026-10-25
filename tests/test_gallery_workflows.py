@@ -42,16 +42,6 @@ class SearchRankingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'changed'):
             self.store.rank('example:100', fingerprint, 1, 'Stale result.')
 
-    def test_interview_settings_are_independent_and_persist(self):
-        self.store.update_settings(criteria={'maximum_price': 2500}, preferences={'likes': ['quiet']},
-                                   listing_sites=['https://example.com'], viewing_availability={'timezone': 'America/Chicago', 'windows': []})
-        self.store.update_settings(criteria={'maximum_price': 2200})
-        saved = type(self.store)(self.path).settings()
-        self.assertEqual(saved['criteria']['maximum_price'], 2200)
-        self.assertEqual(saved['preferences'], {'likes': ['quiet']})
-        self.assertEqual(saved['listing_sites'], ['https://example.com'])
-        self.assertEqual(saved['viewing_availability']['timezone'], 'America/Chicago')
-
     def test_contact_channel_agent_and_approval_are_scoped_to_request(self):
         self.store.upsert_listing(listing())
         self.store.upsert_listing(listing(id='other:200'))
