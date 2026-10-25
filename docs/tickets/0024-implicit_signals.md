@@ -20,7 +20,7 @@ The gallery records listing opens, how long a listing stays open and which photo
 - [x] The gallery's visible behavior does not change, and nothing is sent anywhere but the local server.
 - [x] Each rerank computes the leave-one-out check a second time with the signals as weak labels and reports both values. The ranks come from the model without them.
 - [x] Tests at the store and HTTP boundaries, and a headless Playwright test that opening a listing and paging its photos records the events.
-- [ ] Pushed `feat/implicit_signals` and opened a pull request to `main`, without merging.
+- [x] Pushed `feat/implicit_signals` and opened a pull request to `main`, without merging.
 - [ ] Merged to `main` through a reviewed pull request.
 
 ## Spec
@@ -48,3 +48,5 @@ Ten new Python tests cover storage, migration, authentication, batch validation,
 The governing requirements are Spec Terms, Ranking and Gallery and the existing Spec Decisions; the repository has no separate ADR register. Adjacent cleanup stabilizes lightbox slides during rerenders. Numerical dot products now use `math.sumprod` to meet the diagnostic timing budget, requiring Python 3.12 or newer outside Hermes; the supplied Hermes runtime is 3.14.9, as the [ranking guide](../ranking.md#implicit-signal-diagnostic) documents. A 40-listing characterization kept ranks, held-out ranks and exploration unchanged, with maximum weight difference 1.39e-17. No new package was added. The owner's installed profiles were not used for verification.
 
 The new signal timing test measures CPU time, following [0030: the rerank timing test fails on a busy machine](0030-rerank_timing_test_under_load.md). The existing timing test is unchanged. Verification uses an isolated temporary home so launcher tests do not access the owner's secrets directory.
+
+Delivered as [PR #23](https://github.com/stjepanvrbic/apt-scraper/pull/23), branch `feat/implicit_signals`. Verified code and test revision: `394f1e11d65d6591ccfb24926e4a04829432be98`. macOS and a connected installed profile were not exercised. Independent review and merge remain pending.
