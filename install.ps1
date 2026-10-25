@@ -82,6 +82,11 @@ try {
     Remove-Item $savedConfig
 }
 
+# Hermes installs a profile's shipped cron jobs paused. The listing correspondence job wakes the
+# model only when a contact request or a reply needs it, so it stays on.
+Write-Step 'Listing correspondence job'
+Invoke-Checked $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-contact')
+
 Write-Step 'Claude subscription provider plugin'
 Invoke-Checked $hermes @('-p', $ProfileName, 'plugins', 'install', $PluginName, '--force', '--enable')
 

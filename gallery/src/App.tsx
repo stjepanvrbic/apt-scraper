@@ -126,11 +126,11 @@ function Details({ id, close, save, busy, saveError, readError }: { id: string |
         <Text size="sm" c="dimmed">First seen {date(listing.first_seen)}</Text>
         <div><Title order={3} size="h4" mb="xs">Original listings</Title><Stack gap="xs">{listing.sources.map(source =>
           <Anchor key={source.url} href={source.url} target="_blank" rel="noopener noreferrer">{source.label} <IconArrowUpRight size={14} /></Anchor>)}</Stack></div>
-        {listing.viewings.map(viewing => <Paper key={viewing.id} p="md" bg="blue.0" radius="md"><Text size="sm" fw={600}>{viewing.status === 'booked' ? 'Booked viewing' : 'Canceled viewing'}</Text>
+        {listing.viewings.map(viewing => <Paper key={viewing.id} p="md" bg="blue.0" radius="md"><Text size="sm" fw={600}>{({booked: 'Booked viewing', agreed: 'Agreed viewing, not yet in your calendar', canceled: 'Canceled viewing'})[viewing.status]}</Text>
           <Text fw={600} mt={4}>{viewingTime(viewing.time)}</Text><Text mt="xs" className="preserve-lines">{viewing.details}</Text></Paper>)}
         {listing.viewings_total > 50 && <Pagination total={Math.ceil(listing.viewings_total / 50)} value={pages.viewings_page} onChange={value => setPages({ ...pages, viewings_page: value })} aria-label="Viewing history pages" />}
         {listing.contact && <div><Title order={3} size="h4" mb="sm">Correspondence</Title><Stack gap="sm">
-          {!listing.correspondence.length && <Text c="dimmed" size="sm">No correspondence yet. Ask Hermes to check your contact requests.</Text>}
+          {!listing.correspondence.length && <Text c="dimmed" size="sm">{listing.id.startsWith('sample:') ? 'Sample listings are never contacted.' : 'No correspondence yet. Hermes sends the first message within a few minutes while its gateway runs.'}</Text>}
           {listing.correspondence.map(message => <Paper key={message.id} p="md" withBorder>
             <Text size="xs" c="dimmed" mb="xs">{message.direction === 'incoming' ? 'Listing agent' : 'You'} · {message.channel} · {date(message.created_at)}</Text>
             <Text className="preserve-lines">{message.text}</Text></Paper>)}

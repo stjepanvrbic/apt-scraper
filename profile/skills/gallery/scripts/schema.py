@@ -1,4 +1,4 @@
-﻿import hashlib
+import hashlib
 import json
 
 
@@ -34,7 +34,18 @@ def initial_schema(connection):
         connection.execute(statement)
 
 
-MIGRATIONS = (initial_schema,)
+def contact_workflow(connection):
+    statements = [
+        'ALTER TABLE contacts ADD COLUMN handled_through INTEGER NOT NULL DEFAULT 0',
+        'ALTER TABLE contacts ADD COLUMN subject TEXT',
+        'CREATE TABLE questions (id INTEGER PRIMARY KEY, listing_id TEXT NOT NULL REFERENCES listings(id), question TEXT NOT NULL, field TEXT, purpose TEXT, asked_at TEXT NOT NULL, external_message_id TEXT, answer TEXT, answered_at TEXT, handled INTEGER NOT NULL DEFAULT 0)',
+        'CREATE INDEX questions_open ON questions(listing_id) WHERE answered_at IS NULL',
+    ]
+    for statement in statements:
+        connection.execute(statement)
+
+
+MIGRATIONS = (initial_schema, contact_workflow)
 
 
 def migrate(connection):

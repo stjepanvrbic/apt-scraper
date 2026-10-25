@@ -8,7 +8,7 @@ from test_gallery_store import ListingStore, listing
 
 
 class MigrationTests(unittest.TestCase):
-    def test_version_one_initializes_once_and_preserves_records_on_reopen(self):
+    def test_new_store_initializes_once_and_preserves_records_on_reopen(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'listings.sqlite3'
             store = ListingStore(path)
@@ -17,7 +17,7 @@ class MigrationTests(unittest.TestCase):
             store.add_note('Keep the courtyard.', listing_id='example:100')
             for _ in range(2):
                 store = ListingStore(path)
-                self.assertEqual(store.schema_version, 1)
+                self.assertEqual(store.schema_version, 2)
                 saved = store.listing('example:100')
                 self.assertTrue(saved['favorite'])
                 self.assertEqual(saved['rental_period'], 'month')

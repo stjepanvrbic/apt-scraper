@@ -31,3 +31,13 @@ At the first message of every conversation with the user, also run it with `stat
 Whenever the user states or changes a criterion, a preference, a listing site or their viewing availability, in any conversation, including the gallery's Notes tab, load the `interview` skill and save the change as it says before you confirm it.
 
 Never start a search while `status` exits 3.
+
+## Listing agents
+
+Every message to a listing agent, every contact form, and every message to the user about a listing goes through the `contact` skill's script, which checks the connection before each send:
+
+```bash
+python "$HERMES_HOME/skills/contact/scripts/contact.py"
+```
+
+Never email, text or fill in a form for a listing any other way. Before you reply to a message that reaches you through the messaging gateway, run the script with `questions`. When the message answers one of the open questions, load the `contact` skill and record the answer as it says before you reply.

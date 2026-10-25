@@ -5,7 +5,7 @@ import re
 import sqlite3
 import sys
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -19,11 +19,16 @@ UNCHANGED = object()
 CONTACT_CHANNELS = {'email', 'imessage', 'contact_form'}
 RENTAL_PERIODS = ('day', 'week', 'month', 'year', 'total')
 WEEKDAYS = ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday')
+VIEWING_MINUTES = 60
 CRITERIA = ('location', 'price', 'size', 'rooms', 'move_in', 'other')
 PREFERENCES = ('likes', 'dislikes')
 
 
 class TimeZoneDataMissing(RuntimeError):
+    pass
+
+
+class ViewingConflict(ValueError):
     pass
 
 
@@ -199,6 +204,16 @@ def store_path(sample=False):
     else:
         directory = Path.home() / 'Library' / 'Application Support' / 'apt-scraper'
     return directory / ('sample.sqlite3' if sample else 'listings.sqlite3')
+
+
+def viewing_time(value):
+    try:
+        time = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        raise ValueError('Viewing time must be an ISO 8601 date and time with its UTC offset.') from None
+    if time.utcoffset() is None:
+        raise ValueError('Viewing time must include its UTC offset.')
+    return time.astimezone(timezone.utc).isoformat()
 
 
 def validate_agent(agent):
@@ -462,12 +477,99 @@ class ListingStore:
             if not connection.execute('SELECT 1 FROM contacts WHERE listing_id = ?', (listing_id,)).fetchone():
                 raise KeyError('Contact request not found.')
             now = datetime.now(timezone.utc).isoformat()
-            return bool(connection.execute('''INSERT INTO correspondence
+            cursor = connection.execute('''INSERT INTO correspondence
                 (listing_id, direction, channel, text, created_at, external_message_id, external_thread_id) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(listing_id, channel, external_message_id) DO NOTHING''',
-                (listing_id, direction, channel, text, now, external_message_id, external_thread_id)).rowcount)
+                (listing_id, direction, channel, text, now, external_message_id, external_thread_id))
+            if cursor.rowcount and direction == 'outgoing':
+                connection.execute('UPDATE contacts SET handled_through = ? WHERE listing_id = ?', (cursor.lastrowid, listing_id))
+                self.handle_answers(connection, listing_id)
+            return bool(cursor.rowcount)
 
-    def set_contact(self, listing_id, status, *, channel=None, agent=None, error=None):
+    @staticmethod
+    def handle_answers(connection, listing_id):
+        connection.execute('UPDATE questions SET handled = 1 WHERE listing_id = ? AND answered_at IS NOT NULL', (listing_id,))
+
+    def has_message(self, listing_id, channel, external_message_id):
+        with self.connect() as connection:
+            return connection.execute('SELECT 1 FROM correspondence WHERE listing_id = ? AND channel = ? AND external_message_id = ?',
+                                      (listing_id, channel, external_message_id)).fetchone() is not None
+
+    def mark_handled(self, listing_id):
+        with self.connect(write=True) as connection:
+            if not connection.execute('''UPDATE contacts SET handled_through = (SELECT COALESCE(MAX(id), 0) FROM correspondence
+                WHERE listing_id = ?) WHERE listing_id = ?''', (listing_id, listing_id)).rowcount:
+                raise KeyError('Contact request not found.')
+            self.handle_answers(connection, listing_id)
+
+    def due_contacts(self):
+        with self.connect() as connection:
+            return [{'listing_id': row['listing_id'], 'reason': 'reply' if row['reply'] else 'answer' if row['answer'] else 'start'}
+                    for row in connection.execute('''SELECT * FROM (SELECT c.listing_id, c.status, c.requested_at,
+                    EXISTS (SELECT 1 FROM correspondence m WHERE m.listing_id = c.listing_id AND m.direction = 'incoming'
+                            AND m.id > c.handled_through) AS reply,
+                    EXISTS (SELECT 1 FROM questions q WHERE q.listing_id = c.listing_id AND q.answered_at IS NOT NULL AND q.handled = 0) AS answer,
+                    NOT EXISTS (SELECT 1 FROM correspondence m WHERE m.listing_id = c.listing_id AND m.direction = 'outgoing') AS unsent,
+                    EXISTS (SELECT 1 FROM questions q WHERE q.listing_id = c.listing_id AND q.answered_at IS NULL) AS waiting
+                FROM contacts c WHERE c.status IN ('pending', 'in_progress', 'contacted'))
+                WHERE NOT waiting AND (reply OR answer OR (unsent AND status IN ('pending', 'in_progress')))
+                ORDER BY requested_at, listing_id''')]
+
+    def thread_owners(self, channel):
+        """Maps each thread of an open contact to the listing that last wrote in it, so a shared agency address or
+        number files a reply under the conversation it continues."""
+        with self.connect() as connection:
+            return {row['external_thread_id']: row['listing_id'] for row in connection.execute('''SELECT m.listing_id, m.external_thread_id,
+                MAX(m.id) AS last FROM correspondence m JOIN contacts c ON c.listing_id = m.listing_id
+                WHERE m.channel = ? AND m.direction = 'outgoing' AND m.external_thread_id IS NOT NULL
+                AND c.status IN ('pending', 'in_progress', 'contacted') GROUP BY m.listing_id, m.external_thread_id ORDER BY last''', (channel,))}
+
+    def active_contacts(self):
+        with self.connect() as connection:
+            return [{**dict(row), 'agent': json.loads(row['agent'])} for row in connection.execute(
+                "SELECT * FROM contacts WHERE status IN ('pending', 'in_progress', 'contacted') ORDER BY listing_id")]
+
+    def ask_user(self, listing_id, question, *, field=None, purpose=None, external_message_id=None):
+        question = require_text(question, 'Question', limit=4000)
+        field = None if field is None else require_text(field, 'Field', limit=200)
+        purpose = None if purpose is None else require_text(purpose, 'Purpose', limit=1000)
+        with self.connect(write=True) as connection:
+            if not connection.execute('SELECT 1 FROM contacts WHERE listing_id = ?', (listing_id,)).fetchone():
+                raise KeyError('Contact request not found.')
+            connection.execute("UPDATE contacts SET status = 'in_progress' WHERE listing_id = ? AND status = 'pending'", (listing_id,))
+            return connection.execute('''INSERT INTO questions (listing_id, question, field, purpose, asked_at, external_message_id)
+                VALUES (?, ?, ?, ?, ?, ?)''', (listing_id, question, field, purpose, datetime.now(timezone.utc).isoformat(),
+                                               external_message_id)).lastrowid
+
+    def unhandled_answers(self, listing_id):
+        with self.connect() as connection:
+            return [dict(row) for row in connection.execute(
+                'SELECT * FROM questions WHERE listing_id = ? AND answered_at IS NOT NULL AND handled = 0 ORDER BY id', (listing_id,))]
+
+    def open_questions(self, listing_id=None):
+        with self.connect() as connection:
+            return [dict(row) for row in connection.execute(
+                'SELECT * FROM questions WHERE answered_at IS NULL AND (? IS NULL OR listing_id = ?) ORDER BY id', (listing_id, listing_id))]
+
+    def answer_question(self, question_id, answer, *, share=None):
+        answer = require_text(answer, 'Answer')
+        if share is not None:
+            share = require_text(share, 'Shared value')
+        with self.connect(write=True) as connection:
+            question = connection.execute('SELECT * FROM questions WHERE id = ?', (question_id,)).fetchone()
+            if not question:
+                raise KeyError('Question not found.')
+            if question['answered_at']:
+                raise ValueError('This question is already answered.')
+            if share is not None and not (question['field'] and question['purpose']):
+                raise ValueError('Only a question that names a field and purpose can approve sharing a value.')
+            now = datetime.now(timezone.utc).isoformat()
+            connection.execute('UPDATE questions SET answer = ?, answered_at = ? WHERE id = ?', (answer, now, question_id))
+            if share is not None:
+                connection.execute('INSERT INTO approvals (listing_id, field, value, purpose, approved_at) VALUES (?, ?, ?, ?, ?)',
+                                   (question['listing_id'], question['field'], share, question['purpose'], now))
+
+    def set_contact(self, listing_id, status, *, channel=None, agent=None, error=None, subject=None):
         if status not in ('pending', 'in_progress', 'contacted', 'failed', 'closed'):
             raise ValueError('Unknown contact status.')
         if channel is not None and channel not in CONTACT_CHANNELS:
@@ -478,13 +580,16 @@ class ListingStore:
             raise ValueError('Only a failed contact can have an error.')
         if agent is not None:
             validate_agent(agent)
+        if subject is not None:
+            subject = require_text(subject, 'Subject', limit=500)
         with self.connect(write=True) as connection:
             self.require_listing(connection, listing_id)
             current = connection.execute('SELECT agent FROM contacts WHERE listing_id = ?', (listing_id,)).fetchone()
             if not current:
                 raise KeyError('Contact request not found.')
-            connection.execute('UPDATE contacts SET status = ?, channel = COALESCE(?, channel), agent = ?, error = ? WHERE listing_id = ?',
-                               (status, channel, json.dumps(agent) if agent is not None else current['agent'], error, listing_id))
+            connection.execute('''UPDATE contacts SET status = ?, channel = COALESCE(?, channel), agent = ?, error = ?,
+                subject = COALESCE(?, subject) WHERE listing_id = ?''',
+                               (status, channel, json.dumps(agent) if agent is not None else current['agent'], error, subject, listing_id))
 
     def approve_information(self, listing_id, field, value, purpose):
         field = require_text(field, 'Field', limit=200)
@@ -500,17 +605,43 @@ class ListingStore:
             return [dict(row) for row in connection.execute('SELECT * FROM approvals WHERE listing_id = ? AND purpose = ? AND revoked_at IS NULL ORDER BY id',
                                                             (listing_id, purpose))]
 
+    def approvals(self, listing_id):
+        with self.connect() as connection:
+            return [dict(row) for row in connection.execute('SELECT * FROM approvals WHERE listing_id = ? AND revoked_at IS NULL ORDER BY id',
+                                                            (listing_id,))]
+
     def revoke_approval(self, approval_id):
         with self.connect(write=True) as connection:
             if not connection.execute('UPDATE approvals SET revoked_at = ? WHERE id = ?',
                                       (datetime.now(timezone.utc).isoformat(), approval_id)).rowcount:
                 raise KeyError('Approval not found.')
 
+    def agree_viewing(self, listing_id, time, details, *, viewing_id=None):
+        time = viewing_time(time)
+        if not isinstance(details, str):
+            raise ValueError('Viewing details must be text.')
+        start = datetime.fromisoformat(time)
+        with self.connect(write=True) as connection:
+            self.require_listing(connection, listing_id)
+            for other in connection.execute("SELECT * FROM viewings WHERE status IN ('agreed', 'booked') AND id IS NOT ?", (viewing_id,)):
+                if abs(datetime.fromisoformat(other['time']) - start) < timedelta(minutes=VIEWING_MINUTES):
+                    raise ViewingConflict(f'The viewing of {other["listing_id"]} at {other["time"]} overlaps {time}.')
+            if viewing_id:
+                if not connection.execute("UPDATE viewings SET time = ?, details = ?, status = 'agreed' WHERE id = ? AND listing_id = ?",
+                                          (time, details, viewing_id, listing_id)).rowcount:
+                    raise KeyError('Viewing not found for this listing.')
+                return viewing_id
+            viewing_id = str(uuid4())
+            connection.execute("INSERT INTO viewings (id, listing_id, time, details, status) VALUES (?, ?, ?, ?, 'agreed')",
+                               (viewing_id, listing_id, time, details))
+            return viewing_id
+
+    def agreed_viewings(self):
+        with self.connect() as connection:
+            return [dict(row) for row in connection.execute("SELECT * FROM viewings WHERE status = 'agreed' ORDER BY time, id")]
+
     def book_viewing(self, listing_id, time, details, calendar_event_id, *, viewing_id=None):
-        time = datetime.fromisoformat(time)
-        if time.utcoffset() is None:
-            raise ValueError('Viewing time must include its UTC offset.')
-        time = time.astimezone(timezone.utc).isoformat()
+        time = viewing_time(time)
         require_text(calendar_event_id, 'Calendar event id', limit=1000)
         if not isinstance(details, str):
             raise ValueError('Viewing details must be text.')

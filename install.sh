@@ -59,6 +59,11 @@ if $had_config; then cp "$saved_config" "$config"; fi
 rm -f "$saved_config"
 [ "$install_status" -eq 0 ] || exit "$install_status"
 
+# Hermes installs a profile's shipped cron jobs paused. The listing correspondence job wakes the
+# model only when a contact request or a reply needs it, so it stays on.
+step 'Listing correspondence job'
+hermes -p "$PROFILE_NAME" cron resume apt-scraper-contact
+
 step 'Claude subscription provider plugin'
 hermes -p "$PROFILE_NAME" plugins install "$PLUGIN_NAME" --force --enable
 
