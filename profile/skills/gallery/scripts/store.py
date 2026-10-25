@@ -491,13 +491,13 @@ class ListingStore:
                     for row in connection.execute('''SELECT c.*, l.first_seen FROM code_features c
                         JOIN listings l ON l.id = c.listing_id AND l.fingerprint = c.fingerprint ORDER BY c.listing_id''')}
 
-    def ranking_inputs(self):
+    def ranking_inputs(self, *, include_signals=False):
         """Everything a rerank reads, from one snapshot of the store: each listing with its current feature record or
         None, its judgments of stated preferences, its code-derived features, the criteria areas whose search found it
         or None, whether extraction gave up on it, whether it is ranked (available, inside the criteria and not
         dismissed), its rank from the latest rerank when its content has not changed since, and the user's actions on it; the settings; the readings of the stated preferences by (kind,
         phrase) and of the user's notes by note id; each listing's latest note sentiment; and the pairwise answers as
-        (chosen, other)."""
+        (chosen, other). Completed visits are included only for the rerank's diagnostic check."""
         with self.connect() as connection:
             connection.execute('BEGIN')
             settings = {row['name']: json.loads(row['value']) for row in connection.execute('SELECT * FROM settings')}
@@ -517,6 +517,13 @@ class ListingStore:
             preference_readings = {(row['kind'], row['phrase']): json.loads(row['features'])
                                    for row in connection.execute('SELECT * FROM preference_readings')}
             pairs = [(row['chosen'], row['other']) for row in connection.execute('SELECT chosen, other FROM pairwise_answers ORDER BY id')]
+            visits = []
+            if include_signals:
+                visits = [dict(row) for row in connection.execute('''SELECT s.listing_id, s.visit_id,
+                    SUM(COALESCE(s.duration_ms, 0)) AS duration_ms FROM implicit_signals s
+                    JOIN listings l ON l.id = s.listing_id AND l.fingerprint = s.fingerprint
+                    GROUP BY s.listing_id, s.fingerprint, s.visit_id
+                    HAVING SUM(s.kind = 'open') > 0 AND SUM(s.kind = 'close') > 0''')]
             paired = {identifier for pair in pairs for identifier in pair}
             listings = []
             for row in connection.execute(f'''SELECT l.*, {RANKABLE} AS rankable FROM listings l
@@ -539,7 +546,54 @@ class ListingStore:
                 })
         return {'listings': listings, 'settings': settings, 'preference_readings': preference_readings,
                 'note_readings': {note: reading for note, (_, reading) in note_readings.items()},
-                'sentiments': {listing_id: reading['sentiment'] for listing_id, reading in note_readings.values()}, 'pairs': pairs}
+                'sentiments': {listing_id: reading['sentiment'] for listing_id, reading in note_readings.values()}, 'pairs': pairs,
+                'implicit_visits': visits}
+
+    def record_signals(self, events):
+        """Stores an atomic, retryable batch without changing the gallery's content revision."""
+        if not isinstance(events, list) or not 1 <= len(events) <= 20:
+            raise ValueError('Signals must contain 1 to 20 events.')
+        fields = {'event_id', 'visit_id', 'listing_id', 'fingerprint', 'kind', 'occurred_at'}
+        rows = []
+        for event in events:
+            if not isinstance(event, dict) or event.get('kind') not in ('open', 'dwell', 'photo', 'close'):
+                raise ValueError('Signal kind must be open, dwell, photo or close.')
+            extra = {'duration_ms'} if event['kind'] == 'dwell' else {'photo_url'} if event['kind'] == 'photo' else set()
+            if set(event) != fields | extra:
+                raise ValueError('Signal fields do not match its kind.')
+            for name in fields:
+                require_text(event[name], name, limit=200)
+            if not re.fullmatch('[a-f0-9]{64}', event['fingerprint']):
+                raise ValueError('Signal fingerprint must identify listing content.')
+            try:
+                occurred = datetime.fromisoformat(event['occurred_at'])
+            except ValueError:
+                raise ValueError('Signal occurred_at must be an ISO timestamp.') from None
+            if occurred.tzinfo is None:
+                raise ValueError('Signal occurred_at must include a timezone.')
+            duration = event.get('duration_ms')
+            photo = event.get('photo_url')
+            if event['kind'] == 'dwell' and (type(duration) is not int or not 0 <= duration <= 86400000):
+                raise ValueError('Signal duration_ms must be an integer from 0 to 86400000.')
+            if event['kind'] == 'photo':
+                require_text(photo, 'photo_url')
+                if not re.fullmatch(r'/media/[A-Za-z0-9._-]+', photo):
+                    require_url(photo)
+            rows.append((event['event_id'], event['visit_id'], event['listing_id'], event['fingerprint'],
+                         event['kind'], event['occurred_at'], duration, photo))
+        with self.connect() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            recorded = 0
+            for row in rows:
+                self.require_listing(connection, row[2])
+                previous = connection.execute('SELECT * FROM implicit_signals WHERE event_id = ?', (row[0],)).fetchone()
+                if previous:
+                    if tuple(previous) != row:
+                        raise ValueError('Signal event_id already records a different event.')
+                    continue
+                connection.execute('INSERT INTO implicit_signals VALUES (?, ?, ?, ?, ?, ?, ?, ?)', row)
+                recorded += 1
+            return recorded
 
     def save_rerank(self, result):
         """Replaces the whole ranking in one transaction with a rerank's result: each listing in result['ranked']

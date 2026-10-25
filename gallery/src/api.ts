@@ -9,10 +9,11 @@ function captureLaunchToken() {
 captureLaunchToken();
 window.addEventListener('hashchange', () => { if (captureLaunchToken()) window.location.reload(); });
 
-export async function request<Result>(path: string, body?: unknown, signal?: AbortSignal): Promise<Result> {
+export async function request<Result>(path: string, body?: unknown, signal?: AbortSignal, options?: Pick<RequestInit, 'keepalive'>): Promise<Result> {
   let response: Response;
   try {
     response = await fetch(path, {
+      ...options,
       signal,
       headers: { Authorization: `Bearer ${sessionStorage.getItem('gallery-access') ?? ''}`, 'Content-Type': 'application/json' },
       ...(body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) }),

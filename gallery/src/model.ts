@@ -9,6 +9,7 @@ export type ListingSummary = {
   viewing: { id: string; time: string; details: string } | null;
 };
 export type Listing = ListingSummary & {
+  content_fingerprint: string;
   description: string | null; amenities: string[]; sources: { label: string; url: string }[];
   notes: Note[]; notes_total: number;
   viewings: { id: string; time: string; details: string; status: 'booked' | 'agreed' | 'canceled'; calendar_event_id: string | null }[];

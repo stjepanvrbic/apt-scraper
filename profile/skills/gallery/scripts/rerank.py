@@ -6,7 +6,8 @@ when the user asks for them. Neither calls a model."""
 import random
 import time
 
-from scoring import DEFAULT_HYPERPARAMETERS, questions, rank_listings
+from scoring import DEFAULT_HYPERPARAMETERS, fit_model, questions, rank_listings
+from implicit_signals import diagnostic
 
 
 def rerank(store, *, seed=None):
@@ -15,7 +16,10 @@ def rerank(store, *, seed=None):
     same store gives the same result. Without a seed, one is drawn and recorded in the summary."""
     started = time.perf_counter()
     seed = random.SystemRandom().randrange(2 ** 32) if seed is None else seed
-    result = rank_listings(store.ranking_inputs(), seed)
+    inputs = store.ranking_inputs(include_signals=True)
+    model = fit_model(inputs)
+    result = rank_listings(inputs, seed, model=model)
+    result['summary']['implicit_signals'] = diagnostic(inputs, result['summary'], model)
     stale = store.save_rerank(result)
     return {**result['summary'], 'stale': stale, 'seconds': round(time.perf_counter() - started, 3)}
 
