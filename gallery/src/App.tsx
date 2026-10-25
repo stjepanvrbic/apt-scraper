@@ -10,6 +10,9 @@ import { date, period, price, title, viewingTime } from './model';
 import { useGallery, useListing } from './useGallery';
 import { ListingCard, Photo, listingPath, type Save } from './ListingCard';
 import { Compare } from './Compare';
+import { RerankPanel } from './RerankPanel';
+import { RankingExplanation } from './RankingExplanation';
+import { useRerank } from './useRerank';
 
 const NotesChat = lazy(() => import('./NotesChat'));
 
@@ -75,7 +78,7 @@ function Details({ id, close, save, busy, saveError, readError, compare }: { com
         {listing.contact?.status === 'failed' && <Alert color="red" title="Contact failed">{listing.contact.error}</Alert>}
         {listing.contact?.status === 'pending' && <Text size="sm" c="dimmed">Request saved. No message has been sent yet.</Text>}
         {listing.dismissed && <Text size="sm" c="dimmed">Hidden from Rankings and Favorites. Your notes and contact history are kept.</Text>}
-        {!compare && <Paper p="md" bg="gray.0" radius="md"><Text size="sm" fw={600} mb={4}>{listing.analysis_current && listing.rank ? `Why it ranks #${listing.rank}` : 'Awaiting ranking'}</Text><Text size="sm">{listing.analysis_current ? listing.reason : 'The listing is waiting for analysis of its current content.'}</Text></Paper>}
+        {!compare && <RankingExplanation listing={listing} />}
         <div><Title order={3} size="h4" mb="xs">About this apartment</Title><Text className="preserve-lines">{listing.description ?? 'No description provided.'}</Text></div>
         <div><Title order={3} size="h4" mb="sm">Amenities</Title><Group gap="xs">{listing.amenities.map(amenity =>
           <Badge key={amenity} variant="light" color="gray" size="lg" tt="none" fw={400}>{amenity}</Badge>)}
@@ -110,11 +113,12 @@ export default function App() {
   const [selected, setSelected] = useState<string>();
   const [page, setPage] = useState(1);
   const [dismissed, setDismissed] = useState(false);
+  const ranking = useRerank();
   const { state, readError, saveError, busy, loading, refresh, save } = useGallery(dismissed ? 'Dismissed' : tab!, page);
   const listings = state?.items ?? [];
-  const awaiting = listings.filter(listing => !listing.analysis_current || !listing.rank);
+  const awaiting = listings.filter(listing => !listing.rank);
   const groups = tab === 'Rankings' && !dismissed ? [
-    { heading: null, items: listings.filter(listing => listing.analysis_current && listing.rank) },
+    { heading: null, items: listings.filter(listing => listing.rank) },
     { heading: 'Awaiting ranking', items: awaiting },
   ] : [{ heading: null, items: listings }];
   const current = tabs.find(item => item.name === tab)!;
@@ -122,7 +126,7 @@ export default function App() {
     <Paper component="header" radius={0} className="site-header"><Container size="xl"><Group justify="space-between" py="lg">
       <Group gap="sm"><IconBuilding size={28} stroke={1.6} /><div><Text fw={700}>Apartment gallery</Text><Text size="xs" c="dimmed">Your search, in one place</Text></div></Group>
       <Group><Badge variant="light" color="gray" tt="none">Saved on this computer</Badge>
-        <Button variant="subtle" color="dark" loading={loading} disabled={busy} leftSection={<IconRefresh size={16} />} onClick={refresh}>Refresh listings</Button></Group>
+        <Button variant="subtle" color="dark" loading={loading} disabled={busy} leftSection={<IconRefresh size={16} />} onClick={() => { void refresh(); void ranking.query.refetch(); }}>Refresh listings</Button></Group>
     </Group></Container></Paper>
     <Container component="main" size="xl" py="xl">
       <Tabs value={tab} onChange={value => { setTab(value); setPage(1); setDismissed(false); }} keepMounted={false}>
@@ -130,6 +134,7 @@ export default function App() {
         <Group justify="space-between" align="flex-end" mb="xl"><div><Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={6}>Your apartment search</Text>
           <Title order={1}>{dismissed ? 'Dismissed listings' : current.name}</Title><Text c="dimmed" mt="xs">{current.description}</Text></div>
           {current.showsListings && <Text c="dimmed" size="sm">{state?.total ?? 0} {state?.total === 1 ? 'place' : 'places'}</Text>}</Group>
+        {tab === 'Rankings' && !dismissed && <RerankPanel ranking={ranking} open={setSelected} busy={busy} galleryReadError={readError} />}
         {tab === 'Rankings' && <Button variant="subtle" mb="md" onClick={() => { setDismissed(!dismissed); setPage(1); }}>{dismissed ? 'Back to rankings' : 'Dismissed listings'}</Button>}
         {readError && <Alert color="red" title="Could not load gallery" mb="lg">{readError}</Alert>}
         {saveError && !selected && <Alert color="red" title="Could not save" mb="lg">{saveError}</Alert>}

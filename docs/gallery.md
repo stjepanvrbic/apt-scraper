@@ -6,6 +6,16 @@ The six tabs are Rankings, Favorites, Compare, Contacted, Viewings and Notes. Op
 
 Contact requests are saved as pending. The gallery itself sends nothing. The [contact skill](../profile/skills/contact/SKILL.md) picks up the request within a few minutes, records each message it sends and receives, and books agreed viewing times in your Google Calendar. A listing shows as contacted once its first message is out, and a viewing appears in Viewings with its time once its calendar event exists. Sample listings are never contacted. The Notes tab is a live conversation with the running Hermes agent. It streams replies and tool activity, and shows questions or approval choices in the tab. The conversation resumes the same Hermes session after reopening.
 
+## Score and rerank
+
+Press **Score and rerank** in Rankings to apply your favorites, dismissals, contact requests, notes, comparisons and stated preferences. Scoring runs locally on the saved feature records. It changes the order only when requested and leaves the review waiting for Hermes. The button stays unavailable while scoring, and a failed request shows an error so you can retry.
+
+The result shows each favorite's held-out rank: where it ranks when fitted without that favorite. Lower is better. Without favorites there is no held-out check yet. Listings marked **Exploration** are shown to learn your taste; with more than 20 eligible ranked listings, two of the top 20 have this mark.
+
+The review starts through the existing Hermes review job, normally within a minute, and can take a few minutes to finish. Keep the gallery open to see its waiting or running state, its result, moves and reasons, preference flags, and findings. The gallery polls the saved result and refreshes the order and listing reasons when the review finishes. A reverted review shows the proposed moves and both check values, with the reason the moves were rejected. Failed reviews show their error. The scoring result remains available while the review runs.
+
+Open a listing for its full scoring explanation, including every feature's contribution and the most similar favorite. Contributions describe the scoring model; any later review move is explained in the review result. Place distances carry the credit "© OpenStreetMap contributors". Listings awaiting ranking follow the ranked ones, with a reason distinguishing current features ready for a rerank, features still waiting, and failed extraction. After three extraction failures, the next rerank uses code-derived features alone and says so in the reason.
+
 ## Compare
 
 Compare asks "Which of these two?" with the main photo, price, rooms, size and address of each apartment. Open either listing for its full details, choose the one you prefer, or skip. A choice saves immediately and counts at the next rerank; the current ranking stays still. Answered pairs never return. A skipped pair stays out until twenty other questions have been answered or skipped, including across restarts. If every eligible pair is answered or cooling down, Compare shows that there are no questions available. It does not shorten the skip cooldown to fill the screen.
@@ -91,6 +101,8 @@ The browser checks `/api/revision` every 15 seconds and on window focus. Listing
 
 Compare reads `/api/compare`, returning one question with both listings (or `null`) and the total number of answered pairs. It writes `/api/compare/answer` with `{chosen, other}` or `/api/compare/skip` with `{first, second}`. These routes use the same authentication, origin checks and JSON validation as other gallery actions.
 
+`POST /api/rerank` accepts an empty JSON object and returns the saved rerank summary, including the held-out ranks and waiting review. It calls `rerank(store)` without starting Hermes or making a model call. The server rejects overlapping scoring requests with 409 and releases the scoring lock even on failure. `GET /api/rerank` returns `{running, last_rerank}`; `last_rerank` is null before the first run and otherwise includes the stored review state and result. Reading it does not start a rerank or a review. Listing reads hide stale ranks, exploration marks and explanations, and derive pending reasons from the current feature record and extraction attempts.
+
 Writes use `/api/listings/<id>/{feedback,notes,contact}` and return a small acknowledgment. Invalid input returns 400, missing listings return 404 and storage failures return 500. The server binds to IPv4 loopback, authenticates every API request, checks Host and Origin, and accepts mutations only as JSON. It serves files only from its bundled web directory.
 
 ## Notes conversation
@@ -138,6 +150,8 @@ The Python tests use real SQLite files and HTTP servers. Launcher tests start th
 ## Assets and references
 
 The UI follows the photo grid and note patterns of [Airbnb](https://www.airbnb.com), with primary action color informed by [Planpoint](https://www.planpoint.io). Compare reuses the listing card with equal choice buttons and the existing details drawer, following [Mantine card patterns](https://ui.mantine.dev/category/app-cards/). The layout keeps both choices at equal visual weight and hides their ranking cues. Component behavior follows [Mantine](https://mantine.dev/getting-started/), [TanStack Query](https://tanstack.com/query/latest/docs/framework/react/quick-start) and [Yet Another React Lightbox](https://yet-another-react-lightbox.com/documentation).
+
+The rerank panel keeps that photo-led layout, Inter metadata and blue primary action. Its compact summary and expandable results follow [Aboard's summary and disclosure pattern](https://refero.design/pages/a0a318b7-2e11-40a4-84ae-d0b87e7b812b), using Mantine Paper, Accordion and Table. The favorite check scrolls within the panel, and the listing drawer holds the signed feature contribution table. Exploration uses an explicit text label beside a compass icon.
 
 The sample photos are distributed under the [Unsplash license](https://unsplash.com/license). They illustrate the sample interface and do not depict the fictional addresses:
 

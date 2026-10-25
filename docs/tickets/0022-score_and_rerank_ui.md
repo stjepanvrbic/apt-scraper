@@ -22,7 +22,8 @@ Rankings has a Score and rerank button that runs a rerank and shows its leave-on
 - [ ] A listing's details show its full explanation: each feature's contribution and the most similar favorite.
 - [ ] Listings not ranked yet follow the ranked ones with the reason why: new or changed since the last rerank, waiting for features, or extraction failed.
 - [ ] Headless Playwright tests with screenshots at desktop and mobile sizes, against the production build. No owner browser is opened.
-- [ ] `docs/gallery.md` updated. Merged to `main` through a reviewed pull request.
+- [ ] `docs/gallery.md` updated.
+- [ ] Published `feat/rerank_screen` with a reviewed pull request to `main`, left unmerged for the owner.
 
 ## Spec
 
@@ -36,6 +37,11 @@ The button could show how many listings and labels changed since the last rerank
 
 ## Deviations
 
+- Delivery stops at an open pull request, per the owner's implementation request. The ticket stays In Progress; no merge is authorized.
+- No migration is needed. The gallery reads the existing rerank and review records at schema version 8.
+
 ## Result
+
+## Comments
 
 - 2026-10-25: Show "© OpenStreetMap contributors" where place distances appear, as the Nominatim usage policy asks.

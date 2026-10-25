@@ -10,22 +10,24 @@ export const test = base.extend<{ gallery: { url: string; restart: () => Promise
   gallery: async ({ browserName }, use) => {
     const directory = await mkdtemp(join(tmpdir(), `apt-gallery-${browserName}-`));
     const database = join(directory, 'sample.sqlite3');
-    let process: ChildProcess;
+    let serverProcess: ChildProcess;
     let address: string;
     const start = async () => {
-      process = spawn('python', [script, '--database', database, '--sample', '--port', '0', 'serve']);
+      serverProcess = spawn('python', [script, '--database', database, '--sample', '--port', '0', 'serve'], {
+        env: { ...process.env, USERPROFILE: directory, HOME: directory },
+      });
       let errors = '';
-      process.stderr!.on('data', chunk => { errors += chunk; });
+      serverProcess.stderr!.on('data', chunk => { errors += chunk; });
       return new Promise<string>((resolve, reject) => {
-        const lines = createInterface({ input: process.stdout! });
+        const lines = createInterface({ input: serverProcess.stdout! });
         lines.once('line', line => { lines.close(); address = JSON.parse(line).url; resolve(address); });
-        process.once('exit', code => reject(new Error(`Gallery exited ${code}: ${errors}`)));
-        process.once('error', reject);
+        serverProcess.once('exit', code => reject(new Error(`Gallery exited ${code}: ${errors}`)));
+        serverProcess.once('error', reject);
       });
     };
     const stop = async () => {
-      if (process.exitCode !== null) return;
-      const exited = new Promise<void>(resolve => { process.once('exit', () => resolve()); });
+      if (serverProcess.exitCode !== null) return;
+      const exited = new Promise<void>(resolve => { serverProcess.once('exit', () => resolve()); });
       const url = new URL(address);
       await fetch(url.origin + '/api/stop', { method: 'POST', headers: {
         Authorization: `Bearer ${new URLSearchParams(url.hash.slice(1)).get('token')}`, 'Content-Type': 'application/json',
