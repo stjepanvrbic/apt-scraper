@@ -1,9 +1,9 @@
 ---
 title: Review pass after each rerank
 type: Feature
-state: In Progress
+state: Done
 priority: 3
-assignee: agent
+assignee:
 milestone:
 parent: 0015
 blocked_by: []
@@ -23,7 +23,7 @@ After each rerank, the model reviews the top 50 and the state of the whole ranki
 - [x] What looks wrong in the ranking state, such as two traits that mean the same thing or one weight carried by a single label, is reported in the rerank result and in `status`.
 - [x] Tests with controlled review outputs: one that moves favorites down is reverted, one that moves them up stands, and an invalid reason is rejected.
 - [x] A live review on real listings, with its token use in Result.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 

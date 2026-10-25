@@ -1,12 +1,12 @@
 ---
 title: Score and rerank in the gallery, with exploration marks and review results
 type: Feature
-state: Todo
+state: In Progress
 priority: 2
-assignee:
+assignee: agent
 milestone:
 parent: 0015
-blocked_by: [0020, 0021]
+blocked_by: []
 related: []
 ---
 
