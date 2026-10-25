@@ -1,9 +1,9 @@
 ---
 title: Scoring model with explanations and the leave-one-out check
 type: Feature
-state: Todo
+state: In Progress
 priority: 2
-assignee:
+assignee: agent
 milestone:
 parent: 0015
 blocked_by: [0016, 0017]

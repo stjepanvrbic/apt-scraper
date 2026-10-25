@@ -1,9 +1,9 @@
 ---
 title: Feature records extracted from every photo and the text
 type: Feature
-state: In Progress
+state: Done
 priority: 2
-assignee: agent
+assignee: Stjepan Vrbic
 milestone:
 parent: 0015
 blocked_by: []

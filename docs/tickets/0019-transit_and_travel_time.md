@@ -1,9 +1,9 @@
 ---
 title: Distance to rapid transit and travel time to the user's places
 type: Feature
-state: Todo
+state: In Progress
 priority: 3
-assignee:
+assignee: agent
 milestone:
 parent: 0015
 blocked_by: [0017, 0018, 0020]
