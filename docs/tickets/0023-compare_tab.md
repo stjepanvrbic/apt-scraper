@@ -1,0 +1,38 @@
+---
+title: Compare tab with pairwise questions
+type: Feature
+state: Todo
+priority: 3
+assignee:
+milestone:
+parent: 0015
+blocked_by: [0020]
+related: []
+---
+
+## Outcome
+
+The gallery's Compare tab asks pairwise questions on real listings whose order the scoring model is least sure of, each answer is a label at the next rerank, and after the interview the agent asks the user to answer 5 to 8.
+
+## Acceptance
+
+- [ ] Compare sits between Favorites and Contacted and shows one question at a time: both listings with their main photo, price, size, rooms and address. The user picks one or skips, and either listing opens to its details.
+- [ ] Questions pair available listings whose order the posterior is least sure of. An answered pair is not asked again, and a skipped one not within the next 20 questions.
+- [ ] Answers are stored and count at the next rerank. Spec › Acceptance "Pairwise questions" passes.
+- [ ] On a fresh test profile, once the first listings have feature records after the interview, the agent asks the user through the messaging gateway to answer 5 to 8 questions in Compare.
+- [ ] Headless Playwright tests with screenshots, against the production build. No owner browser is opened.
+- [ ] `docs/gallery.md` updated. Merged to `main` through a reviewed pull request.
+
+## Spec
+
+[Spec › Gallery](../spec.md#gallery), [Spec › Ranking](../spec.md#ranking) (pairwise questions), [Spec › Acceptance](../spec.md#acceptance) (Pairwise questions), [Spec › Decisions](../spec.md#decisions) (pairwise questions tab)
+
+## Design
+
+UI ticket. Question selection, the answers' store table, the HTTP routes and the agent's cold-start message come first and are tested at the store and HTTP boundaries. The tab's frontend and visual design are done later by a separate design-focused agent, in the gallery's stack and visual references.
+
+A pair's uncertainty is how close the posterior probability that one ranks above the other is to one half. Before any label, the prior from the stated preferences is the posterior.
+
+## Deviations
+
+## Result

@@ -2,7 +2,7 @@
 
 ## Scope
 
-A Hermes Agent profile, its installer and a local gallery app that find, rank and pursue apartments for one user, per [the intent](intent.md). Actors: the user, listing sites, listing agents, and the user's Gmail, Google Calendar, messaging gateway and iMessage. Excluded: phone calls, applications, leases, payments, negotiation, merging one apartment across listing sites, and texting on Windows.
+A Hermes Agent profile, its installer and a local gallery app that find, rank and pursue apartments for one user, per [the intent](intent.md). Actors: the user, listing sites, listing agents, a geocoding and routing service, and the user's Gmail, Google Calendar, messaging gateway and iMessage. Excluded: phone calls, applications, leases, payments, negotiation, merging one apartment across listing sites, and texting on Windows.
 
 ## Terms
 
@@ -15,17 +15,31 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 - **Contact request**: the user's action asking the agent to pursue a listing.
 - **Viewing**: an agreed time to see a listing, held as a Google Calendar event.
 - **Note**: text the user attaches to a listing.
+- **Place**: a location the user travels to regularly, such as work or a gym, with how they get there, the longest trip they accept and how often they go.
+- **Location priorities**: how much the places, nearness to rapid transit and each area of the criteria matter to the user.
+- **Feature record**: what is stored about one listing content for ranking: what extraction read from its photos and text, and what code computed from the listing.
+- **Extraction**: the one model read of a listing content that produces the model's part of its feature record.
+- **Trait**: a short tag for something about a listing that the ratings and flags of a feature record do not cover.
+- **Tag list**: the shared list of traits. Extraction reuses its traits and adds new ones to it.
+- **Label**: what a user action says about one listing: a favorite, a contact request, a dismissal, a note's sentiment or a pairwise answer.
+- **Scoring model**: the model of the user's taste fitted from the feature records, the labels and the preferences.
+- **Rerank**: fitting the scoring model and ordering Rankings by it.
+- **Leave-one-out check**: each favorite's rank when the scoring model is fitted without that favorite.
+- **Exploration listing**: a listing placed in the top 20 to learn the user's taste, chosen from what the scoring model is unsure of.
+- **Review pass**: the model's review of a rerank's result.
+- **Pairwise question**: two listings shown together with the question "Which of these two?".
+- **Implicit signal**: a gallery interaction that is not an action on a listing: opening it, how long it stays open, and which photos are viewed.
 
 ## Behavior
 
 ### Installation and setup
 
-- `install.ps1` and `install.sh` install everything the agent needs and finish with a test message that must succeed.
+- `install.ps1` and `install.sh` install everything the agent needs, check that every Python environment the profile's scripts run in loads its packages, and finish with a test message that must succeed.
 - On first run the agent connects Gmail, Google Calendar, a Hermes messaging gateway such as Telegram, and iMessage on macOS, and checks each connection. A connection that fails its check is reported, and its channel is unused until it passes.
 
 ### Interview
 
-- Before the first search, the agent interviews the user until it has the criteria, the preferences, the listing sites and the user's viewing availability.
+- Before the first search, the agent interviews the user until it has the criteria, the preferences, the places, the location priorities, the listing sites and the user's viewing availability. "No places" is an answer.
 - The user changes any of these at any time by telling the agent.
 
 ### Search
@@ -33,19 +47,40 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 - The search runs continuously over every listing site and finds at least 90% of the listings that match the criteria within a day of their posting.
 - On each listing site, the listings that site places highest are searched first.
 - A listing whose source shows it as gone is marked unavailable. Contacted listings keep their history.
-- The model reads a listing only when something about it or about the user's preferences needs judging; routine re-ranking and unchanged listings cost no model calls.
+
+### Listing features
+
+- The model reads a listing only when something about it or about the user's preferences needs judging: new or changed content, a criterion code cannot judge, a stated preference its feature record does not express, or a note. Reranks and unchanged listings cost no model calls, apart from the review pass.
+- Each listing content has one feature record. A new or changed listing gets its record within an hour of being found, without the user asking. Unchanged content is never extracted again.
+- Extraction reads the listing's text and every one of its photos, after exact and near duplicates are removed. It opens a photo at full resolution only when a detail needs it.
+- The model's part of the record has the room type of each photo; ratings from 1 to 5, each with a confidence, or "not shown", for qualities such as light, condition, kitchen, bathroom and ceiling height; flags read from the text, such as in-unit laundry, air conditioning, pets and utilities included; traits; and, for each stated preference the rest of the record does not express, whether the listing has it, rules it out or does not say.
+- Extraction uses a trait from the tag list when one fits. A new trait joins the tag list, so later listings use the same word for the same thing.
+- Code adds what it reads reliably: monthly price, size, price per square foot, rooms, unit level from unit labels such as `#G` or "Garden", days since first seen, photo count, coordinates, distance to the nearest rapid-transit stop, and the travel time to each place by the user's way of getting there.
+- A stated preference added later is judged for each listing from its feature record and text, without the photos. Until then the listing counts as not saying.
+- When extraction of one content fails three times, it stops. The listing is ranked from its code-derived features alone, its reason says so, and the agent reports it to the user.
 
 ### Ranking
 
-- Every available listing has a rank and a one-line reason.
-- Favorites and positive notes raise listings with similar photos, price, description, location and amenities. Dismissals and negative notes lower them.
+- Ranks change only on a rerank, which the user starts with Score and rerank in the gallery or by asking the agent. Between reranks the order holds still.
+- A rerank ranks every available listing that has a feature record, and gives each a rank and a one-line reason. A listing found or changed since the last rerank, or waiting for its feature record, shows after the ranked listings, marked as not ranked yet with the reason why.
+- Favorites and contact requests count for their listings, and dismissals against them, so listings with similar photos, price, description, location and amenities rise or fall. A note is read once into a sentiment, which labels its listing, and into likes and dislikes on the feature record's ratings, flags and traits. A pairwise answer counts the chosen listing over the other.
+- Stated likes and dislikes, and the likes and dislikes read from notes, set the starting weight of the features they name. Labels can outweigh them: when the favorites keep having something the user said they dislike, it stops counting against listings.
+- Location counts through the areas of the criteria, nearness to the favorites' locations, distance to rapid transit and the travel time to each place, each weighted by the location priorities. A listing beyond a place's longest accepted trip counts down by how much the place matters.
+- A listing's reason names the features that moved its score most and the favorite it most resembles, citing only its feature record. Its details show the full explanation: each feature's contribution to its score, computed from the scoring model, and that favorite.
+- Each rerank runs the leave-one-out check.
+- When more than 20 listings are ranked, two of the top 20 are exploration listings, marked as shown to learn the user's taste. An exploration listing has no label from the user.
+- Pairwise questions pair real listings whose order the scoring model is least sure of. After the interview, once the first listings have feature records, the agent asks the user to answer 5 to 8 of them.
+- After each rerank, the review pass reads the top 50 and the state of the whole ranking. It rewrites their reasons from their feature records, flags ranks that conflict with a stated preference, may move listings, giving a reason for each move, and reports anything in the ranking state that looks wrong. The leave-one-out check runs before and after the review. When the review's moves make the favorites rank worse, all of them are reverted.
+- Implicit signals are recorded in the listing store. The scoring model does not use them, and each rerank reports whether they would raise the favorites' held-out ranks.
 - A dismissed listing leaves Rankings and Favorites.
 
 ### Gallery
 
-- The gallery has the tabs Rankings, Favorites, Contacted, Viewings and Notes, in that order.
+- The gallery has the tabs Rankings, Favorites, Compare, Contacted, Viewings and Notes, in that order.
 - Each listing shows its photos, price, size, rooms, address, description, amenities, date first seen, status and links to every source.
 - Rankings is a grid led by each listing's main photo, and a listing opens to its full photo set and details.
+- Rankings has the Score and rerank button. After a rerank it shows each favorite's held-out rank, the review pass's moves with their reasons, and a reverted review with its moves.
+- Compare shows one pairwise question at a time, each listing with its main photo, price, size, rooms and address. The user picks one or skips the question, and either listing opens to its details.
 - On any listing the user can favorite or unfavorite it, dismiss it, add a note, and send a contact request.
 - Contacted shows each contacted listing with its correspondence. Viewings shows each booked viewing with its time.
 - Notes is where the user discusses preferences with the agent in general.
@@ -61,12 +96,23 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 ## Contracts and invariants
 
 - The agent never submits an application, signs anything, pays, or negotiates rent or terms.
+- Listing photos reach the model only inside that listing's extraction, never in the agent's main conversation.
+- A feature record is stored only when it is valid: ratings from 1 to 5 or "not shown", confidences from 0 to 1, room types from a fixed set, and traits from the tag list or added to it.
+- Apart from the exploration listings and the review pass, a rerank is reproducible: the same feature records, labels and settings give the same ranks and reasons.
 
 ## Acceptance
 
 - Installer: a fresh Windows machine and a fresh Mac each finish `install` with the test message passing.
 - Search: of the matching listings a manual search of the listing sites finds that were posted more than a day earlier, the agent has already found at least 90%.
+- Interview: a first interview stores places, each with its way of getting there, longest accepted trip and frequency, and the location priorities.
+- Listing features: every unique photo of a test listing has a room type in its feature record, the agent's main conversation holds no image, and searching the unchanged listing again makes no extraction.
 - Ranking: the tester favorites five listings they consider alike, and the unseen listings the tester judges alike to them rank above the rest of similar price.
+- Rerank: with 300 listings and 50 favorites, pressing Score and rerank shows the new order and the leave-one-out check within 2 seconds, and Hermes's session usage shows no model call before the review pass.
+- Overruled preference: with the stated dislike "Carpet" and five carpeted favorites, carpet does not count against an unseen carpeted listing in its explanation.
+- Location: of two test listings alike except for the travel time to a place, the one within the place's longest accepted trip ranks higher.
+- Exploration: with more than 20 ranked listings, exactly two of the top 20 are marked as exploration listings, and neither has a label from the user.
+- Pairwise questions: on a fresh profile, the agent asks for 5 to 8 pairwise answers once the first feature records exist, and a single answer ranks the chosen listing above the other at the next rerank.
+- Review pass: a review whose moves make the favorites' held-out ranks worse is reverted, and the gallery shows the reverted moves.
 - Gallery: Rankings shows a photo grid, each listing field above is shown, and each source link opens the original listing.
 - Contact: within ten minutes of a contact request on a test listing, a first message is in Gmail's Sent folder, in Messages on macOS, or submitted through the test listing's contact form.
 - Viewing: a confirmed time from a test listing agent appears as a Google Calendar event with the required details, and a moved time updates that event.
@@ -82,3 +128,7 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 - The user can dismiss listings, so the ranking learns dislikes as well as likes (`0008`).
 - The agent reaches the user through a Hermes messaging gateway, so questions arrive while the gallery is closed and stay apart from the user's own messages (`0009`).
 - Listing sites' terms of use don't limit the search. Avoiding blocks does, because a blocked search finds nothing.
+- Ranks change only when the user asks for a rerank, so the order holds still while the user browses, and fitting the scoring model in code costs no model call ([preference learning research](research/preference_learning_for_listing_ranking.md)).
+- The review pass may move listings, but its moves stand only when the leave-one-out check after the review is no worse than before it, because language-model rankers show position and popularity bias.
+- Two of the top 20 are exploration listings, because a model that sees labels only on the listings it already ranks high cannot learn where it is wrong.
+- Pairwise questions have their own tab, because a choice between two real listings is a label the scoring model uses at once, also before the user has any favorites.
