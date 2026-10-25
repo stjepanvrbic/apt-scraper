@@ -223,13 +223,20 @@ class StoredDistanceTests(StoredCodeFeatureTests):
         self.store.save_stations('https://transit.example/gtfs.zip', STATIONS[1:])
         self.assertEqual(self.distances()[0], 'California')
 
-    def test_a_place_without_coordinates_is_missing_and_has_no_distance(self):
+    def test_a_place_without_coordinates_is_reported_and_has_no_distance(self):
         self.store.update_settings(places=[WORK, {'name': 'Gym', 'address': 'First Ascent Avondale, Chicago'}])
         self.store.save_geocodes({WORK['address']: WILLIS_TOWER})
-        self.assertIn('places.coordinates', self.store.missing_settings())
-        self.store.update_settings(places=[WORK])
-        self.assertNotIn('places.coordinates', self.store.missing_settings())
+        self.store.update_settings(places=[WORK, {'name': 'Gym', 'address': 'First Ascent Avondale, Chicago'}])
+        self.assertEqual(self.store.places_without_coordinates(), ['Gym'])
         self.assertEqual(list(self.distances()[2]), ['Work'])
+        self.store.update_settings(places=[WORK])
+        self.assertEqual(self.store.places_without_coordinates(), [])
+
+    def test_places_at_one_address_share_its_coordinates(self):
+        self.store.save_geocodes({WORK['address']: WILLIS_TOWER})
+        self.store.update_settings(places=[WORK, {'name': 'Gym', 'address': WORK['address']}])
+        self.assertEqual(self.store.places_without_coordinates(), [])
+        self.assertEqual(self.distances()[2]['Gym'], self.distances()[2]['Work'])
 
     def test_a_store_from_before_distances_keeps_each_place_as_its_name_and_address(self):
         older = Path(self.path.parent) / 'older.sqlite3'
@@ -250,7 +257,8 @@ class StoredDistanceTests(StoredCodeFeatureTests):
         store = ListingStore(older)
         self.assertEqual(store.schema_version, len(MIGRATIONS))
         self.assertEqual(store.settings()['places'], [WORK])
-        self.assertIn('places.coordinates', store.missing_settings())
+        self.assertEqual(store.places_without_coordinates(), ['Work'])
+        self.assertEqual(store.missing_settings(('places',)), [])
         features = store.code_features()['zillow:1']
         self.assertEqual((features['monthly_price'], features['nearest_station'], features['place_distances_km']), (2100, None, {}))
         store.save_geocodes({WORK['address']: WILLIS_TOWER})

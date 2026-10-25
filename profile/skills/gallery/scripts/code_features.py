@@ -135,19 +135,29 @@ def code_features(listing, facts, surroundings=Surroundings()):
     }
 
 
+def configured_transit_feed(connection):
+    """The transit feed URL the settings name, or the default."""
+    row = connection.execute("SELECT value FROM settings WHERE name = 'transit_feed'").fetchone()
+    return json.loads(row[0]) if row else DEFAULT_TRANSIT_FEED
+
+
+def fetched_stations(connection):
+    """The stored stations as (name, latitude, longitude), when they were fetched from the configured feed."""
+    fetched = connection.execute('SELECT url FROM transit_feed').fetchone()
+    if not fetched or fetched[0] != configured_transit_feed(connection):
+        return ()
+    return tuple(map(tuple, connection.execute('SELECT name, latitude, longitude FROM stations ORDER BY id')))
+
+
 def stored_surroundings(connection):
     """The stations of the configured transit feed, when they have been fetched, and the places with coordinates."""
-    settings = {row[0]: json.loads(row[1]) for row in connection.execute(
-        "SELECT name, value FROM settings WHERE name IN ('places', 'transit_feed')")}
-    fetched = connection.execute('SELECT url FROM transit_feed').fetchone()
-    stations = (tuple(connection.execute('SELECT name, latitude, longitude FROM stations ORDER BY id'))
-                if fetched and fetched[0] == settings.get('transit_feed', DEFAULT_TRANSIT_FEED) else ())
+    row = connection.execute("SELECT value FROM settings WHERE name = 'places'").fetchone()
     places = []
-    for place in settings.get('places', []):
+    for place in json.loads(row[0]) if row else []:
         found = connection.execute('SELECT latitude, longitude FROM geocodes WHERE address = ?', (place['address'],)).fetchone()
         if found:
             places.append((place['name'], *found))
-    return Surroundings(tuple(map(tuple, stations)), tuple(places))
+    return Surroundings(fetched_stations(connection), tuple(places))
 
 
 def store_all_code_features(connection):

@@ -1,7 +1,8 @@
 """Reads and saves the search settings the interview collects, in the profile's real listing store.
 
 Commands:
-  settings.py status      print the settings and what the interview still needs
+  settings.py status      print the settings, what the interview still needs and the saved places without
+                          coordinates
   settings.py save FILE   replace each setting named in the JSON object in FILE, a file in the scratch
                           directory, and delete FILE once saved. Saved criteria are applied to every
                           stored listing in the same transaction, from its stored features: listings
@@ -9,7 +10,8 @@ Commands:
                           Each place address without stored coordinates is geocoded first, with
                           OpenStreetMap's Nominatim, one request a second.
 
-Exit codes: 0 done (for status: the interview is complete), 3 the interview is incomplete,
+Exit codes: 0 done (for status: the interview is complete and every place has coordinates), 3 the interview is
+incomplete or a place has no coordinates,
 1 the input or the store was rejected and nothing was saved, 2 usage error,
 4 this Python has no time zone database and nothing was saved,
 5 Nominatim found no location for a place and nothing was saved,
@@ -45,8 +47,10 @@ def locate(store, places):
     SETTINGS['places'](places)
     addresses = list(dict.fromkeys(place['address'] for place in places))
     known = store.geocodes(addresses)
-    found, missing = geocode([address for address in addresses if address not in known])
+    found, missing, unavailable = geocode([address for address in addresses if address not in known])
     store.save_geocodes(found)
+    if unavailable:
+        raise unavailable
     if missing:
         raise PlacesNotFound('Nominatim found no location for ' + ', '.join(
             f'{place["name"]} ("{place["address"]}")' for place in places if place['address'] in missing) + '. Nothing was saved.')
@@ -63,9 +67,9 @@ def run(argv):
     arguments = parser.parse_args(argv)
     store = ListingStore(store_path())
     if arguments.command == 'status':
-        missing = store.missing_settings()
-        print(json.dumps({'complete': not missing, 'missing': missing, 'settings': store.settings()}))
-        return INCOMPLETE if missing else 0
+        missing, unlocated = store.missing_settings(), store.places_without_coordinates()
+        print(json.dumps({'complete': not missing, 'missing': missing, 'places_without_coordinates': unlocated, 'settings': store.settings()}))
+        return INCOMPLETE if missing or unlocated else 0
     file, settings = read_scratch_object(arguments.file, 'Settings')
     if not settings or not set(settings) <= set(SETTINGS):
         raise ValueError(f'Settings must be a JSON object with any of {", ".join(SETTINGS)}.')

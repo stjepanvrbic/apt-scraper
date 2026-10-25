@@ -23,6 +23,16 @@ def table(rows):
     return buffer.getvalue()
 
 
+def feed_stops(latitude):
+    """A stops.txt whose stations have the given latitude."""
+    return table([['stop_id', 'stop_name', 'stop_lat', 'stop_lon', 'location_type', 'parent_station'],
+                  ['40570', 'California', latitude, '-87.69689', '1', ''], ['40590', 'Damen', latitude, '-87.677437', '1', ''],
+                  ['30001', 'California', latitude, '-87.69689', '0', '40570'], ['30002', 'Damen', latitude, '-87.67744', '0', '40590'],
+                  ['30003', 'California', latitude, '-87.69690', '0', '40570'], ['30004', 'Western', latitude, '-87.687364', '0', ''],
+                  ['1501', 'Bus', latitude, '-87.6874', '0', ''], ['1502', 'Bus', latitude, '-87.6775', '0', ''],
+                  ['7001', 'Tram stop', latitude, '-87.63', '', '']])
+
+
 def feed(**overrides):
     """A small GTFS feed of one rail line with platforms under two stations and one platform without a station, a bus
     route whose stops are not rapid transit, and a station only the bus serves."""
@@ -111,13 +121,23 @@ class GeocodingTests(unittest.TestCase):
         def search(address):
             events.append(('search', address))
             return None if address == 'Nowhere' else {'latitude': 1.0, 'longitude': 2.0, 'found': address}
-        found, missing = geocode(['Work address', 'Nowhere', 'Gym address'], search, lambda seconds: events.append(('sleep', seconds)))
+        found, missing, unavailable = geocode(['Work address', 'Nowhere', 'Gym address'], search, lambda seconds: events.append(('sleep', seconds)))
         self.assertEqual(events, [('search', 'Work address'), ('sleep', NOMINATIM_INTERVAL_SECONDS), ('search', 'Nowhere'),
                                   ('sleep', NOMINATIM_INTERVAL_SECONDS), ('search', 'Gym address')])
         self.assertEqual(NOMINATIM_INTERVAL_SECONDS, 1.0)
         self.assertEqual(sorted(found), ['Gym address', 'Work address'])
-        self.assertEqual(missing, ['Nowhere'])
-        self.assertEqual(geocode([], search, lambda seconds: self.fail('slept without a request')), ({}, []))
+        self.assertEqual((missing, unavailable), (['Nowhere'], None))
+        self.assertEqual(geocode([], search, lambda seconds: self.fail('slept without a request')), ({}, [], None))
+
+    def test_a_service_failing_partway_stops_the_lookups_and_keeps_what_was_found(self):
+        failure = SourceUnavailable('Nominatim could not be reached: timed out')
+
+        def search(address):
+            if address == 'Gym address':
+                raise failure
+            return {'latitude': 1.0, 'longitude': 2.0, 'found': address}
+        found, missing, unavailable = geocode(['Work address', 'Gym address', 'Home address'], search, lambda seconds: None)
+        self.assertEqual((list(found), missing, unavailable), (['Work address'], [], failure))
 
 
 class StationTests(unittest.TestCase):
@@ -146,7 +166,9 @@ class StationTests(unittest.TestCase):
         def unreachable(url):
             raise OSError('timed out')
         for opener in (unreachable, answering(b'<html>Not found</html>'), answering(feed(**{'stop_times.txt': 'trip_id,arrival_time\n'})),
-                       answering(feed(**{'stops.txt': 'stop_id,stop_name\n'}))):
+                       answering(feed(**{'stops.txt': 'stop_id,stop_name\n'})), answering(feed(**{'stop_times.txt': ''})),
+                       answering(feed(**{'stops.txt': feed_stops(latitude='nan')})), answering(feed(**{'stops.txt': feed_stops(latitude='97.5')})),
+                       answering(feed(**{'stops.txt': 'stop_id,"stop_name\n'}))):
             with self.subTest(opener=opener), self.assertRaisesRegex(SourceUnavailable, 'transit.example'):
                 fetch_stations('https://transit.example/gtfs.zip', opener)
 

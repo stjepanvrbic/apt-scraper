@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
-from code_features import DEFAULT_TRANSIT_FEED, FEATURES, store_all_code_features, store_code_features
+from code_features import FEATURES, configured_transit_feed, store_all_code_features, store_code_features
 from schema import content_fingerprint, migrate
 from queries import browse, snapshot, validate_page
 from record import SEED_TAGS, known_spelling, validate_extraction, validate_judgments
@@ -417,8 +417,7 @@ class ListingStore:
         """The rapid-transit feed the settings name, the default without one, and the stations fetched from it:
         {url, fetched_at, stations}, with fetched_at None and no stations until they are fetched."""
         with self.connect() as connection:
-            row = connection.execute("SELECT value FROM settings WHERE name = 'transit_feed'").fetchone()
-            url = json.loads(row['value']) if row else DEFAULT_TRANSIT_FEED
+            url = configured_transit_feed(connection)
             fetched = connection.execute('SELECT * FROM transit_feed WHERE url = ?', (url,)).fetchone()
             stations = [dict(row) for row in connection.execute('SELECT * FROM stations ORDER BY id')] if fetched else []
             return {'url': url, 'fetched_at': fetched['fetched_at'] if fetched else None, 'stations': stations}
@@ -434,9 +433,15 @@ class ListingStore:
                                (url, datetime.now(timezone.utc).isoformat()))
             store_all_code_features(connection)
 
+    def places_without_coordinates(self):
+        """The names of the saved places whose address has no stored geocode, such as places saved before places were
+        geocoded. They count for no listing until they are saved again."""
+        places = self.settings().get('places', [])
+        located = self.geocodes({place['address'] for place in places})
+        return [place['name'] for place in places if place['address'] not in located]
+
     def missing_settings(self, names=tuple(SETTINGS)):
-        """What the interview still needs, limited to the settings in names. A saved place without coordinates, such as
-        one saved before places were geocoded, is missing as places.coordinates."""
+        """What the interview still needs, limited to the settings in names."""
         saved = self.settings()
         missing = [f'{name}.{key}' for name, keys in (('criteria', CRITERIA), ('preferences', PREFERENCES))
                    for key in keys if key not in saved.get(name, {})]
@@ -447,11 +452,8 @@ class ListingStore:
         priorities = saved.get('location_priorities', {})
         if 'places' not in saved:
             missing.append('places')
-        else:
-            if len(self.geocodes([place['address'] for place in saved['places']])) < len(saved['places']):
-                missing.append('places.coordinates')
-            if saved['places'] and 'places' not in priorities:
-                missing.append('location_priorities.places')
+        elif saved['places'] and 'places' not in priorities:
+            missing.append('location_priorities.places')
         if 'rapid_transit' not in priorities:
             missing.append('location_priorities.rapid_transit')
         if not set(saved.get('criteria', {}).get('location', [])) <= set(priorities.get('areas', {})):

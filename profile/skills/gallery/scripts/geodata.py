@@ -24,7 +24,7 @@ import urllib.request
 import zipfile
 
 NOMINATIM = 'https://nominatim.openstreetmap.org/search'
-USER_AGENT = 'apt-scraper (Hermes Agent apartment search; https://github.com/stjepanvrbic/apt-scraper)'
+USER_AGENT = 'apt-scraper (Hermes Agent apartment search)'
 ATTRIBUTION = '© OpenStreetMap contributors'
 NOMINATIM_INTERVAL_SECONDS = 1.0
 TIMEOUT_SECONDS = 60
@@ -68,18 +68,21 @@ def search_place(address, opener=open_url):
 
 
 def geocode(addresses, search=search_place, sleep=time.sleep):
-    """The locations found for the addresses, by address, and the addresses not found, one request at a time with
-    NOMINATIM_INTERVAL_SECONDS between them."""
+    """The locations found for the addresses, by address, the addresses not found, and the SourceUnavailable that
+    stopped the lookups early or None, one request at a time with NOMINATIM_INTERVAL_SECONDS between them."""
     found, missing = {}, []
     for index, address in enumerate(addresses):
         if index:
             sleep(NOMINATIM_INTERVAL_SECONDS)
-        location = search(address)
+        try:
+            location = search(address)
+        except SourceUnavailable as error:
+            return found, missing, error
         if location is None:
             missing.append(address)
         else:
             found[address] = location
-    return found, missing
+    return found, missing, None
 
 
 def rail_route_type(value):
@@ -90,6 +93,13 @@ def rail_route_type(value):
     except ValueError:
         return False
     return route_type in BASIC_RAIL_TYPES or any(route_type in types for types in EXTENDED_RAIL_TYPES)
+
+
+def coordinate(value, limit):
+    number = float(value)
+    if not math.isfinite(number) or abs(number) > limit:
+        raise ValueError(f'{value} is not a coordinate.')
+    return number
 
 
 def rows(archive, name):
@@ -104,7 +114,9 @@ def rapid_transit_stations(archive):
     trips = {row['trip_id'] for row in rows(archive, 'trips.txt') if row['route_id'] in routes}
     with archive.open('stop_times.txt') as file:
         reader = csv.reader(io.TextIOWrapper(file, encoding='utf-8-sig', newline=''))
-        header = next(reader)
+        header = next(reader, None)
+        if header is None:
+            raise ValueError('stop_times.txt is empty.')
         trip_column, stop_column = header.index('trip_id'), header.index('stop_id')
         served = {row[stop_column] for row in reader if row[trip_column] in trips}
     stops = {row['stop_id']: row for row in rows(archive, 'stops.txt')}
@@ -113,7 +125,7 @@ def rapid_transit_stations(archive):
         stop = stops[stop_id]
         station = stops.get(stop.get('parent_station') or '', stop)
         stations[station['stop_id']] = {'id': station['stop_id'], 'name': station['stop_name'],
-                                        'latitude': float(station['stop_lat']), 'longitude': float(station['stop_lon'])}
+                                        'latitude': coordinate(station['stop_lat'], 90), 'longitude': coordinate(station['stop_lon'], 180)}
     return sorted(stations.values(), key=lambda station: station['id'])
 
 
@@ -128,5 +140,5 @@ def fetch_stations(url, opener=open_url):
         try:
             with zipfile.ZipFile(file) as archive:
                 return rapid_transit_stations(archive)
-        except (zipfile.BadZipFile, KeyError, ValueError) as error:
+        except (zipfile.BadZipFile, NotImplementedError, KeyError, ValueError, csv.Error) as error:
             raise SourceUnavailable(f'The transit feed {url} is not a GTFS feed with routes, trips, stop times and stops: {error}') from None

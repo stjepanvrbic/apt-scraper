@@ -119,11 +119,11 @@ class SettingsStoreTests(unittest.TestCase):
         self.assertEqual(self.store.settings()['places'], [])
         self.assertEqual(self.store.missing_settings(), [])
 
-    def test_a_saved_place_without_coordinates_is_missing_until_it_is_saved_again(self):
+    def test_a_saved_place_without_coordinates_is_reported_apart_from_what_the_interview_needs(self):
         self.store.update_settings(**settings(places=[*COMPLETE['places'], {**PLACE, 'name': 'Office'}]))
-        self.assertEqual(self.store.missing_settings(), ['places.coordinates'])
+        self.assertEqual((self.store.missing_settings(), self.store.places_without_coordinates()), ([], ['Office']))
         self.store.update_settings(places=COMPLETE['places'])
-        self.assertEqual(self.store.missing_settings(), [])
+        self.assertEqual(self.store.places_without_coordinates(), [])
 
     def test_places_need_a_priority_and_every_area_of_the_criteria_needs_one(self):
         self.store.update_settings(**settings(location_priorities={'rapid_transit': 'low', 'areas': {'Logan Square, Chicago': 'high'}}))
@@ -339,7 +339,15 @@ class SettingsScriptTests(unittest.TestCase):
         self.assertEqual(json.loads(saved.stdout)['missing'], [])
         result = self.run_script('status')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), {'complete': True, 'missing': [], 'settings': COMPLETE})
+        self.assertEqual(json.loads(result.stdout), {'complete': True, 'missing': [], 'places_without_coordinates': [], 'settings': COMPLETE})
+
+    def test_status_reports_a_place_without_coordinates_as_incomplete(self):
+        self.assertEqual(self.save(COMPLETE).returncode, 0)
+        ListingStore(self.path).update_settings(places=[*COMPLETE['places'], {**PLACE, 'name': 'Office'}])
+        result = self.run_script('status')
+        self.assertEqual(result.returncode, 3, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual((report['complete'], report['missing'], report['places_without_coordinates']), (True, [], ['Office']))
 
     def test_settings_live_in_the_real_store_of_the_profile(self):
         self.save({'preferences': COMPLETE['preferences']})
@@ -421,7 +429,7 @@ class PlaceGeocodingTests(unittest.TestCase):
         self.addCleanup(environment.stop)
         self.store = ListingStore(self.home / 'workspace' / 'gallery' / 'listings.sqlite3')
         self.store.update_settings(**{name: COMPLETE[name] for name in ('criteria', 'location_priorities')})
-        self.searches, self.unavailable = [], False
+        self.searches, self.unavailable = [], set()
         geocode = functools.partial(geodata.geocode, search=self.search, sleep=lambda seconds: None)
         patcher = patch.object(settings_script, 'geocode', geocode)
         patcher.start()
@@ -429,7 +437,7 @@ class PlaceGeocodingTests(unittest.TestCase):
 
     def search(self, address):
         self.searches.append(address)
-        if self.unavailable:
+        if address in self.unavailable or '*' in self.unavailable:
             raise SourceUnavailable('Nominatim could not be reached: timed out')
         return LOCATIONS.get(address)
 
@@ -467,15 +475,26 @@ class PlaceGeocodingTests(unittest.TestCase):
         self.assertEqual(self.searches, [])
 
     def test_an_unreachable_nominatim_saves_nothing_with_its_own_exit_code(self):
-        self.unavailable = True
+        self.unavailable = {COMPLETE['places'][1]['address']}
         code, _, errors = self.save({'places': COMPLETE['places']})
         self.assertEqual(code, settings_script.GEOCODING_UNAVAILABLE)
         self.assertIn('Nothing was saved', errors)
         self.assertNotIn('places', self.store.settings())
+        self.assertEqual(list(self.store.geocodes(LOCATIONS)), [COMPLETE['places'][0]['address']])
+        self.unavailable, self.searches = set(), []
+        self.assertEqual(self.save({'places': COMPLETE['places']})[0], 0)
+        self.assertEqual(self.searches, [COMPLETE['places'][1]['address']])
 
     def test_a_malformed_place_is_rejected_before_any_request(self):
         self.assertEqual(self.save({'places': [{**PLACE, 'travel_mode': 'transit'}]})[0], 1)
         self.assertEqual(self.searches, [])
+
+    def test_places_at_one_address_are_looked_up_once(self):
+        shared = [COMPLETE['places'][0], {'name': 'Gym', 'address': COMPLETE['places'][0]['address']}]
+        code, result, _ = self.save({'places': shared})
+        self.assertEqual((code, self.searches), (0, [shared[0]['address']]))
+        self.assertEqual([place['found'] for place in result['places']], [LOCATIONS[shared[0]['address']]['found']] * 2)
+        self.assertEqual(self.store.places_without_coordinates(), [])
 
     def test_no_places_need_no_request(self):
         code, result, _ = self.save({'places': []})
