@@ -33,7 +33,7 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 - The search runs continuously over every listing site and finds at least 90% of the listings that match the criteria within a day of their posting.
 - On each listing site, the listings that site places highest are searched first.
 - A listing whose source shows it as gone is marked unavailable. Contacted listings keep their history.
-- The model analyzes a listing once, and again only when its content changes.
+- The model reads a listing only when something about it or about the user's preferences needs judging; routine re-ranking and unchanged listings cost no model calls.
 
 ### Ranking
 
