@@ -1,9 +1,9 @@
 ---
 title: Continuous search of the listing sites
 type: Feature
-state: In Progress
+state: Done
 priority: 1
-assignee: agent
+assignee: Stjepan Vrbic
 milestone:
 parent:
 blocked_by: [0001, 0002]

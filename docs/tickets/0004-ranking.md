@@ -1,9 +1,9 @@
 ---
 title: Ranking that learns from favorites and notes
 type: Feature
-state: Todo
+state: In Progress
 priority: 2
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: [0003, 0008]
