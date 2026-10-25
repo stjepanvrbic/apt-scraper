@@ -1,9 +1,9 @@
 ---
 title: Preference interview
 type: Feature
-state: Todo
+state: In Progress
 priority: 2
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []
