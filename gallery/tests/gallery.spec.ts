@@ -119,6 +119,20 @@ test('contact requests, correspondence and viewings share the store', async ({ p
   await expect(page.getByRole('article').getByText(/Oct 30/)).toBeVisible();
 });
 
+test('an agreed time shows in the listing and reaches Viewings once booked', async ({ page, gallery }) => {
+  execFileSync('python', ['-c', `import sys; sys.path.insert(0,sys.argv[1]); from store import ListingStore; store=ListingStore(sys.argv[2]); store.request_contact('sample:lincoln'); print(store.agree_viewing('sample:lincoln','2026-10-31T11:00:00-05:00','Meet Anna in the lobby.'))`, resolve('../profile/skills/gallery/scripts'), gallery.database]);
+  await page.goto(gallery.url);
+  await page.getByRole('button', { name: 'View Sunlit home in Lincoln Park', exact: true }).click();
+  await expect(page.getByText('Agreed viewing, not yet in your calendar', { exact: true })).toBeVisible();
+  await expect(page.getByText('Meet Anna in the lobby.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Sample listings are never contacted.', { exact: true })).toBeVisible();
+  await page.getByText('Agreed viewing, not yet in your calendar', { exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath('agreed-viewing.png') });
+  await page.getByRole('button', { name: 'Close listing details' }).click();
+  await page.getByRole('tab', { name: 'Viewings', exact: true }).click();
+  await expect(page.getByRole('article')).toHaveCount(0);
+});
+
 test('a failed save keeps the draft and reports the failure before retry', async ({ page, gallery }) => {
   await page.goto(gallery.url);
   await page.getByRole('button', { name: 'View Sunlit home in Lincoln Park', exact: true }).click();
@@ -281,6 +295,7 @@ test('partial unranked listings are visible and a failed contact can be retried'
   await expect(page.getByRole('dialog').getByText('Delivery failed.', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Retry contact', exact: true }).click();
   await expect(page.getByRole('dialog').getByText('Request saved. No message has been sent yet.')).toBeVisible();
+  await expect(page.getByRole('dialog').getByText('No correspondence yet. Hermes sends the first message within a few minutes while its gateway runs.', { exact: true })).toBeVisible();
 });
 
 test('a listing read failure is not reported as a save failure', async ({ page, gallery }) => {

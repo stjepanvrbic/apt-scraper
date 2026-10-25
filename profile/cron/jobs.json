@@ -1,0 +1,15 @@
+{
+  "jobs": [
+    {
+      "id": "apt-scraper-contact",
+      "name": "Listing correspondence",
+      "prompt": "Handle the user's correspondence with listing agents. The pre-run script has already recorded new replies and found the contact requests and replies that need you. Follow the contact skill: run its work command and handle every listing it lists, then stop. Nobody reads your final response. Anything the user must know goes through the contact skill's ask or tell commands.",
+      "skills": ["contact"],
+      "script": "contact-due.py",
+      "schedule": "every 2m",
+      "schedule_display": "every 2m",
+      "deliver": "local",
+      "failure_deliver": "origin"
+    }
+  ]
+}

@@ -11,7 +11,7 @@ export type ListingSummary = {
 export type Listing = ListingSummary & {
   description: string | null; amenities: string[]; sources: { label: string; url: string }[];
   notes: Note[]; notes_total: number;
-  viewings: { id: string; time: string; details: string; status: 'booked' | 'canceled'; calendar_event_id: string | null }[];
+  viewings: { id: string; time: string; details: string; status: 'booked' | 'agreed' | 'canceled'; calendar_event_id: string | null }[];
   viewings_total: number;
 };
 export type ListingPage = { items: ListingSummary[]; total: number; page: number; page_size: number };

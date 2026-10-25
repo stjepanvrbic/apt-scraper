@@ -13,12 +13,12 @@ Exit codes: 0 done (for status: the interview is complete), 3 the interview is i
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'gallery' / 'scripts'))
 
+from scratch import read_scratch_object  # noqa: E402
 from store import SETTINGS, ListingStore, TimeZoneDataMissing, store_path  # noqa: E402
 
 INCOMPLETE = 3
@@ -46,15 +46,8 @@ def main():
         listings = sorted(store.state()['listings'], key=lambda item: item['id'])
         print(json.dumps([{key: item.get(key) for key in LISTING_FACTS} for item in listings]))
         return 0
-    scratch = (Path(os.environ['HERMES_HOME']) / 'cache' / 'scratch').resolve()
-    file = arguments.file.resolve()
-    if not file.is_relative_to(scratch):
-        raise ValueError(f'Settings files must be in the scratch directory {scratch}.')
-    try:
-        settings = json.loads(file.read_text(encoding='utf-8-sig'))
-    except json.JSONDecodeError as error:
-        raise ValueError(f'Settings must be a JSON object: {error}') from None
-    if not isinstance(settings, dict) or not settings or not set(settings) <= set(SETTINGS):
+    file, settings = read_scratch_object(arguments.file, 'Settings')
+    if not settings or not set(settings) <= set(SETTINGS):
         raise ValueError(f'Settings must be a JSON object with any of {", ".join(SETTINGS)}.')
     if 'criteria' in settings and arguments.outside is None and store.has_listings():
         raise ValueError('Stored listings must be judged against the new criteria. Run listings, then save again with '
