@@ -44,7 +44,7 @@ Option B of the [research](../research/preference_learning_for_listing_ranking.m
 
 ## Result
 
-Delivered on branch `spike/embeddings_gp`, pull request to `main`, not merged. The ticket stays In Progress: the comparison on real listings, its numbers and the owner's decision are open.
+Delivered on branch `spike/embeddings_gp`, pull request #25 to `main`, not merged. The ticket stays In Progress: the comparison on real listings, its numbers and the owner's decision are open.
 
 ```
 profile/skills/ranking/scripts/embeddings.py          CLIP per photo, averaged per room type, MiniLM over traits and text, cached per content
@@ -63,7 +63,7 @@ Measured on this machine (numbers and conditions in the research): the environme
 
 Found on the way: the rerank's leave-one-out check drops the held-out favorite's row, which ranks it first under a flexible kernel with no signal. The difference is small for the linear scoring model (median 93 against 95 under the weak-negative check on 128 synthetic listings), but any nonlinear model needs the weak-negative check. `test_spec_rerank_timing_with_300_listings_and_50_favorites` fails under Hermes's Python 3.14.9 on this machine at 2.1 to 2.6 s on `main` as well; it passes under Python 3.12. Neither is changed here.
 
-Reviewed by an independent reviewer: no defect in the Newton step, the leave-one-out symmetry or the store. Its findings were fixed: neutral handling of missing embeddings, the selected amplitude compared before and after at the same value, the bar taken from the same run, a listing with no text reported, experiment files validated, a line search that finds no lower objective counts as converged only when the full Newton step moves no score by 10⁻⁴ and raises otherwise, research claims corrected, the stand-in builder committed.
+Reviewed by an independent reviewer: no defect in the Newton step, the leave-one-out symmetry or the store. Its findings were fixed: neutral handling of missing embeddings, the selected amplitude compared before and after at the same value, the bar taken from the same run, a listing with no text reported, experiment files validated, a line search that finds no lower objective counts as converged only when the full Newton step moves no score by 10⁻⁴ and raises otherwise, research claims corrected, the stand-in builder committed. Its reassessment found every finding resolved and two new low ones (the stall docstring's precision claim and this Result's wording), both fixed.
 
 Not verified:
 
