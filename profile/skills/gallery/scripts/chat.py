@@ -126,7 +126,7 @@ async def run_turn(store, message_id, text, controls):
             snapshot = await client.rpc('session.resume', session_id=session_id)
         else:
             snapshot = await client.rpc('session.create', request_id=uuid4().hex, source='cli',
-                                        title='Apartment preferences', cwd=str(store.path.parent), skills=['gallery'])
+                                        title='Apartment preferences', cwd=str(store.path.parent))
         store.update_chat(message_id, session_id=snapshot['stored_session_id'])
         if text is not None and snapshot.get('pending'):
             raise RuntimeError('This Hermes session still has unfinished work. Wait for it to finish before sending another message.')
@@ -136,9 +136,8 @@ async def run_turn(store, message_id, text, controls):
         renderer = asyncio.create_task(view.render())
         try:
             context = (f'This conversation is in the apartment gallery. Its listing database is {store.path}. '
-                       'Read the gallery skill and stored settings when relevant. When the user changes criteria, preferences, listing sites or viewing availability, '
-                       'persist the accepted change with ListingStore.update_settings in this database. Preserve settings the user did not change. '
-                       'After criteria changes, reevaluate stored listings and use set_matches_criteria so out-of-criteria listings are hidden. '
+                       'Read the gallery skill when relevant. Search settings are kept only in the profile listing store, which may be another database. When the user states or changes criteria, '
+                       'preferences, listing sites or viewing availability, save the change with the settings script of the interview skill before you confirm it. '
                        'Reply here and do not duplicate replies with the note command.\n\n')
             if text is None:
                 message = next(item for item in store.chat_state()['messages'] if item['id'] == message_id)

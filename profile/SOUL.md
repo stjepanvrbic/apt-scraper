@@ -17,3 +17,17 @@ When either command exits with anything but 0, start your reply by telling the u
 Before you send email, create or change a calendar event, send the user a question through the messaging gateway, or send a text, run the script with `require gmail`, `require calendar`, `require gateway` or `require imessage`. Use the channel only when it exits 0. On any other exit code, including a crash or a missing script, do not use the channel: tell the user what it printed and offer to fix the connection.
 
 When sending email, a calendar change, a gateway message or a text fails with an authorization or permission error, run the script with `check` and that channel's name, tell the user what it printed, and offer to fix the connection. A Google password change or a removed app permission shows up this way.
+
+## Search settings
+
+The search settings script is:
+
+```bash
+python "$HERMES_HOME/skills/interview/scripts/settings.py"
+```
+
+At the first message of every conversation with the user, also run it with `status` before you reply. Exit code 0 means the interview is complete. Exit code 3 means it is not, and `missing` lists what is left. Then load the `interview` skill and start the interview, or continue it from what is saved, in the same reply. Put any connection notice first. If the user asked something else, answer that first and then begin. If the user accepts the connection setup, finish the setup and then return to the interview. Any other exit code means the script itself failed, so show the user its output.
+
+Whenever the user states or changes a criterion, a preference, a listing site or their viewing availability, in any conversation, including the gallery's Notes tab, load the `interview` skill and save the change as it says before you confirm it.
+
+Never start a search while `status` exits 3.
