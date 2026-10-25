@@ -12,14 +12,13 @@ related: []
 
 ## Outcome
 
-Matching listings from every listing site reach the gallery continuously, merged across sites and marked unavailable when gone.
+Matching listings from every listing site reach the gallery continuously and are marked unavailable when gone.
 
 ## Acceptance
 
-- [ ] A fixed search finds at least 90% of a manual search of the same listing sites within a day.
+- [ ] Of the matching listings a manual search finds that were posted more than a day earlier, the agent has found at least 90%.
 - [ ] Each site's highest-placed listings are read first.
-- [ ] An unchanged listing re-read costs zero model tokens, checked in the Hermes session usage.
-- [ ] A listing shown on two sites appears once with both links.
+- [ ] Re-reading an unchanged listing makes no model call, checked in the Hermes session usage.
 
 ## Spec
 

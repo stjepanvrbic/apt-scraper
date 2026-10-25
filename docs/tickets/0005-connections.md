@@ -12,7 +12,7 @@ related: []
 
 ## Outcome
 
-The first run connects Gmail, Google Calendar, browser access and computer use, plus iMessage on macOS, and reports each connection's check.
+The first run connects Gmail, Google Calendar, a Hermes messaging gateway, and iMessage on macOS, and reports each connection's check.
 
 ## Acceptance
 
@@ -25,7 +25,7 @@ The first run connects Gmail, Google Calendar, browser access and computer use, 
 
 ## Design
 
-A Hermes setup skill the agent runs after install, using Hermes connectors for Google and the Hermes iMessage skill on macOS.
+A Hermes setup skill the agent runs after install, using Hermes connectors for Google, `hermes gateway setup` for the gateway and the Hermes iMessage skill on macOS.
 
 ## Deviations
 

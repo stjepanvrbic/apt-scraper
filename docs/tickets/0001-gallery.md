@@ -12,12 +12,13 @@ related: []
 
 ## Outcome
 
-The user browses listings in a local gallery with the five tabs, opens any listing in full, favorites it and adds notes.
+The user browses listings in a local gallery with the five tabs, opens any listing in full, favorites or dismisses it and adds notes.
 
 ## Acceptance
 
 - [ ] The five tabs appear in spec order and each listing shows every field the spec lists.
-- [ ] Favorite, unfavorite and add note persist across a gallery restart.
+- [ ] Rankings is a photo grid, and a listing opens to all its photos and details.
+- [ ] Favorite, unfavorite, dismiss and add note persist across a gallery restart, and a dismissed listing leaves Rankings and Favorites.
 - [ ] Source links open the original listings.
 - [ ] Hermes opens the gallery on request on Windows and macOS.
 

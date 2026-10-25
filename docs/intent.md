@@ -10,14 +10,14 @@ Finding an apartment means searching several listing sites again and again, comp
 - The user sees most of the listings that match those criteria on the listing sites they name, and the search keeps running so new listings appear while they are still available.
 - Listings are ranked by how well they fit the user. Each one shows the photos, price, description, location, amenities and a link to the original listing, so the user can judge it without opening the source site.
 - The ranking moves closer to the user's taste over time, learning from favorites, viewing notes and stated preferences across photos, price, description, location and amenities.
-- When the user asks to contact a listing, the agent reaches the listing agent by email or text, handles the correspondence, and books a viewing that appears on the user's Google Calendar. The user only has to show up.
+- When the user asks to contact a listing, the agent reaches the listing agent by email, text or the listing site's contact form, handles the correspondence, and books a viewing that appears on the user's Google Calendar. The user only has to show up.
 - After a viewing, the user records what they saw, and it feeds back into the ranking.
 - The user can change any part of the setup or the agent's behavior by talking to the agent.
 - A new user downloads the repository, runs the installer, connects their own accounts and has all of this working.
 
 ## Constraints
 
-- Runs on Windows and macOS. Texting goes through iMessage, which exists only on macOS, so on Windows correspondence is email only.
+- Runs on Windows and macOS. Texting goes through iMessage, which exists only on macOS, so Windows has no texting.
 - Every account is the user's own: a Claude subscription, Google (Gmail and Calendar) and, on macOS, iMessage. Many listing agents correspond only by text.
 - Listing sites detect and block automated access. The search must keep working without the user's accounts or network getting blocked.
 

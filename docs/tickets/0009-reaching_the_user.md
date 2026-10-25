@@ -1,7 +1,7 @@
 ---
 title: How does the agent reach the user outside the gallery?
 type: Decision
-state: Todo
+state: Done
 priority: 2
 assignee: Stjepan Vrbic
 milestone:
@@ -22,6 +22,12 @@ A listing agent asks for personal information or proposes a time while the galle
 
 ## Decision
 
+A Hermes messaging gateway such as Telegram.
+
 ## Reason
 
+Questions reach the user while the gallery is closed, and they stay apart from the user's own messages. The owner took the recommended option.
+
 ## Consequences
+
+Spec setup and Contact name the gateway. `0005` and `0006` acceptance updated.

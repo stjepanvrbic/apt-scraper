@@ -12,12 +12,13 @@ related: []
 
 ## Outcome
 
-Every available listing has a rank and a reason, and the ranking follows the user's favorites, notes and preferences.
+Every available listing has a rank and a reason, and the ranking follows the user's favorites, dismissals, notes and preferences.
 
 ## Acceptance
 
 - [ ] Every available listing shows a rank and a one-line reason.
-- [ ] After five similar favorites, unseen similar listings rank above dissimilar ones of similar price.
+- [ ] After the tester favorites five listings they consider alike, the unseen listings they judge alike rank above the rest of similar price.
+- [ ] Dismissing listings lowers similar listings.
 
 ## Spec
 
