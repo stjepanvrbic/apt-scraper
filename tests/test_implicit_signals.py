@@ -101,7 +101,29 @@ class SignalStoreTests(unittest.TestCase):
                 place_distances_km = '{"Work": 1.5}' WHERE listing_id = 'example:100' ''')
         before = old.code_features()
         migrated = ListingStore(path)
+        self.assertEqual(migrated.schema_version, 9)
+        with migrated.connect() as connection:
+            self.assertEqual(connection.execute('SELECT count(*) FROM reviews').fetchone()[0], 0)
         self.assertEqual(migrated.code_features(), before)
+        self.assertEqual(migrated.record_signals([event(migrated)]), 1)
+
+    def test_migration_preserves_waiting_review_from_version_eight(self):
+        path = self.path.parent / 'version-eight.sqlite3'
+        connection = sqlite3.connect(path)
+        snapshot = {'order': [], 'exploration': [], 'scores': [], 'held_out': {}}
+        with connection:
+            for migration in MIGRATIONS[:8]:
+                migration(connection)
+            connection.execute('PRAGMA user_version = 8')
+            connection.execute("INSERT INTO reranks VALUES (1, '2026-10-25T12:00:00+00:00', '{\"ranked\": 0}')")
+            connection.execute("INSERT INTO reviews VALUES (1, 'waiting', 0, '2026-10-25T12:00:00+00:00', ?, NULL)",
+                               (json.dumps(snapshot),))
+        connection.close()
+        migrated = ListingStore(path)
+        self.assertEqual(migrated.schema_version, 9)
+        self.assertEqual(migrated.last_rerank()['review']['state'], 'waiting')
+        self.assertEqual(migrated.review_snapshot(1), snapshot)
+        migrated.upsert_listing(listing())
         self.assertEqual(migrated.record_signals([event(migrated)]), 1)
 
 
@@ -141,6 +163,7 @@ class SignalRerankTests(StoreTestCase):
     def test_diagnostic_weak_labels_never_change_ranks_explanations_or_questions(self):
         identifiers = fill(self.store, 24, 4)
         before = rerank(self.store, seed=7)
+        snapshot = self.store.review_snapshot(before['id'])
         ranks = self.store.browse('Rankings')['items']
         explanation = self.store.listing(identifiers[10])['explanation']
         questions = pairwise_questions(self.store, 3)
@@ -150,6 +173,8 @@ class SignalRerankTests(StoreTestCase):
                                       event(self.store, 'dwell', duration_ms=1000 if index % 2 else 60000, **values),
                                       event(self.store, 'close', **values)])
         after = rerank(self.store, seed=7)
+        self.assertEqual((after['review']['state'], after['review']['attempts']), ('waiting', 0))
+        self.assertEqual(self.store.review_snapshot(after['id']), snapshot)
         self.assertEqual(self.store.browse('Rankings')['items'], ranks)
         self.assertEqual(self.store.listing(identifiers[10])['explanation'], explanation)
         self.assertEqual(pairwise_questions(self.store, 3), questions)

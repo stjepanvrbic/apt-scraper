@@ -102,6 +102,11 @@ def distances(connection):
     store_all_code_features(connection)
 
 
+def review_pass(connection):
+    connection.execute('CREATE TABLE reviews (rerank_id INTEGER PRIMARY KEY REFERENCES reranks(id), state TEXT NOT NULL, '
+                       'attempts INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, snapshot TEXT, result TEXT)')
+
+
 def implicit_signals(connection):
     connection.execute('''CREATE TABLE implicit_signals (
         event_id TEXT PRIMARY KEY, visit_id TEXT NOT NULL, listing_id TEXT NOT NULL REFERENCES listings(id),
@@ -113,7 +118,7 @@ def implicit_signals(connection):
     connection.execute('CREATE INDEX implicit_signals_listing_visit ON implicit_signals(listing_id, fingerprint, visit_id)')
 
 
-MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, implicit_signals)
+MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals)
 
 
 def migrate(connection):

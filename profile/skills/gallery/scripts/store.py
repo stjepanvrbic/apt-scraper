@@ -598,8 +598,10 @@ class ListingStore:
     def save_rerank(self, result):
         """Replaces the whole ranking in one transaction with a rerank's result: each listing in result['ranked']
         gets its rank, reason, explanation and exploration mark, each in result['unranked'] its reason without a rank,
-        and every other listing loses its rank, reason and explanation. The summary is kept as the latest rerank. An
-        entry whose listing changed meanwhile is left out, and the stale listing ids are returned and recorded."""
+        and every other listing loses its rank, reason and explanation. The summary is kept as the latest rerank, with
+        the ids of the entries left out because their listing changed meanwhile as `stale`. The rerank's review pass
+        waits from then on, with result['check'], the scores its leave-one-out check reads, and a review still waiting
+        for an earlier rerank is superseded. Returns the rerank's id."""
         with self.connect(write=True) as connection:
             current = dict(connection.execute('SELECT id, fingerprint FROM listings').fetchall())
             entries = [(identifier, entry['fingerprint'], entry['rank'], require_text(entry['reason'], 'Reason', limit=500),
@@ -614,15 +616,82 @@ class ListingStore:
                 ON CONFLICT(listing_id) DO UPDATE SET rank = excluded.rank, reason = excluded.reason, explanation = excluded.explanation,
                 exploration = excluded.exploration, features = CASE WHEN ranking.fingerprint = excluded.fingerprint THEN ranking.features END,
                 fingerprint = excluded.fingerprint''', fresh)
-            connection.execute('INSERT INTO reranks (finished_at, result) VALUES (?, ?)',
-                               (datetime.now(timezone.utc).isoformat(), json.dumps({**result['summary'], 'stale': stale}, ensure_ascii=False, allow_nan=False)))
-            return stale
+            now = datetime.now(timezone.utc).isoformat()
+            rerank_id = connection.execute('INSERT INTO reranks (finished_at, result) VALUES (?, ?)',
+                                           (now, json.dumps({**result['summary'], 'stale': stale}, ensure_ascii=False, allow_nan=False))).lastrowid
+            connection.execute("UPDATE reviews SET state = 'superseded', snapshot = NULL, updated_at = ? WHERE state IN ('waiting', 'running')", (now,))
+            connection.execute("INSERT INTO reviews (rerank_id, state, updated_at, snapshot) VALUES (?, 'waiting', ?, ?)",
+                               (rerank_id, now, json.dumps(result['check'], allow_nan=False)))
+            return rerank_id
 
     def last_rerank(self):
-        """The summary of the latest rerank with the time it finished, or None before the first."""
+        """The latest rerank as rerank describes it, or None before the first."""
+        return self.rerank(None)
+
+    def rerank(self, rerank_id):
+        """The summary of a rerank, the latest when rerank_id is None, with its id, the time it finished and its review
+        pass: the review's state, the times it was handed to the agent, when its state last changed, and its result once
+        it has one. The states are waiting, running (handed to the agent), done, failed and superseded (a later rerank
+        replaced it). None when there is no such rerank."""
         with self.connect() as connection:
-            row = connection.execute('SELECT * FROM reranks ORDER BY id DESC LIMIT 1').fetchone()
-            return {**json.loads(row['result']), 'finished_at': row['finished_at']} if row else None
+            row = connection.execute('SELECT r.*, v.state, v.attempts, v.updated_at, v.result AS review FROM reranks r '
+                                     'LEFT JOIN reviews v ON v.rerank_id = r.id WHERE ? IS NULL OR r.id = ? ORDER BY r.id DESC LIMIT 1',
+                                     (rerank_id, rerank_id)).fetchone()
+            if not row:
+                return None
+            review = {'state': row['state'], 'attempts': row['attempts'], 'updated_at': row['updated_at'],
+                      'result': json.loads(row['review']) if row['review'] else None} if row['state'] else None
+            return {**json.loads(row['result']), 'id': row['id'], 'finished_at': row['finished_at'], 'review': review}
+
+    def review_snapshot(self, rerank_id):
+        """The scores the leave-one-out check of a waiting review reads, as the rerank stored them, or None once the
+        review ended."""
+        with self.connect() as connection:
+            row = connection.execute('SELECT snapshot FROM reviews WHERE rerank_id = ?', (rerank_id,)).fetchone()
+            return json.loads(row['snapshot']) if row and row['snapshot'] else None
+
+    def ranked_listings(self):
+        """Each listing the latest rerank ranked whose content has not changed since: its rank, reason, explanation and
+        exploration mark, by id."""
+        with self.connect() as connection:
+            return {row['listing_id']: {'rank': row['rank'], 'reason': row['reason'], 'explanation': json.loads(row['explanation']),
+                                        'exploration': bool(row['exploration'])}
+                    for row in connection.execute('SELECT r.* FROM ranking r JOIN listings l ON l.id = r.listing_id AND l.fingerprint = r.fingerprint '
+                                                  'WHERE r.rank IS NOT NULL ORDER BY r.rank')}
+
+    def hand_review(self, rerank_id):
+        """Records that the review of a rerank was handed to the agent once more, and returns how many times it was, or
+        None when the review no longer waits, because a later rerank replaced it or it ended meanwhile."""
+        with self.connect(write=True) as connection:
+            if not connection.execute("UPDATE reviews SET state = 'running', attempts = attempts + 1, updated_at = ? "
+                                      "WHERE rerank_id = ? AND state IN ('waiting', 'running')",
+                                      (datetime.now(timezone.utc).isoformat(), rerank_id)).rowcount:
+                return None
+            return connection.execute('SELECT attempts FROM reviews WHERE rerank_id = ?', (rerank_id,)).fetchone()['attempts']
+
+    def fail_review(self, rerank_id, error):
+        """Ends a waiting review without a saved review, with the error saying why."""
+        with self.connect(write=True) as connection:
+            connection.execute("UPDATE reviews SET state = 'failed', snapshot = NULL, result = ?, updated_at = ? "
+                               "WHERE rerank_id = ? AND state IN ('waiting', 'running')",
+                               (json.dumps({'error': error}, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), rerank_id))
+
+    def save_review(self, rerank_id, ranks, reasons, result):
+        """Applies a saved review in one transaction: each listing in ranks gets its rank and each in reasons its
+        reason, and the review is done with result. A listing whose content changed since the rerank keeps no rank, as
+        after any rerank. Raises ValueError when a later rerank replaced the review or it ended."""
+        with self.connect(write=True) as connection:
+            review = connection.execute('SELECT state FROM reviews WHERE rerank_id = ?', (rerank_id,)).fetchone()
+            if not review or review['state'] not in ('waiting', 'running'):
+                raise ValueError(f'The review of rerank {rerank_id} no longer waits: a later rerank replaced it or it ended.')
+            current = {row['listing_id'] for row in connection.execute(
+                'SELECT r.listing_id FROM ranking r JOIN listings l ON l.id = r.listing_id AND l.fingerprint = r.fingerprint WHERE r.rank IS NOT NULL')}
+            connection.executemany('UPDATE ranking SET rank = ? WHERE listing_id = ?',
+                                   [(rank, identifier) for identifier, rank in ranks.items() if identifier in current])
+            connection.executemany('UPDATE ranking SET reason = ? WHERE listing_id = ?',
+                                   [(require_text(reason, 'Reason', limit=500), identifier) for identifier, reason in reasons.items() if identifier in current])
+            connection.execute("UPDATE reviews SET state = 'done', snapshot = NULL, result = ?, updated_at = ? WHERE rerank_id = ?",
+                               (json.dumps(result, ensure_ascii=False, allow_nan=False), datetime.now(timezone.utc).isoformat(), rerank_id))
 
     def reading_vocabulary(self, connection=None):
         """The features a reading may name: those of the feature record, the code features, the criteria areas and the

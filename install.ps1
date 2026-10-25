@@ -112,6 +112,10 @@ if (-not (Invoke-Native $hermes @('-p', $ProfileName, 'config', 'get', 'delegati
 }
 Invoke-Checked $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-features')
 
+# The ranking review job checks every minute whether a rerank's review pass waits, and wakes the model only then.
+Write-Step 'Ranking review job'
+Invoke-Checked $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-review')
+
 Write-Step 'Claude subscription provider plugin'
 Invoke-Checked $hermes @('-p', $ProfileName, 'plugins', 'install', $PluginName, '--force', '--enable')
 
