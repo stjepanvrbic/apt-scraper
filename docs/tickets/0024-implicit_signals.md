@@ -1,9 +1,9 @@
 ---
 title: Implicit signals recorded by the gallery
 type: Feature
-state: Todo
+state: In Progress
 priority: 4
-assignee:
+assignee: agent
 milestone:
 parent: 0015
 blocked_by: []
