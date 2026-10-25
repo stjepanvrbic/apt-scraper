@@ -16,6 +16,7 @@ from code_features import FEATURES, store_code_features
 from schema import content_fingerprint, migrate
 from queries import browse, snapshot, validate_page
 from record import SEED_TAGS, known_spelling, validate_extraction, validate_judgments
+from scoring import reading_vocabulary, stated_phrases, validate_note_reading, validate_preference_reading
 
 
 UNCHANGED = object()
@@ -28,6 +29,7 @@ PREFERENCES = ('likes', 'dislikes')
 PLACE_FIELDS = ('name', 'address', 'travel_mode', 'longest_trip_minutes', 'visits_per_week')
 TRAVEL_MODES = ('walk', 'bike', 'transit', 'car')
 IMPORTANCE = ('low', 'medium', 'high')
+READ_ATTEMPTS = 3
 
 
 class TimeZoneDataMissing(RuntimeError):
@@ -285,6 +287,11 @@ def validate_agent(agent):
             require_url(value)
 
 
+def extraction_read(listing_id, fingerprint):
+    """The model_reads key of the extraction of one listing content."""
+    return json.dumps(['extraction', listing_id, fingerprint])
+
+
 def apply_criteria(connection, judge):
     row = connection.execute("SELECT value FROM settings WHERE name = 'criteria'").fetchone()
     if not row:
@@ -426,7 +433,9 @@ class ListingStore:
             connection.execute('''INSERT INTO ranking (listing_id, fingerprint, features) VALUES (?, ?, ?)
                 ON CONFLICT(listing_id) DO UPDATE SET fingerprint = excluded.fingerprint, features = excluded.features,
                 rank = CASE WHEN ranking.fingerprint = excluded.fingerprint THEN ranking.rank END,
-                reason = CASE WHEN ranking.fingerprint = excluded.fingerprint THEN ranking.reason END''', (listing_id, fingerprint, features))
+                reason = CASE WHEN ranking.fingerprint = excluded.fingerprint THEN ranking.reason END,
+                explanation = CASE WHEN ranking.fingerprint = excluded.fingerprint THEN ranking.explanation END,
+                exploration = ranking.exploration AND ranking.fingerprint = excluded.fingerprint''', (listing_id, fingerprint, features))
             store_code_features(connection, listing_id)
 
     def features(self, listing_id):
@@ -444,6 +453,165 @@ class ListingStore:
                                         'days_since_first_seen': (today - date.fromisoformat(row['first_seen'])).days}
                     for row in connection.execute('''SELECT c.*, l.first_seen FROM code_features c
                         JOIN listings l ON l.id = c.listing_id AND l.fingerprint = c.fingerprint ORDER BY c.listing_id''')}
+
+    def ranking_inputs(self):
+        """Everything a rerank reads, from one snapshot of the store: each listing with its current feature record or
+        None, its judgments of stated preferences, its code-derived features, the criteria areas whose search found it
+        or None, whether extraction gave up on it, whether it is ranked (available, inside the criteria and not
+        dismissed), its rank from the latest rerank when its content has not changed since, and the user's actions on it; the settings; the readings of the stated preferences by (kind,
+        phrase) and of the user's notes by note id; each listing's latest note sentiment; and the pairwise answers as
+        (chosen, other)."""
+        with self.connect() as connection:
+            connection.execute('BEGIN')
+            settings = {row['name']: json.loads(row['value']) for row in connection.execute('SELECT * FROM settings')}
+            attempts = {row['read']: row['attempts'] for row in connection.execute('SELECT * FROM model_reads')}
+            records = {row['listing_id']: row for row in connection.execute(
+                'SELECT r.* FROM feature_records r JOIN listings l ON l.id = r.listing_id AND l.fingerprint = r.fingerprint')}
+            code = {row['listing_id']: dict(row) for row in connection.execute(
+                'SELECT c.* FROM code_features c JOIN listings l ON l.id = c.listing_id AND l.fingerprint = c.fingerprint')}
+            ranking = {row['listing_id']: row for row in connection.execute(
+                'SELECT r.* FROM ranking r JOIN listings l ON l.id = r.listing_id AND l.fingerprint = r.fingerprint')}
+            facts = {identifier: json.loads(row['features']).get('facts', {}) for identifier, row in ranking.items() if row['features']}
+            feedback = {row['listing_id']: row for row in connection.execute('SELECT * FROM feedback')}
+            contacts = {row['listing_id'] for row in connection.execute('SELECT listing_id FROM contacts')}
+            noted = {row['listing_id'] for row in connection.execute("SELECT DISTINCT listing_id FROM notes WHERE role = 'user'")}
+            note_readings = {row['note_id']: (row['listing_id'], json.loads(row['reading'])) for row in connection.execute(
+                'SELECT r.*, n.listing_id FROM note_readings r JOIN notes n ON n.id = r.note_id ORDER BY r.note_id')}
+            preference_readings = {(row['kind'], row['phrase']): json.loads(row['features'])
+                                   for row in connection.execute('SELECT * FROM preference_readings')}
+            pairs = [(row['chosen'], row['other']) for row in connection.execute('SELECT chosen, other FROM pairwise_answers ORDER BY id')]
+            paired = {identifier for pair in pairs for identifier in pair}
+            listings = []
+            for row in connection.execute('SELECT * FROM listings ORDER BY id'):
+                data, identifier = json.loads(row['data']), row['id']
+                record = records.get(identifier)
+                choice = feedback.get(identifier)
+                dismissed = bool(choice and choice['dismissed'])
+                listings.append({
+                    'id': identifier, 'fingerprint': row['fingerprint'], 'title': data.get('title'), 'address': data.get('address'),
+                    'rankable': row['status'] == 'available' and bool(row['matches_criteria']) and not dismissed,
+                    'record': json.loads(record['extraction']) if record else None,
+                    'judgments': json.loads(record['preferences']) if record else {},
+                    'code': code.get(identifier, {}),
+                    'areas': facts[identifier].get('areas') if identifier in facts else None,
+                    'given_up': not record and attempts.get(extraction_read(identifier, row['fingerprint']), 0) >= READ_ATTEMPTS,
+                    'rank': ranking[identifier]['rank'] if identifier in ranking else None,
+                    'favorite': bool(choice and choice['favorite']), 'dismissed': dismissed, 'contact': identifier in contacts,
+                    'user_notes': identifier in noted, 'paired': identifier in paired,
+                })
+        return {'listings': listings, 'settings': settings, 'preference_readings': preference_readings,
+                'note_readings': {note: reading for note, (_, reading) in note_readings.items()},
+                'sentiments': {listing_id: reading['sentiment'] for listing_id, reading in note_readings.values()}, 'pairs': pairs}
+
+    def save_rerank(self, result):
+        """Replaces the whole ranking in one transaction with a rerank's result: each listing in result['ranked']
+        gets its rank, reason, explanation and exploration mark, each in result['unranked'] its reason without a rank,
+        and every other listing loses its rank, reason and explanation. The summary is kept as the latest rerank. An
+        entry whose listing changed meanwhile is left out, and the stale listing ids are returned and recorded."""
+        with self.connect(write=True) as connection:
+            current = dict(connection.execute('SELECT id, fingerprint FROM listings').fetchall())
+            entries = [(identifier, entry['fingerprint'], entry['rank'], require_text(entry['reason'], 'Reason', limit=500),
+                        json.dumps(entry['explanation'], ensure_ascii=False, allow_nan=False), int(entry['exploration']))
+                       for identifier, entry in result['ranked'].items()]
+            entries += [(identifier, entry['fingerprint'], None, require_text(entry['reason'], 'Reason', limit=500), None, 0)
+                        for identifier, entry in result['unranked'].items()]
+            stale = sorted(entry[0] for entry in entries if current.get(entry[0]) != entry[1])
+            fresh = [entry for entry in entries if entry[0] not in stale]
+            connection.execute('UPDATE ranking SET rank = NULL, reason = NULL, explanation = NULL, exploration = 0')
+            connection.executemany('''INSERT INTO ranking (listing_id, fingerprint, rank, reason, explanation, exploration) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(listing_id) DO UPDATE SET rank = excluded.rank, reason = excluded.reason, explanation = excluded.explanation,
+                exploration = excluded.exploration, features = CASE WHEN ranking.fingerprint = excluded.fingerprint THEN ranking.features END,
+                fingerprint = excluded.fingerprint''', fresh)
+            connection.execute('INSERT INTO reranks (finished_at, result) VALUES (?, ?)',
+                               (datetime.now(timezone.utc).isoformat(), json.dumps({**result['summary'], 'stale': stale}, ensure_ascii=False, allow_nan=False)))
+            return stale
+
+    def last_rerank(self):
+        """The summary of the latest rerank with the time it finished, or None before the first."""
+        with self.connect() as connection:
+            row = connection.execute('SELECT * FROM reranks ORDER BY id DESC LIMIT 1').fetchone()
+            return {**json.loads(row['result']), 'finished_at': row['finished_at']} if row else None
+
+    def reading_vocabulary(self, connection=None):
+        """The features a reading may name: those of the feature record, the code features and the criteria areas."""
+        if connection is None:
+            with self.connect() as connection:
+                return self.reading_vocabulary(connection)
+        criteria = connection.execute("SELECT value FROM settings WHERE name = 'criteria'").fetchone()
+        return reading_vocabulary(sorted(self.known_tags(connection)), json.loads(criteria['value']).get('location', []) if criteria else [])
+
+    def unread_notes(self):
+        """The user's notes without a reading, oldest first, with the title of their listing."""
+        with self.connect() as connection:
+            return [dict(row) for row in connection.execute('''SELECT n.id, n.listing_id, n.text, n.created_at,
+                COALESCE(json_extract(l.data, '$.title'), json_extract(l.data, '$.address'), l.id) AS listing
+                FROM notes n JOIN listings l ON l.id = n.listing_id LEFT JOIN note_readings r ON r.note_id = n.id
+                WHERE n.role = 'user' AND r.note_id IS NULL ORDER BY n.id''')]
+
+    def unread_preferences(self):
+        """The stated likes and dislikes without a reading of their current wording, as (kind, phrase)."""
+        with self.connect() as connection:
+            settings = {row['name']: json.loads(row['value']) for row in connection.execute('SELECT * FROM settings')}
+            read = {(row['kind'], row['phrase']) for row in connection.execute('SELECT kind, phrase FROM preference_readings')}
+        return [item for item in stated_phrases(settings) if item not in read]
+
+    def preference_readings(self):
+        with self.connect() as connection:
+            return {(row['kind'], row['phrase']): json.loads(row['features']) for row in connection.execute('SELECT * FROM preference_readings')}
+
+    def note_readings(self):
+        with self.connect() as connection:
+            return {row['note_id']: json.loads(row['reading']) for row in connection.execute('SELECT * FROM note_readings')}
+
+    def save_readings(self, *, notes=(), preferences=()):
+        """Stores the model's readings, all in one transaction or none: notes as (note id, {sentiment, likes,
+        dislikes}) for notes by the user, preferences as (kind, phrase, features) for the stated likes and dislikes,
+        each feature {feature, direction}. Features must be in the reading vocabulary."""
+        with self.connect(write=True) as connection:
+            vocabulary = self.reading_vocabulary(connection)
+            settings = {row['name']: json.loads(row['value']) for row in connection.execute('SELECT * FROM settings')}
+            stated = set(stated_phrases(settings))
+            now = datetime.now(timezone.utc).isoformat()
+            rows = []
+            for kind, phrase, features in preferences:
+                if (kind, phrase) not in stated:
+                    raise ValueError(f'"{phrase}" is not a stated {kind}.')
+                try:
+                    rows.append((kind, phrase, json.dumps(validate_preference_reading(features, vocabulary), ensure_ascii=False), now))
+                except ValueError as error:
+                    raise ValueError(f'The reading of "{phrase}": {error}') from None
+            readings = []
+            for note_id, reading in notes:
+                note = connection.execute('SELECT role FROM notes WHERE id = ?', (note_id,)).fetchone()
+                if not note or note['role'] != 'user':
+                    raise ValueError(f'Note {note_id} is not a note by the user.')
+                try:
+                    readings.append((note_id, json.dumps(validate_note_reading(reading, vocabulary), ensure_ascii=False), now))
+                except ValueError as error:
+                    raise ValueError(f'The reading of note {note_id}: {error}') from None
+            connection.executemany('''INSERT INTO preference_readings VALUES (?, ?, ?, ?) ON CONFLICT(kind, phrase)
+                DO UPDATE SET features = excluded.features, read_at = excluded.read_at''', rows)
+            connection.executemany('''INSERT INTO note_readings VALUES (?, ?, ?) ON CONFLICT(note_id)
+                DO UPDATE SET reading = excluded.reading, read_at = excluded.read_at''', readings)
+
+    def answer_pair(self, chosen, other):
+        """Records the user's answer to a pairwise question: chosen over other."""
+        if chosen == other:
+            raise ValueError('A pairwise answer compares two different listings.')
+        with self.connect(write=True) as connection:
+            self.require_listing(connection, chosen)
+            self.require_listing(connection, other)
+            connection.execute('INSERT INTO pairwise_answers (chosen, other, answered_at) VALUES (?, ?, ?)',
+                               (chosen, other, datetime.now(timezone.utc).isoformat()))
+
+    def pairwise_answers(self):
+        with self.connect() as connection:
+            return [(row['chosen'], row['other']) for row in connection.execute('SELECT chosen, other FROM pairwise_answers ORDER BY id')]
+
+    def given_up_extractions(self):
+        """The listings whose current content failed extraction READ_ATTEMPTS times and has no record. The ranking ranks
+        them from their code features."""
+        return {listing['id'] for listing in self.ranking_inputs()['listings'] if listing['given_up']}
 
     def rank(self, listing_id, fingerprint, rank, reason):
         if type(rank) is not int or rank < 1:
@@ -550,6 +718,8 @@ class ListingStore:
             listing['matches_criteria'] = bool(row['matches_criteria'])
             ranking = connection.execute('SELECT * FROM ranking WHERE listing_id = ?', (listing_id,)).fetchone()
             listing.update(rank=ranking['rank'] if ranking else None, reason=ranking['reason'] if ranking else None,
+                           explanation=json.loads(ranking['explanation']) if ranking and ranking['explanation'] else None,
+                           exploration=bool(ranking and ranking['exploration']),
                            content_fingerprint=row['fingerprint'], analysis_current=bool(ranking and ranking['fingerprint'] == row['fingerprint']))
             feedback = connection.execute('SELECT * FROM feedback WHERE listing_id = ?', (listing_id,)).fetchone()
             listing.update(favorite=bool(feedback and feedback['favorite']), dismissed=bool(feedback and feedback['dismissed']))

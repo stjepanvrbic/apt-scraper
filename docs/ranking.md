@@ -1,6 +1,6 @@
 # Listing ranking
 
-The ranking learns the user's taste from a feature record of every listing. A record holds what a model read once from all the listing's photos and its text, and what code computes from the listing. This guide describes how records are made. Scoring and reranks build on them.
+The ranking learns the user's taste from a feature record of every listing. A record holds what a model read once from all the listing's photos and its text, and what code computes from the listing. This guide describes how records are made, how notes and stated preferences are read into the features they name, and how a rerank fits the scoring model on them.
 
 ## Extraction
 
@@ -26,7 +26,7 @@ The run finds the listings waiting for a record and prepares each one, for at mo
 
 A listing with a photo that cannot be downloaded for any other reason, such as a timeout, a block or a server error, is not prepared and waits for the next run, without counting as a failed extraction. After an hour of such failures, the next run extracts the listing without the failing photos, when any other photo loads. A listing none of whose photos loads for an hour stays waiting, and `features.py status` reports it with the time and reason. The prepared files live in `extraction/` next to the listing store, one directory per listing content. A run reuses a directory prepared earlier for the same content and preferences, and removes directories no waiting listing needs.
 
-When a listing or a preference waits, the run prints one task per prepared listing, grouped into `delegate_task` calls the agent makes in order, and Hermes starts the agent with the report. While the store has fewer than 5 records, each call holds one task, so each of the first extractions sees the tags the ones before it added. The rest run 10 to a call, Hermes's default `delegation.max_concurrent_children`. Otherwise the report's last line is `{"wakeAgent": false}` and Hermes ends the run without a model call. A run never fails, because Hermes would start the agent to report the failure: an exception is recorded in `features.json` next to the listing store, and `features.py status` reports it.
+When a listing or a preference waits, the run prints one task per prepared listing, grouped into `delegate_task` calls the agent makes in order, and Hermes starts the agent with the report. While the store has fewer than 5 records, each call holds one task, so each of the first extractions sees the tags the ones before it added. The rest run 10 to a call, Hermes's default `delegation.max_concurrent_children`. A wake holds at most 50 extractions, because Hermes blocks `delegate_task` once one turn has spawned 50 subagents (`tool_loop_guardrails.loop_caps.max_subagents` in `hermes_cli/config_defaults.py`), which would end the wake before its readings and judgments. The rest wait for the next run. Otherwise the report's last line is `{"wakeAgent": false}` and Hermes ends the run without a model call. A run never fails, because Hermes would start the agent to report the failure: an exception is recorded in `features.json` next to the listing store, and `features.py status` reports it.
 
 ### The extraction subagent
 
@@ -76,6 +76,75 @@ Saving normalizes each trait and concern: lowercase with single spaces, the last
 
 Code computes what it reads reliably from the listing, such as the monthly price, size, unit level from unit labels and coordinates, whenever its content is saved, without a model call. They are in the store's `code_features` table, apart from the extraction, so neither overwrites the other. See `code_features` in [the gallery guide](gallery.md).
 
+## Readings of notes and preferences
+
+The scoring model learns through the features of the record, so each note the user writes on a listing and each stated like and dislike is read once by the model into the features it names. A stated preference is read into the record features that express it, each with a direction: the dislike "Carpet" is `floor:carpet` disliked. A preference no feature expresses, such as "Near a park", is read as naming none and is then judged per listing, as [Preferences](#preferences) says. A note is read into its sentiment about the listing, positive, negative, mixed or neutral, and the features it praises and criticizes.
+
+The readings run in the wakes of the `apt-scraper-features` job: its run counts the notes and preferences without a reading and wakes the agent for them, and the agent reads them with `features.py readings` and saves them with `features.py read`, as the [listing-features skill](../profile/skills/listing-features/SKILL.md) says. A preference is identified by its kind and wording, so a reworded preference is read again and an unchanged one never. A note is read once. A reading that fails three times is given up, as extractions are, and `status` reports it. Readings are in the store's `preference_readings` and `note_readings` tables, checked against the vocabulary below by `validate_preference_reading` and `validate_note_reading` in `scoring.py`.
+
+The vocabulary a reading may name: `rating:<rating>` (toward 5), `floor:`, `style:`, `outdoor_space:` and `building_type:` with a value, `unit_level:` with garden, ground, middle or top, `flag:<flag>`, `tag:<tag>` for any tag of the tag list, `price`, `size`, `price_per_sqft`, `bedrooms`, `bathrooms` (toward more), and `area:<area>` for each area of the criteria.
+
+## Scoring
+
+### Reranks
+
+Ranks change only on a rerank, which the user starts with Score and rerank in the gallery or by asking the agent. Both call `rerank(store, seed=None)` in `profile/skills/gallery/scripts/rerank.py`, which the ranking skill's `ranking.py rerank` runs. No scheduled job reranks. A rerank reads the store once (`ListingStore.ranking_inputs`), fits the scoring model in `scoring.py`, which is pure code with the standard library only, and writes every rank, reason, explanation and exploration mark, and the rerank's summary, in one transaction (`ListingStore.save_rerank`). It calls no model.
+
+It ranks every listing shown in Rankings that has a feature record of its current content, and every one extraction gave up on, from its code-derived features alone, with a reason that says so. A shown listing waiting for its record gets no rank and the reason "Not ranked yet: waiting for its feature record." A listing that changes after the rerank keeps no rank until the next one. Among listings of equal score the listing id decides, so a rerank is reproducible apart from the exploration listings.
+
+On this Windows machine, 300 listings with 50 favorites and about 180 features rerank in about 1.4 seconds, store read and write included (`test_spec_rerank_timing_with_300_listings_and_50_favorites` in `tests/test_rerank.py`).
+
+### Features
+
+`design` in `scoring.py` turns each listing into columns:
+
+| Columns | From | Value |
+| --- | --- | --- |
+| `rating:<rating>` | the record's 12 ratings | the value shrunk toward the mean by its confidence, `mean + confidence × (value − mean)` |
+| `rating_not_shown:<rating>` | the same | 1 when the rating is "not shown" |
+| `floor:`, `style:`, `outdoor_space:`, `building_type:` | the record's categories | one column per value, 1 for the listing's |
+| `unit_level:garden`, `ground`, `middle`, `top` | the code features' level from the unit label, otherwise the record's | one column per level |
+| `flag:<flag>` | the record's flags | 1 true, 0 false |
+| `tag:<tag>` | the record's traits and concerns | 1 when the listing has it, for tags at least 2 listings have or a reading names |
+| `price`, `size`, `price_per_sqft`, `bedrooms`, `bathrooms`, `photos` | the code features | log monthly price, log size, the others as they are |
+| `area:<area>` | the criteria areas whose search found the listing | 1 for each |
+| `near_favorites` | the coordinates | the mean Gaussian kernel, 1 km wide, of the favorites other than the listing itself. A mean, because a favorite has one favorite fewer to be near than any other listing, and a sum would count that against favorites |
+| `preference:<phrase>` | the judgments of each stated preference read as naming no feature, or not read yet | 1 has, 0 rules out |
+
+Days since first seen is not a feature: a favorite's age at rerank time says when the user favorited it, not what they like.
+
+Numeric columns are centered and scaled to standard deviation 0.5, binary columns centered (Gelman et al. 2008, "A weakly informative default prior distribution for logistic and other regression models"). A value the listing does not state, such as a flag that is null, a category or rating "not shown", a size not given or a "does not say", is the column mean, so it counts neither way. A column with one value across the listings is left out.
+
+### The model
+
+A Bayesian logistic regression. Each listing in the fit is a row: a favorite is positive with weight 1, a contact request positive with weight 2, a dismissal negative with weight 1, and a listing whose latest note reading is positive or negative is labeled so, unless an action labels it. Every other ranked listing is a weak negative with a small weight. Each pairwise answer is a row on the two listings' difference, the chosen one above. Labeled listings that are no longer shown, such as an unavailable favorite, stay in the fit.
+
+The prior on each weight is Gaussian with the same scale for all. Its mean is zero except where a reading names the feature: a stated like or dislike adds 1 or −1 to the features its reading names (or to its `preference:` column), a note's like or dislike adds 0.5 or −0.5, capped at ±2. Each area of the criteria starts at 1, 0.5 or 0.25 for high, medium or low priority, and `near_favorites` at the highest area priority. Labels can outweigh any of them: with the dislike "Carpet" and five carpeted favorites, the carpet weight becomes positive (`OverruledPreferenceTests` in `tests/test_scoring.py`).
+
+Newton iterations with step halving find the posterior mode, and the Hessian there gives the Laplace posterior. The weak-negative weight is chosen among 0.05 and 0.1, then the prior scale among 1, 0.5 and 2, by the leave-one-out check below, each time the value with the best mean held-out rank of the favorites, the first on a tie. The choice uses one Newton step from each full fit, the usual approximate leave-one-out. With fewer than 3 favorites, the scale is 1 and the weight 0.05.
+
+Most listings have few of the many tags, so the likelihood keeps tags and "not shown" columns uncentered and sparse, and the intercept's prior is nearly flat, so this changes no weight but the intercept.
+
+### Explanations
+
+A listing's score is the sum of its contributions `w_j (x_j − mean_j)`, exact for a linear model. Its stored explanation lists every column's contribution, largest first, with the value as its record states it, such as "natural light 5 of 5" or "garden unit (unit label G)", and the favorite it most resembles: the one whose contributions differ least from its own. Its one-line reason names the three largest contributions for it and the two largest against it whose value the record states, then that favorite: "For it: garden unit (unit label G), exposed brick, natural light 5 of 5. Against it: 2,450 USD a month. Most like your favorite 2650 N Kedzie Ave."
+
+### The leave-one-out check
+
+For each favorite, the model is fitted again without its labels and pairwise answers and with `near_favorites` computed without it. The refit starts from the full fit and uses the full fit's Hessian with the favorite's rows taken out (the Woodbury identity) until its steps are below 10⁻⁶. The favorite's held-out rank is one plus the number of ranked listings that are not favorites and score above it. The rerank's summary stores every held-out rank, their median and mean, and `ranking.py status` prints them. A favorite with a poor held-out rank is one the others do not explain, which points to a feature the record lacks.
+
+### Exploration
+
+With more than 20 ranked listings, ranks 7 and 14 hold exploration listings, marked in the store's `ranking.exploration` and in their reason ("Shown to learn your taste."). Each is drawn by posterior sampling: weights drawn from the Laplace posterior pick the highest-scoring listing outside the top 18 by posterior mean that has no label from the user, no favorite, dismissal, contact request, note or pairwise answer. The draws come from the rerank's seed, recorded in its summary, so a rerank with the same seed is reproducible, and with 20 or fewer ranked listings no seed changes anything.
+
+### Pairwise questions
+
+`pairwise_questions(store, count)` in `rerank.py` fits the model with the latest rerank's prior scale and weak-negative weight and returns pairs among the 40 best-ranked listings whose order the posterior is least sure of: the probability that one scores above the other, from the Laplace posterior, is closest to one half. Each listing is in at most one question, and a pair answered either way is not asked again. Answers are stored with `ListingStore.answer_pair(chosen, other)` and count at the next rerank. Before any label, the posterior is the prior from the stated preferences.
+
+### Location features still to come
+
+Distance to rapid transit and travel time to each place join as columns like `near_favorites`, with prior means from the location priorities: the code features gain the values, `raw_values` in `scoring.py` maps them to columns, and `prior_means` gives a place beyond its longest accepted trip a negative starting weight by the place's priority.
+
 ## Commands
 
 ```bash
@@ -84,10 +153,16 @@ python "$HERMES_HOME/skills/listing-features/scripts/features.py" tags
 python "$HERMES_HOME/skills/listing-features/scripts/features.py" preferences
 python "$HERMES_HOME/skills/listing-features/scripts/features.py" judge "$HERMES_HOME/cache/scratch/judgments.json"
 python "$HERMES_HOME/skills/listing-features/scripts/features.py" save "$HERMES_HOME/cache/scratch/extraction-<listing>.json"
+python "$HERMES_HOME/skills/listing-features/scripts/features.py" readings
+python "$HERMES_HOME/skills/listing-features/scripts/features.py" read "$HERMES_HOME/cache/scratch/readings.json"
 python "$HERMES_HOME/skills/listing-features/scripts/features.py" retry
+python "$HERMES_HOME/skills/ranking/scripts/ranking.py" rerank
+python "$HERMES_HOME/skills/ranking/scripts/ranking.py" status
+python "$HERMES_HOME/skills/ranking/scripts/ranking.py" explain "<listing id>"
+python "$HERMES_HOME/skills/ranking/scripts/ranking.py" questions --count 8
 ```
 
-`run` is the cron job's command. `save` is the subagent's. Every command but `run` needs only the Python standard library.
+`run` is the cron job's command. `save` is the subagent's. Every command but `run` needs only the Python standard library, and so does `ranking.py`.
 
 ## Checks
 
@@ -96,4 +171,4 @@ python -m unittest discover -s tests -v
 ruff check profile tests
 ```
 
-`tests/test_feature_record.py` covers the record contract, `tests/test_listing_photos.py` the duplicate removal and the contact sheets on a 40-photo fixture, `tests/test_feature_store.py` the store, and `tests/test_features_run.py` the job against real SQLite stores: which listings wait, preparation, saving through the command line, preferences stated later, attempts, failures and the shipped job.
+`tests/test_feature_record.py` covers the record contract, `tests/test_listing_photos.py` the duplicate removal and the contact sheets on a 40-photo fixture, `tests/test_feature_store.py` the store, and `tests/test_features_run.py` the job against real SQLite stores: which listings wait, preparation, saving through the command line, preferences stated later, readings, attempts, failures and the shipped job. `tests/test_scoring.py` covers the scoring model on constructed listings, among them Spec › Acceptance "Overruled preference", "Exploration" and a single pairwise answer, and `tests/test_rerank.py` reranks against real SQLite stores, the 300-listing timing and the ranking script.
