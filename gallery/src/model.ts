@@ -2,7 +2,7 @@ export type Note = { id: number; text: string; role: 'user' | 'agent'; created_a
 export type ListingSummary = {
   id: string; title: string | null; price: number | null; price_note: string | null; currency: string | null; rental_period: string | null; size: string | null; rooms: string | null;
   address: string | null; photos: string[]; first_seen: string; status: 'available' | 'unavailable';
-  rank: number | null; reason: string | null; analysis_current: boolean; exploration: boolean; favorite: boolean; dismissed: boolean;
+  rank: number | null; reason: string | null; exploration: boolean; favorite: boolean; dismissed: boolean;
   contact: { status: 'pending' | 'in_progress' | 'contacted' | 'failed' | 'closed'; channel: string | null; error: string | null } | null;
   correspondence: { id: number; direction: 'incoming' | 'outgoing'; channel: string; text: string; created_at: string }[];
   correspondence_total: number;

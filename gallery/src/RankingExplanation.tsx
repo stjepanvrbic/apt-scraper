@@ -2,9 +2,12 @@ import { Accordion, Anchor, Badge, Group, Paper, Stack, Table, Text, Title } fro
 import { IconCompass } from '@tabler/icons-react';
 import type { Listing } from './model';
 
+function OpenStreetMapCredit() {
+  return <Text size="xs" c="dimmed">© <Anchor href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer" size="xs" c="inherit">OpenStreetMap contributors</Anchor></Text>;
+}
+
 export function DistanceAttribution({ text }: { text: string | null }) {
-  return text && /\b\d+(?:[.,]\d+)?\s*(?:km|kilomet(?:er|re)s?|mi|miles?|met(?:er|re)s?)\b/i.test(text) ?
-    <Text size="xs" c="dimmed">© <Anchor href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer" size="xs" c="inherit">OpenStreetMap contributors</Anchor></Text> : null;
+  return text && /\b\d+(?:[.,]\d+)?\s*(?:km|kilomet(?:er|re)s?|mi|miles?|met(?:er|re)s?)\b/i.test(text) ? <OpenStreetMapCredit /> : null;
 }
 
 export function Exploration() {
@@ -34,7 +37,7 @@ export function RankingExplanation({ listing }: { listing: Listing }) {
                 <Table.Thead><Table.Tr><Table.Th>Feature and recorded value</Table.Th><Table.Th ta="right">Contribution</Table.Th></Table.Tr></Table.Thead>
                 <Table.Tbody>{explanation.contributions.map(part => <Table.Tr key={part.feature}>
                   <Table.Td><Text size="sm" fw={500}>{part.feature.replaceAll('_', ' ').replaceAll(':', ': ')}</Text>
-                    <Text size="xs" c="dimmed">{part.value ?? 'No recorded value'}</Text><DistanceAttribution text={part.value} /></Table.Td>
+                    <Text size="xs" c="dimmed">{part.value ?? 'No recorded value'}</Text>{part.feature.startsWith('place:') && <OpenStreetMapCredit />}</Table.Td>
                   <Table.Td ta="right"><Text size="sm" className="score-number" c={part.contribution > 0 ? 'var(--mantine-color-green-light-color)' : part.contribution < 0 ? 'red.9' : 'dimmed'}>{signed(part.contribution)}</Text></Table.Td>
                 </Table.Tr>)}</Table.Tbody>
               </Table>

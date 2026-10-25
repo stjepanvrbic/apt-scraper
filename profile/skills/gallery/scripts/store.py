@@ -302,8 +302,6 @@ def explain_pending_rankings(connection, listings):
         else:
             reason = 'Not ranked yet: waiting for its feature record.'
         listing.update(rank=None, reason=reason, exploration=False)
-        if 'explanation' in listing:
-            listing['explanation'] = None
 
 
 def apply_criteria(connection, judge):
@@ -961,6 +959,8 @@ class ListingStore:
                     f'SELECT * FROM {key} WHERE listing_id = ? ORDER BY {order} LIMIT 50 OFFSET ?', (listing_id, (page - 1) * 50))]
                 listing[key] = rows if key == 'viewings' else list(reversed(rows))
             explain_pending_rankings(connection, [listing])
+            if listing['rank'] is None:
+                listing['explanation'] = None
             return listing
 
     def state(self):

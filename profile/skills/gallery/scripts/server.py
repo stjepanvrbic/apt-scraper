@@ -147,15 +147,15 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                         self.reply(409, {'error': 'Scoring is already running. Wait for the new ranking.'})
                         return
                     try:
-                        try:
-                            result = rerank(store)
-                        finally:
-                            rerank_lock.release()
+                        result = rerank(store)
                     except Exception:
-                        self.reply(500, {'error': 'Could not score the listings. Try again. Check the gallery log if this continues.'})
                         traceback.print_exc()
-                        return
-                    self.reply(200, result)
+                        status, result = 500, {'error': 'Could not score the listings. Try again. Check the gallery log if this continues.'}
+                    else:
+                        status = 200
+                    finally:
+                        rerank_lock.release()
+                    self.reply(status, result)
                     return
                 elif len(parts) == 4 and parts[:2] == ['api', 'listings']:
                     listing_id, action = parts[2:]

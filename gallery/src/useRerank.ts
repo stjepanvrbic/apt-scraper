@@ -17,11 +17,13 @@ export function useRerank() {
     },
   });
   const summary = query.data?.last_rerank;
+  const rerankId = summary?.id;
+  const finishedReview = summary?.review?.state === 'done' ? summary.review.updated_at : undefined;
   useEffect(() => {
-    if (!summary) return;
+    if (rerankId === undefined) return;
     void client.invalidateQueries({ queryKey: ['gallery', 'list'] });
     void client.invalidateQueries({ queryKey: ['gallery', 'detail'] });
-  }, [client, summary]);
+  }, [client, rerankId, finishedReview]);
   const mutation = useMutation({
     mutationKey: rerankKey,
     mutationFn: () => request<RerankSummary>('/api/rerank', {}),
