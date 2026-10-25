@@ -1,9 +1,9 @@
 ---
 title: Code-derived listing features and coordinates
 type: Feature
-state: In Progress
+state: Done
 priority: 2
-assignee: agent
+assignee: Stjepan Vrbic
 milestone:
 parent: 0015
 blocked_by: []
