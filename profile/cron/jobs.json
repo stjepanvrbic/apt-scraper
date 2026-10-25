@@ -10,6 +10,18 @@
       "schedule_display": "every 2m",
       "deliver": "local",
       "failure_deliver": "origin"
+    },
+    {
+      "id": "apt-scraper-search",
+      "name": "Listing search",
+      "prompt": "Above is the report of this hour's apartment search. If it lists listings that wait for a judgment of the must-haves, judge them as the search skill's section \"Judging must-haves\" says, and keep going with the next batch from pending until none waits. Do not contact anyone and do not change any settings. End with one line saying how many listings you judged.",
+      "skills": ["search"],
+      "script": "search-run.py",
+      "schedule": "every 1h",
+      "schedule_display": "every 1h",
+      "deliver": "local",
+      "failure_deliver": "origin",
+      "enabled_toolsets": ["terminal", "file"]
     }
   ]
 }

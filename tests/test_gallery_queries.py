@@ -31,18 +31,18 @@ class GalleryQueryTests(unittest.TestCase):
         self.store.feedback('site:24', dismissed=False)
         self.assertEqual(self.store.browse('Dismissed')['total'], 0)
 
-    def test_criteria_exclusion_hides_every_gallery_view_but_retains_history(self):
+    def test_criteria_exclusion_hides_a_listing_except_in_contacted_and_viewings_and_retains_history(self):
         self.add('excluded', 1)
         self.store.feedback('excluded', favorite=True)
         self.store.request_contact('excluded')
         book(self.store, 'excluded', '2026-11-01T10:00:00Z', '', 'event')
         self.store.set_matches_criteria('excluded', False)
         self.store.upsert_listing(listing(id='excluded'))
-        for view in ['Rankings', 'Favorites', 'Contacted', 'Viewings', 'Dismissed']:
+        for view in ['Rankings', 'Favorites', 'Dismissed']:
             self.assertEqual(self.store.browse(view)['total'], 0)
-        with self.assertRaises(KeyError):
-            self.store.listing('excluded', visible_only=True)
-        self.assertIsNotNone(self.store.listing('excluded')['contact'])
+        for view in ['Contacted', 'Viewings']:
+            self.assertEqual(self.store.browse(view)['total'], 1)
+        self.assertIsNotNone(self.store.listing('excluded', visible_only=True)['contact'])
         self.store.set_matches_criteria('excluded', True)
         self.assertEqual(self.store.browse('Rankings')['total'], 1)
 

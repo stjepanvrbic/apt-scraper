@@ -82,10 +82,27 @@ try {
     Remove-Item $savedConfig
 }
 
+# The search runs curl_cffi in an environment of its own, built from hash-pinned wheels with the Python
+# Hermes runs cron scripts with, which `hermes pm env` puts on PATH.
+Write-Step 'Search environment'
+$hermesPath = (Invoke-Native $hermes @('pm', 'env') | Out-String | ConvertFrom-Json).PATH -split ';'
+$python = $hermesPath | ForEach-Object { Join-Path $_ 'python.exe' } | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $python) { throw 'Hermes reports no Python of its own in `hermes pm env`.' }
+$profileHome = "$env:LOCALAPPDATA\hermes\profiles\$ProfileName"
+$savedHome = $env:HERMES_HOME
+$env:HERMES_HOME = $profileHome
+try {
+    Invoke-Checked $python @("$profileHome\scripts\search-run.py", 'install')
+} finally {
+    $env:HERMES_HOME = $savedHome
+}
+
 # Hermes installs a profile's shipped cron jobs paused. The listing correspondence job wakes the
-# model only when a contact request or a reply needs it, so it stays on.
-Write-Step 'Listing correspondence job'
+# model only when a contact request or a reply needs it, and the listing search searches only once
+# the interview is complete, so both stay on.
+Write-Step 'Listing correspondence and listing search jobs'
 Invoke-Checked $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-contact')
+Invoke-Checked $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-search')
 
 Write-Step 'Claude subscription provider plugin'
 Invoke-Checked $hermes @('-p', $ProfileName, 'plugins', 'install', $PluginName, '--force', '--enable')

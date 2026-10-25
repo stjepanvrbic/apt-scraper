@@ -93,6 +93,33 @@ class ListingStoreTests(unittest.TestCase):
         self.assertEqual(saved['viewings'][0]['time'], '2026-10-30T20:00:00+00:00')
         self.assertEqual(saved['status'], 'unavailable')
 
+    def test_an_import_can_decide_criteria_eligibility_in_the_same_step(self):
+        self.store.upsert_listing(listing(), matches_criteria=False)
+        self.assertEqual(self.store.browse('Rankings')['total'], 0)
+        revision = self.store.revision()
+        self.store.upsert_listing(listing(), matches_criteria=True)
+        self.assertEqual(self.store.browse('Rankings')['total'], 1)
+        self.assertGreater(self.store.revision(), revision)
+        self.store.upsert_listing(listing(price=2000))
+        self.assertTrue(self.store.listing('example:100')['matches_criteria'])
+        with self.assertRaises(ValueError):
+            self.store.upsert_listing(listing(), matches_criteria='yes')
+
+    def test_contacted_listings_stay_in_contacted_and_open_when_outside_the_criteria(self):
+        self.store.upsert_listing(listing())
+        self.store.upsert_listing(listing(id='example:200'))
+        self.store.request_contact('example:100')
+        self.store.set_matches_criteria('example:100', False)
+        self.store.set_matches_criteria('example:200', False)
+        self.assertEqual([item['id'] for item in self.store.browse('Contacted')['items']], ['example:100'])
+        self.assertEqual(self.store.browse('Rankings')['total'], 0)
+        viewing = self.store.agree_viewing('example:100', '2026-10-31T11:00:00-05:00', 'Meet in the lobby.')
+        self.store.record_booking(viewing, '2026-10-31T16:00:00+00:00', 'Meet in the lobby.', 'event-1')
+        self.assertEqual([item['id'] for item in self.store.browse('Viewings')['items']], ['example:100'])
+        self.assertEqual(self.store.listing('example:100', visible_only=True)['id'], 'example:100')
+        with self.assertRaises(KeyError):
+            self.store.listing('example:200', visible_only=True)
+
     def test_listing_notes_keep_both_authors(self):
         self.store.upsert_listing(listing())
         self.store.add_note('I prefer quieter streets.', listing_id='example:100')

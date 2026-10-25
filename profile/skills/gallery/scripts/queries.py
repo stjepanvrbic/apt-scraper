@@ -20,7 +20,7 @@ def browse(connection, view, page, page_size):
     joins = 'FROM listings l LEFT JOIN ranking r ON r.listing_id = l.id LEFT JOIN feedback f ON f.listing_id = l.id LEFT JOIN contacts c ON c.listing_id = l.id'
     if view == 'Viewings':
         joins += ' JOIN viewings v ON v.listing_id = l.id'
-    where = ' WHERE l.matches_criteria = 1 AND ' + conditions[view]
+    where = ' WHERE ' + ('' if view in ('Contacted', 'Viewings') else 'l.matches_criteria = 1 AND ') + conditions[view]
     order = 'v.time, v.id' if view == 'Viewings' else 'CASE WHEN r.rank IS NOT NULL AND r.fingerprint = l.fingerprint THEN 0 ELSE 1 END, CASE WHEN r.fingerprint = l.fingerprint THEN r.rank END, l.id'
     fields = ['id', 'title', 'price', 'price_note', 'currency', 'rental_period', 'size', 'rooms', 'address', 'status', 'first_seen']
     summary = ', '.join(f"'{field}', json_extract(l.data, '$.{field}')" for field in fields)

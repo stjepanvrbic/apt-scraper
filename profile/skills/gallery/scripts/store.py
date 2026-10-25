@@ -1,5 +1,6 @@
 import json
 import math
+from collections import Counter
 import os
 import re
 import sqlite3
@@ -225,6 +226,19 @@ def validate_agent(agent):
             require_url(value)
 
 
+def apply_criteria(connection, judge):
+    row = connection.execute("SELECT value FROM settings WHERE name = 'criteria'").fetchone()
+    if not row:
+        return None
+    criteria = json.loads(row['value'])
+    rows = connection.execute('SELECT l.id, CASE WHEN r.fingerprint = l.fingerprint THEN r.features END AS features '
+                              'FROM listings l LEFT JOIN ranking r ON r.listing_id = l.id ORDER BY l.rowid').fetchall()
+    verdicts = {row['id']: judge(criteria, json.loads(row['features']) if row['features'] else None) for row in rows}
+    connection.executemany('UPDATE listings SET matches_criteria = ? WHERE id = ? AND matches_criteria != ?',
+                           [(verdict == 'inside', identifier, verdict == 'inside') for identifier, verdict in verdicts.items()])
+    return dict(Counter(verdicts.values()))
+
+
 class ListingStore:
     def __init__(self, path):
         self.path = Path(path).resolve()
@@ -253,8 +267,10 @@ class ListingStore:
         finally:
             connection.close()
 
-    def upsert_listing(self, listing):
+    def upsert_listing(self, listing, *, matches_criteria=None):
         listing = validate_listing(listing)
+        if matches_criteria is not None and type(matches_criteria) is not bool:
+            raise ValueError('Criteria eligibility must be true or false.')
         with self.connect(write=True) as connection:
             previous = connection.execute('SELECT * FROM listings WHERE id = ?', (listing['id'],)).fetchone()
             if previous:
@@ -263,13 +279,15 @@ class ListingStore:
             changed = not previous or previous['fingerprint'] != fingerprint
             analysis = connection.execute('SELECT * FROM ranking WHERE listing_id = ?', (listing['id'],)).fetchone()
             needs_analysis = not analysis or analysis['fingerprint'] != fingerprint or analysis['features'] is None
-            if previous and not changed and previous['status'] == listing['status']:
-                return {'changed': False, 'needs_analysis': needs_analysis, 'content_fingerprint': fingerprint}
-            connection.execute(
-                '''INSERT INTO listings (id, data, status, first_seen, fingerprint) VALUES (?, ?, ?, ?, ?)
-                   ON CONFLICT(id) DO UPDATE SET data = excluded.data, status = excluded.status, fingerprint = excluded.fingerprint''',
-                (listing['id'], json.dumps(listing, ensure_ascii=False), listing['status'], listing['first_seen'], fingerprint),
-            )
+            if not previous or changed or previous['status'] != listing['status']:
+                connection.execute(
+                    '''INSERT INTO listings (id, data, status, first_seen, fingerprint) VALUES (?, ?, ?, ?, ?)
+                       ON CONFLICT(id) DO UPDATE SET data = excluded.data, status = excluded.status, fingerprint = excluded.fingerprint''',
+                    (listing['id'], json.dumps(listing, ensure_ascii=False), listing['status'], listing['first_seen'], fingerprint),
+                )
+            if matches_criteria is not None:
+                connection.execute('UPDATE listings SET matches_criteria = ? WHERE id = ? AND matches_criteria != ?',
+                                   (matches_criteria, listing['id'], matches_criteria))
             return {'changed': bool(changed), 'needs_analysis': needs_analysis, 'content_fingerprint': fingerprint}
 
     def settings(self):
@@ -295,28 +313,26 @@ class ListingStore:
             self.require_listing(connection, listing_id)
             connection.execute('UPDATE listings SET matches_criteria = ? WHERE id = ? AND matches_criteria != ?', (matches, listing_id, matches))
 
-    def update_settings(self, *, outside=None, **settings):
+    def update_settings(self, *, judge=None, **settings):
+        """Saving criteria applies them to every stored listing in the same transaction, with judge as in apply_criteria."""
         if not settings or not set(settings) <= set(SETTINGS):
             raise ValueError(f'Settings are {", ".join(SETTINGS)}, and at least one is required.')
         for name, value in settings.items():
             SETTINGS[name](value)
-        if outside is not None and 'criteria' not in settings:
-            raise ValueError('Listings outside the criteria are given only with the criteria they are judged against.')
+        if judge is not None and 'criteria' not in settings:
+            raise ValueError('A judge is given only with the criteria it applies.')
         with self.connect(write=True) as connection:
-            exclusions = None
-            if 'criteria' in settings:
-                known = {row[0] for row in connection.execute('SELECT id FROM listings')}
-                if outside is None and known:
-                    raise ValueError('Stored listings must be judged against new criteria. Give the ids of those outside them in outside.')
-                outside = set(outside or ())
-                if unknown := sorted(outside - known):
-                    raise KeyError(f'Listing not found: {", ".join(unknown)}.')
-                connection.executemany('UPDATE listings SET matches_criteria = ? WHERE id = ? AND matches_criteria != ?',
-                                       [(identifier not in outside, identifier, identifier not in outside) for identifier in known])
-                exclusions = {'outside': len(outside), 'matching': len(known - outside)}
+            if 'criteria' in settings and judge is None and connection.execute('SELECT 1 FROM listings LIMIT 1').fetchone():
+                raise ValueError('Stored listings must be judged against new criteria. Give a judge.')
             connection.executemany('INSERT INTO settings VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
                                    [(name, json.dumps(value, allow_nan=False)) for name, value in settings.items()])
-            return exclusions
+            return apply_criteria(connection, judge) if 'criteria' in settings and judge else None
+
+    def apply_criteria(self, judge):
+        """Shows each listing that judge(criteria, features) finds 'inside' the stored criteria and hides every other one.
+        features is the listing's current analysis or None. Returns the count of each verdict, or None without criteria."""
+        with self.connect(write=True) as connection:
+            return apply_criteria(connection, judge)
 
     def missing_settings(self):
         saved = self.settings()
@@ -364,7 +380,8 @@ class ListingStore:
     def listing(self, listing_id, *, notes_page=1, correspondence_page=1, viewings_page=1, visible_only=False):
         with self.connect() as connection:
             row = connection.execute('SELECT * FROM listings WHERE id = ?', (listing_id,)).fetchone()
-            if not row or (visible_only and not row['matches_criteria']):
+            if not row or visible_only and not row['matches_criteria'] and not connection.execute(
+                    'SELECT 1 FROM contacts WHERE listing_id = ? UNION SELECT 1 FROM viewings WHERE listing_id = ?', (listing_id, listing_id)).fetchone():
                 raise KeyError('Listing not found.')
             listing = json.loads(row['data'])
             listing['matches_criteria'] = bool(row['matches_criteria'])
