@@ -1,24 +1,24 @@
 ---
 name: interview
-description: "Interview and save criteria, preferences, sites, viewings."
+description: "Interview and save criteria, preferences, places, viewings."
 version: 1.0.0
 author: Stjepan Vrbic
 license: Proprietary
 platforms: [windows, macos]
 metadata:
   hermes:
-    tags: [apt-scraper, Interview, Criteria, Preferences, Availability]
+    tags: [apt-scraper, Interview, Criteria, Preferences, Places, Availability]
     related_skills: [gallery]
 ---
 
 # Preference interview
 
-Before the first search you need four settings from the user: their criteria, their preferences, the listing sites to search, and when they can attend viewings. You collect them in conversation and save them in the listing store, where the search, the ranking and the contact work read them. The user changes any of them later by telling you, in any conversation, including the gallery's Notes tab.
+Before the first search you need six settings from the user: their criteria, their preferences, the places they travel to regularly, how much each part of location matters to them, the listing sites to search, and when they can attend viewings. You collect them in conversation and save them in the listing store, where the search, the ranking and the contact work read them. The user changes any of them later by telling you, in any conversation, including the gallery's Notes tab.
 
 ## When to Use
 
 - `status` exits 3 at the start of a conversation. Start the interview, or continue it from what is saved.
-- The user states or changes a criterion, a preference, a listing site or their availability.
+- The user states or changes a criterion, a preference, a place, a location priority, a listing site or their availability.
 - The user asks what their search settings are.
 
 ## The settings script
@@ -30,7 +30,7 @@ python "${HERMES_SKILL_DIR}/scripts/settings.py" save "<scratch directory>/setti
 
 `status` prints the saved `settings` and `missing`, the list of what the interview still needs. It exits 0 when nothing is missing and 3 otherwise.
 
-To save, write a JSON object with any of `criteria`, `preferences`, `listing_sites` and `viewing_availability` to a file in your scratch directory with `write_file`, then run `save` with that file. `save` accepts only files in the scratch directory, `cache/scratch` under the profile, and deletes the file once the settings are saved. Write a new file for every save. A file keeps the user's quotes and apostrophes intact without shell escaping. Do not feed the JSON to the script through a heredoc, because Hermes asks the user to approve every heredoc into Python.
+To save, write a JSON object with any of `criteria`, `preferences`, `places`, `location_priorities`, `listing_sites` and `viewing_availability` to a file in your scratch directory with `write_file`, then run `save` with that file. `save` accepts only files in the scratch directory, `cache/scratch` under the profile, and deletes the file once the settings are saved. Write a new file for every save. A file keeps the user's quotes and apostrophes intact without shell escaping. Do not feed the JSON to the script through a heredoc, because Hermes asks the user to approve every heredoc into Python.
 
 ```json
 {"preferences": {"likes": ["Lots of daylight", "Children's playground nearby"], "dislikes": ["Ground floor"]}}
@@ -61,6 +61,34 @@ A null limit means no limit. `{"min": null, "max": null}` records that the user 
 
 Preferences are soft likes and dislikes, used only for ranking: `{"likes": [...], "dislikes": [...]}`. Each is an array of short phrases a listing can be compared against, such as "Lots of daylight", "Quiet street" or "Ground floor". Keep the user's own words, and their emphasis when they give it: "Balcony (very important)". Both arrays are needed, and either may be empty when the user has nothing to say.
 
+### Places
+
+`places` is an array of the places the user travels to regularly, such as work, school, a gym or family. Each place has:
+
+| Field | Format | Example |
+| --- | --- | --- |
+| `name` | What the user calls the place, unique among their places | `"Work"` |
+| `address` | A street address, or a landmark with its city, precise enough to find on a map | `"233 S Wacker Dr, Chicago, IL 60606"` |
+| `travel_mode` | How the user gets there: walk, bike, transit or car | `"transit"` |
+| `longest_trip_minutes` | The longest one-way trip there the user accepts, in minutes | `40` |
+| `visits_per_week` | How often the user goes there, per week. Twice a month is 0.5 | `5` |
+
+`places` is `[]` when the user has no place to consider, and that counts as answered. "Downtown" or "near the lake" cannot be found on a map: ask for the street, the building or a landmark. Places only rank listings. Never tell a listing agent about them.
+
+### Location priorities
+
+`location_priorities` says how much each part of location matters to the user, each as `low`, `medium` or `high`:
+
+- `places`: how much being within each place's longest trip matters. Needed when `places` is not empty.
+- `rapid_transit`: how much being near a train, subway or rapid bus stop matters.
+- `areas`: an object from each area in `criteria.location`, written exactly as it is there, to how much the user wants that area. Every area needs one.
+
+```json
+{"location_priorities": {"places": "high", "rapid_transit": "medium", "areas": {"Prenzlauer Berg, Berlin": "high", "10437 Berlin": "low"}}}
+```
+
+Ask in words and map the answer: "a lot" is high, "somewhat" is medium, "not much" or "not at all" is low. For the areas, ask whether the user prefers some of them. When all are equally good, save each as medium.
+
 ### Listing sites
 
 `listing_sites` is an array of the sites' home page URLs, such as `["https://www.immobilienscout24.de", "https://www.wg-gesucht.de"]`. The search needs at least one. When the user does not know which sites to use, suggest the main listing sites for their area and save only the ones they agree to.
@@ -75,7 +103,7 @@ Preferences are soft likes and dislikes, used only for ranking: `{"likes": [...]
 
 ## Running the interview
 
-Talk with the user. Ask one or two questions at a time in plain language, follow up on what the user says, and skip anything they have already told you. A natural order is location and budget, then size, rooms and move-in date, then must-haves and likes, then listing sites and availability. Follow the user when they jump ahead.
+Talk with the user. Ask one or two questions at a time in plain language, follow up on what the user says, and skip anything they have already told you. A natural order is location and budget, then size, rooms and move-in date, then must-haves and likes, then the places the user goes to and how much location matters, then listing sites and availability. Follow the user when they jump ahead.
 
 Sort each thing the user says into a criterion or a preference. When it is unclear, ask, for example: "Is a balcony a must, or would you still look at a place without one?" A must goes into the criteria's `other`, a nice-to-have into preferences.
 
@@ -83,17 +111,19 @@ Turn vague answers into values you can save, and say back what you saved. "Under
 
 Save each topic as soon as it is settled, so an interrupted interview continues where it stopped. The next conversation's `status` lists what is left.
 
+When `missing` holds only places and location priorities, ask only for them, and say in one sentence that they help rank listings by location.
+
 When `status` exits 0, summarize the settings in a few lines and ask the user to correct anything. Then load the `search` skill and start the search as it says.
 
-Ask only for search settings. The interview never asks for the user's name, contact details, income or other personal information. When a listing agent needs such details later, the contact work asks the user for them.
+Ask only for search settings. Places are search settings. The interview never asks for the user's name, contact details, income or other personal information. When a listing agent needs such details later, the contact work asks the user for them.
 
 ## Changing settings later
 
-When the user states or changes a criterion, a preference, a listing site or their availability:
+When the user states or changes a criterion, a preference, a place, a location priority, a listing site or their availability:
 
 1. Run `status` and read the current setting.
 2. Change only what the user changed. When their words were vague, confirm the value as in the interview.
-3. Save the whole setting. Preferences, listing sites and availability are saved as they are.
+3. Save the whole setting. Preferences, places, location priorities, listing sites and availability are saved as they are. When the user names a new area for the criteria, ask how much they want it and save `location_priorities` with the criteria in the same file. An area removed from the criteria loses its priority when the criteria are saved.
 4. Saving criteria also judges every stored listing against them, from the facts and judgments the search stored with it, and hides the listings outside them, except in the Contacted and Viewings tabs. `save` prints `criteria` with how many listings are `outside`, `matching` and `awaiting_judgment`. A listing awaits judgment when a must-have is new to it, or when it has no facts from a listing site and a criterion changed. It stays hidden until judged. When `awaiting_judgment` is above 0, load the `search` skill and judge those listings now as its section "Judging must-haves" says.
 5. Confirm the change in one line. After a criteria change, say how many listings are hidden, from the `outside` count `save` prints.
 

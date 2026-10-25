@@ -33,7 +33,7 @@ Use `note "<text>" --listing "<listing-id>" --role agent` only to attach a note 
 
 The gallery checks a revision counter periodically and has a Refresh listings button. Chat messages go to a dedicated persistent Hermes session in the apt-scraper profile. Clarifications and approval requests appear in the Notes tab and wait for the user's explicit response.
 
-When the user states or changes criteria, preferences, listing sites or viewing availability in Notes, save the change with the `interview` skill before you confirm it. That skill saves to the real listing store, also from the sample gallery, and hides listings outside changed criteria.
+When the user states or changes criteria, preferences, places, location priorities, listing sites or viewing availability in Notes, save the change with the `interview` skill before you confirm it. That skill saves to the real listing store, also from the sample gallery, and hides listings outside changed criteria.
 
 ## Shared listing store
 

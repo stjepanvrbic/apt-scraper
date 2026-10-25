@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 FIRST_BLOCK = timedelta(minutes=30)
+SEARCH_SETTINGS = ('criteria', 'listing_sites')
 LONGEST_BLOCK = timedelta(days=1)
 SCHEMA = (
     'CREATE TABLE IF NOT EXISTS cards (listing_id TEXT PRIMARY KEY, signature TEXT NOT NULL, areas TEXT NOT NULL, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL)',
@@ -102,6 +103,15 @@ class SearchState:
         with self.connect() as connection:
             row = connection.execute('SELECT * FROM runs WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1').fetchone()
             return {'started_at': row['started_at'], 'finished_at': row['finished_at'], **json.loads(row['report'])} if row else None
+
+    def has_searched(self):
+        with self.connect() as connection:
+            return connection.execute("SELECT 1 FROM runs WHERE json_array_length(report, '$.sites') > 0 LIMIT 1").fetchone() is not None
+
+    def missing_settings(self, store):
+        """The settings the search waits for: the whole interview before its first search, afterwards only the settings
+        it reads, so questions the interview gains later never stop a running search."""
+        return store.missing_settings(SEARCH_SETTINGS) if self.has_searched() else store.missing_settings()
 
     def reported_at(self):
         with self.connect() as connection:

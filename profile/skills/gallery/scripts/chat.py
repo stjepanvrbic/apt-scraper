@@ -137,7 +137,7 @@ async def run_turn(store, message_id, text, controls):
         try:
             context = (f'This conversation is in the apartment gallery. Its listing database is {store.path}. '
                        'Read the gallery skill when relevant. Search settings are kept only in the profile listing store, which may be another database. When the user states or changes criteria, '
-                       'preferences, listing sites or viewing availability, save the change with the settings script of the interview skill before you confirm it. '
+                       'preferences, places, location priorities, listing sites or viewing availability, save the change with the settings script of the interview skill before you confirm it. '
                        'Reply here and do not duplicate replies with the note command.\n\n')
             if text is None:
                 message = next(item for item in store.chat_state()['messages'] if item['id'] == message_id)

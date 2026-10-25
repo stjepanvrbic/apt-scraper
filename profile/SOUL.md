@@ -28,9 +28,9 @@ python "$HERMES_HOME/skills/interview/scripts/settings.py"
 
 At the first message of every conversation with the user, also run it with `status` before you reply. Exit code 0 means the interview is complete. Exit code 3 means it is not, and `missing` lists what is left. Then load the `interview` skill and start the interview, or continue it from what is saved, in the same reply. Put any connection notice first. If the user asked something else, answer that first and then begin. If the user accepts the connection setup, finish the setup and then return to the interview. Any other exit code means the script itself failed, so show the user its output.
 
-Whenever the user states or changes a criterion, a preference, a listing site or their viewing availability, in any conversation, including the gallery's Notes tab, load the `interview` skill and save the change as it says before you confirm it.
+Whenever the user states or changes a criterion, a preference, a place, a location priority, a listing site or their viewing availability, in any conversation, including the gallery's Notes tab, load the `interview` skill and save the change as it says before you confirm it.
 
-Never start a search while `status` exits 3.
+Never start a search while the search script's `status` says `waiting for the interview`. Once the search has run, it keeps running while the interview has questions left, and you still ask them.
 
 ## Listing agents
 
@@ -52,4 +52,4 @@ python "$HERMES_HOME/skills/search/scripts/search.py"
 
 The search runs every hour as the scheduled job `apt-scraper-search`, and searches once the interview is complete. When the interview becomes complete, load the `search` skill and run the search once now as it says.
 
-At the first message of every conversation, when the settings `status` exits 0, also run the search script with `status` before you reply. Exit code 3 means the search needs attention: load the `search` skill, tell the user in a sentence or two what `problems` says, and fix what the skill says you can, including running a search that has not run yet. When `new_since_report` is above 0, tell the user in one line how many new listings are in the gallery, then run the script with `reported`. Otherwise say nothing about the search. Any other exit code means the script itself failed, so show the user its output.
+At the first message of every conversation, also run the search script with `status` before you reply. When its `state` is `waiting for the interview`, say nothing about the search, because the interview comes first. Otherwise exit code 3 means the search needs attention: load the `search` skill, tell the user in a sentence or two what `problems` says, and fix what the skill says you can, including running a search that has not run yet. When `new_since_report` is above 0, tell the user in one line how many new listings are in the gallery, then run the script with `reported`. Otherwise say nothing about the search. Any other exit code means the script itself failed, so show the user its output.

@@ -30,7 +30,18 @@ COMPLETE = {
         'weekly': [{'day': 'saturday', 'start': '10:00', 'end': '14:00'}],
         'unavailable': [{'from': '2026-12-20', 'to': '2027-01-03'}],
     },
+    'places': [
+        {'name': 'Work', 'address': '233 S Wacker Dr, Chicago, IL 60606', 'travel_mode': 'transit', 'longest_trip_minutes': 40, 'visits_per_week': 5},
+        {'name': 'Climbing gym', 'address': 'First Ascent Avondale, Chicago', 'travel_mode': 'bike', 'longest_trip_minutes': 20, 'visits_per_week': 2},
+    ],
+    'location_priorities': {
+        'places': 'high',
+        'rapid_transit': 'medium',
+        'areas': {'Logan Square, Chicago': 'high', 'Wicker Park, Chicago': 'low'},
+    },
 }
+
+PLACE = {'name': 'Work', 'address': 'Loop, Chicago', 'travel_mode': 'transit', 'longest_trip_minutes': 30, 'visits_per_week': 5}
 
 
 WITHOUT_TIME_ZONE_DATA = '''
@@ -61,7 +72,8 @@ class SettingsStoreTests(unittest.TestCase):
         self.assertEqual(self.store.missing_settings(), [
             'criteria.location', 'criteria.price', 'criteria.size', 'criteria.rooms', 'criteria.move_in', 'criteria.other',
             'preferences.likes', 'preferences.dislikes', 'listing_sites',
-            'viewing_availability.timezone', 'viewing_availability.weekly'])
+            'viewing_availability.timezone', 'viewing_availability.weekly',
+            'places', 'location_priorities.rapid_transit'])
 
     def test_partial_answers_persist_and_only_unanswered_items_stay_missing(self):
         self.store.update_settings(criteria={'location': ['Logan Square, Chicago'], 'price': {'min': None, 'max': 2400, 'currency': 'USD', 'period': 'month'}})
@@ -70,7 +82,8 @@ class SettingsStoreTests(unittest.TestCase):
         self.assertEqual(reopened.settings()['criteria']['price']['max'], 2400)
         self.assertEqual(reopened.missing_settings(), [
             'criteria.size', 'criteria.rooms', 'criteria.move_in', 'criteria.other', 'preferences.dislikes',
-            'listing_sites', 'viewing_availability.timezone', 'viewing_availability.weekly'])
+            'listing_sites', 'viewing_availability.timezone', 'viewing_availability.weekly',
+            'places', 'location_priorities.rapid_transit', 'location_priorities.areas'])
 
     def test_complete_settings_have_nothing_missing_and_no_limit_counts_as_answered(self):
         values = settings()
@@ -86,6 +99,52 @@ class SettingsStoreTests(unittest.TestCase):
         self.assertIn('listing_sites', self.store.missing_settings())
         self.assertIn('viewing_availability.weekly', self.store.missing_settings())
         self.assertNotIn('viewing_availability.timezone', self.store.missing_settings())
+
+    def test_no_places_is_an_answer_that_needs_no_priority_for_places(self):
+        self.store.update_settings(**settings(places=[], location_priorities={'rapid_transit': 'high', 'areas': COMPLETE['location_priorities']['areas']}))
+        self.assertEqual(self.store.settings()['places'], [])
+        self.assertEqual(self.store.missing_settings(), [])
+
+    def test_places_need_a_priority_and_every_area_of_the_criteria_needs_one(self):
+        self.store.update_settings(**settings(location_priorities={'rapid_transit': 'low', 'areas': {'Logan Square, Chicago': 'high'}}))
+        self.assertEqual(self.store.missing_settings(), ['location_priorities.places', 'location_priorities.areas'])
+
+    def test_an_interview_completed_before_places_existed_is_missing_only_places_and_location_priorities(self):
+        self.store.update_settings(**{name: COMPLETE[name] for name in ('criteria', 'preferences', 'listing_sites', 'viewing_availability')})
+        self.assertEqual(self.store.missing_settings(), ['places', 'location_priorities.rapid_transit', 'location_priorities.areas'])
+
+    def test_missing_settings_can_be_limited_to_the_settings_a_reader_uses(self):
+        self.store.update_settings(criteria={'location': ['Logan Square, Chicago']}, listing_sites=COMPLETE['listing_sites'])
+        self.assertEqual(self.store.missing_settings(('criteria', 'listing_sites')),
+                         ['criteria.price', 'criteria.size', 'criteria.rooms', 'criteria.move_in', 'criteria.other'])
+        self.assertEqual(self.store.missing_settings(('listing_sites', 'places')), ['places'])
+
+    def test_a_changed_place_replaces_the_stored_one(self):
+        self.store.update_settings(**settings())
+        places = copy.deepcopy(COMPLETE['places'])
+        places[0]['address'] = '1 N State St, Chicago, IL 60602'
+        self.store.update_settings(places=places)
+        saved = ListingStore(self.path).settings()
+        self.assertEqual(saved['places'], places)
+        self.assertEqual(saved['location_priorities'], COMPLETE['location_priorities'])
+
+    def test_areas_removed_from_the_criteria_lose_their_priority(self):
+        self.store.update_settings(**settings())
+        criteria = {**COMPLETE['criteria'], 'location': ['Logan Square, Chicago', 'Avondale, Chicago']}
+        self.store.update_settings(criteria=criteria)
+        self.assertEqual(self.store.settings()['location_priorities'],
+                         {'places': 'high', 'rapid_transit': 'medium', 'areas': {'Logan Square, Chicago': 'high'}})
+        self.assertEqual(self.store.missing_settings(), ['location_priorities.areas'])
+
+    def test_a_priority_for_an_area_the_criteria_do_not_name_is_rejected(self):
+        self.store.update_settings(criteria=COMPLETE['criteria'])
+        for criteria in ({}, {'criteria': COMPLETE['criteria']}):
+            with self.subTest(criteria=criteria), self.assertRaisesRegex(ValueError, 'Avondale'):
+                self.store.update_settings(**criteria, location_priorities={'rapid_transit': 'low', 'areas': {'Avondale, Chicago': 'high'}})
+        self.assertNotIn('location_priorities', self.store.settings())
+        self.store.update_settings(criteria={**COMPLETE['criteria'], 'location': ['Avondale, Chicago']},
+                                   location_priorities={'rapid_transit': 'low', 'areas': {'Avondale, Chicago': 'high'}})
+        self.assertEqual(self.store.settings()['location_priorities']['areas'], {'Avondale, Chicago': 'high'})
 
     def test_unchanged_settings_are_preserved_by_partial_updates(self):
         self.store.update_settings(**settings())
@@ -168,6 +227,23 @@ class SettingsStoreTests(unittest.TestCase):
             ('viewing_availability', {'weekly': [{'day': 'monday', 'start': '6pm', 'end': '8pm'}]}),
             ('viewing_availability', {'unavailable': [{'from': '2027-01-03', 'to': '2026-12-20'}]}),
             ('viewing_availability', {'notes': 'Evenings'}),
+            ('places', PLACE),
+            ('places', [{'name': 'Work', 'address': 'Loop, Chicago'}]),
+            ('places', [{**PLACE, 'coordinates': [41.88, -87.63]}]),
+            ('places', [{**PLACE, 'name': ' '}]),
+            ('places', [{**PLACE, 'address': ''}]),
+            ('places', [{**PLACE, 'travel_mode': 'boat'}]),
+            ('places', [{**PLACE, 'longest_trip_minutes': 0}]),
+            ('places', [{**PLACE, 'longest_trip_minutes': '30'}]),
+            ('places', [{**PLACE, 'longest_trip_minutes': True}]),
+            ('places', [{**PLACE, 'visits_per_week': -1}]),
+            ('places', [{**PLACE, 'visits_per_week': float('inf')}]),
+            ('places', [PLACE, {**PLACE, 'name': 'work '}]),
+            ('location_priorities', {'rapid_transit': 'very'}),
+            ('location_priorities', {'places': 3}),
+            ('location_priorities', {'walkability': 'high'}),
+            ('location_priorities', {'areas': ['Logan Square, Chicago']}),
+            ('location_priorities', {'areas': {'Logan Square, Chicago': 'top'}}),
         ]
         for name, value in cases:
             with self.subTest(name=name, value=value), self.assertRaises(ValueError):

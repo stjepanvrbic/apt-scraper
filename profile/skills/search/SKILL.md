@@ -13,7 +13,7 @@ metadata:
 
 # Apartment search
 
-The search reads the user's listing sites every hour and keeps the listing store current: it adds new listings, updates changed ones and marks gone ones unavailable. It runs as the Hermes cron job `apt-scraper-search`, which the installer turns on. Runs before the interview is complete search nothing and make no model call. Code does the fetching, reading, filtering and change detection. You only judge the must-haves (`criteria.other`) of a listing that is new or whose content changed, because they are free text.
+The search reads the user's listing sites every hour and keeps the listing store current: it adds new listings, updates changed ones and marks gone ones unavailable. It runs as the Hermes cron job `apt-scraper-search`, which the installer turns on. Runs before the interview is complete search nothing and make no model call. Once the search has run, it needs only the criteria and the listing sites, so questions the interview has left never stop it. Code does the fetching, reading, filtering and change detection. You only judge the must-haves (`criteria.other`) of a listing that is new or whose content changed, because they are free text.
 
 ## When to Use
 

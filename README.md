@@ -39,11 +39,11 @@ Ask Hermes to open the apartment gallery. It opens a local browser app with list
 
 ## Your search
 
-Before the first search, the agent asks about the apartment you want: where, your budget, size, rooms, move-in date and your other must-haves, then what you like and dislike, which listing sites to search, and when you can attend viewings. It starts these questions in your first conversation and picks up where you left off if you stop. Your must-haves filter listings out. Your likes and dislikes only affect the ranking.
+Before the first search, the agent asks about the apartment you want: where, your budget, size, rooms, move-in date and your other must-haves, then what you like and dislike, which listing sites to search, and when you can attend viewings. It also asks about the places you go to regularly, such as work: how you get there, the longest trip you accept and how often you go. "None" is an answer too. Then it asks how much those places, being near a train or bus stop, and each of your areas matter to you. It starts these questions in your first conversation and picks up where you left off if you stop. Your must-haves filter listings out. Your likes and dislikes, places and location priorities only affect the ranking, and the agent never tells listing agents about your places.
 
-To change anything later, tell the agent, in the terminal or in the gallery's Notes tab. When you change a must-have, the gallery hides the listings that no longer fit and shows again the ones that do.
+To change anything later, such as a new work address, tell the agent, in the terminal or in the gallery's Notes tab. When you change a must-have, the gallery hides the listings that no longer fit and shows again the ones that do.
 
-Once the questions are answered, the search starts. It reads your listing sites every hour, adds new listings to the gallery, updates changed ones and marks gone ones unavailable. Zillow is the only listing site it can read so far. This runs as the Hermes scheduled job "Listing search" inside the gateway, so the gateway must be running, and the agent tells you when the search has stopped or a site has blocked it. See [the search guide](docs/search.md).
+Once the questions are answered, the search starts. After that, a new question in a later version is asked in your next conversation and does not stop the search. It reads your listing sites every hour, adds new listings to the gallery, updates changed ones and marks gone ones unavailable. Zillow is the only listing site it can read so far. This runs as the Hermes scheduled job "Listing search" inside the gateway, so the gateway must be running, and the agent tells you when the search has stopped or a site has blocked it. See [the search guide](docs/search.md).
 
 ## Contacting listings
 

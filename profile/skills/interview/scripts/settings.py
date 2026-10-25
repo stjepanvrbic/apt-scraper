@@ -34,8 +34,7 @@ def main():
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('status')
     saving = commands.add_parser('save')
-    saving.add_argument('file', type=Path, help='JSON object with any of criteria, preferences, listing_sites, viewing_availability, '
-                        'in the scratch directory. Deleted once saved.')
+    saving.add_argument('file', type=Path, help=f'JSON object with any of {", ".join(SETTINGS)}, in the scratch directory. Deleted once saved.')
     arguments = parser.parse_args()
     store = ListingStore(store_path())
     if arguments.command == 'status':
