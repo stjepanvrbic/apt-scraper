@@ -28,6 +28,7 @@ import math
 import random
 from dataclasses import dataclass
 from functools import cached_property
+from math import sumprod as dot
 from operator import mul
 from statistics import fmean, median, pstdev
 
@@ -75,10 +76,6 @@ FLAG_WORDS = {
 CATEGORY_WORDS = {'floor': '{} floor', 'style': '{} style', 'outdoor_space': 'outdoor space: {}', 'building_type': '{} building'}
 
 
-def dot(left, right):
-    return sum(map(mul, left, right))
-
-
 def sigmoid(value):
     if value >= 0:
         return 1 / (1 + math.exp(-value))
@@ -97,7 +94,7 @@ def cholesky(matrix):
     for row, values in enumerate(matrix):
         current = []
         for column in range(row):
-            current.append((values[column] - dot(current, lower[column])) / lower[column][column])
+            current.append((values[column] - dot(current, lower[column][:-1])) / lower[column][column])
         current.append(math.sqrt(values[row] - dot(current, current)))
         lower.append(current)
     return lower
@@ -120,7 +117,7 @@ class Factor:
         """L^-1 vector."""
         result = []
         for index, row in enumerate(self.lower):
-            result.append((vector[index] - dot(row, result)) / row[index])
+            result.append((vector[index] - dot(row[:-1], result)) / row[index])
         return result
 
     def backward(self, vector):

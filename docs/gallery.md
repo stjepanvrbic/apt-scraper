@@ -1,6 +1,6 @@
 # Apartment gallery
 
-Ask `hermes -p apt-scraper` to open the gallery. After pulling changes, rerun the repository installer to update the gallery skill. Opening the gallery needs Python, which Hermes supplies. The Notes conversation also needs the Hermes runtime, so launch through Hermes to use it. Node is only needed to develop the frontend.
+Ask `hermes -p apt-scraper` to open the gallery. After pulling changes, rerun the repository installer to update the gallery skill. Opening the gallery needs Python 3.12 or newer, which Hermes supplies. The Notes conversation also needs the Hermes runtime, so launch through Hermes to use it. Node is only needed to develop the frontend.
 
 The six tabs are Rankings, Favorites, Compare, Contacted, Viewings and Notes. Open a listing to see its photos, details, sources, notes and contact history. Favorites and dismissals are saved immediately. Notes save when you press Save note. A failed save keeps the text so you can retry. Dismissed listings leave Rankings and Favorites. Their notes, correspondence and viewing details remain in the store.
 

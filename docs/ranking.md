@@ -149,6 +149,8 @@ The diagnostic fits a separate model at the ordinary model's chosen prior scale 
 
 `ranking_inputs(include_signals=True)` aggregates these visits in the rerank's snapshot. Other callers do not read the signal history. Raw events remain in the store even when the diagnostic excludes them. The diagnostic reuses the ordinary fit's feature design and starts from its weights, then converges separately with the weak labels.
 
+The solver uses the standard library's [math.sumprod](https://docs.python.org/3/library/math.html#math.sumprod), available since Python 3.12, for dot products. This keeps the second leave-one-out check within the rerank budget without a numerical package. The [Hermes runtime lock](https://github.com/NousResearch/hermes-agent/blob/main/pm/lock.json) supplies Python 3.14.9 on Windows and macOS; running from a checkout needs Python 3.12 or newer.
+
 ### Exploration
 
 With more than 20 ranked listings, ranks 7 and 14 hold exploration listings, marked in the store's `ranking.exploration` and in their reason ("Shown to learn your taste."). Each is drawn by posterior sampling: weights drawn from the Laplace posterior pick the highest-scoring listing outside the top 18 by posterior mean that has no label from the user, no favorite, dismissal, contact request, note or pairwise answer. The draws come from the rerank's seed, recorded in its summary, so a rerank with the same seed is reproducible, and with 20 or fewer ranked listings no seed changes anything.
