@@ -10,7 +10,7 @@ as JSON, has:
 - costs: per listing the seconds to download its photos, to embed them and its text, and the CPU seconds of
   embedding; the photos per second of the image model alone; the seconds to load the models; the peak memory after embedding and at the end;
   the size of this Python environment and of the models; and how often CLIP's zero-shot room type agrees with the
-  record's.
+  record's. A listing with any part that could not be embedded counts as failed and stays out of the figures.
 - labels: each model's leave-one-out check on the copy's own labels, with the seconds its fit and check took. Every
   model is checked the same way, by gaussian_process: the refit labels the held-out favorite as a weak negative, as
   any unlabeled ranked listing. The scoring model and the similarity terms are the Gaussian-process model without an
@@ -174,7 +174,8 @@ def five_favorites(inputs, embeddings_by_model, favorites, alike):
 def validated_experiment(inputs, experiment):
     """The experiment's favorites and alike listings, each a ranked listing of the store, five distinct favorites and
     no listing in both."""
-    if not isinstance(experiment, dict) or not isinstance(experiment.get('favorites'), list) or not isinstance(experiment.get('alike'), list):
+    if (not isinstance(experiment, dict) or not isinstance(experiment.get('favorites'), list) or not isinstance(experiment.get('alike'), list)
+            or not all(isinstance(identifier, str) for identifier in (*experiment['favorites'], *experiment['alike']))):
         raise ValueError('The experiment file is {"favorites": [five listing ids], "alike": [listing ids]}.')
     favorites, alike = experiment['favorites'], experiment['alike']
     model_design = design(inputs)

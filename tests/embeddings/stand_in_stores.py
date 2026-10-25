@@ -43,6 +43,8 @@ def copied_listings(source, target):
 
 
 def synthetic(count, favorites, photo_directory, target, experiment, port):
+    if count < 2 * GARDEN_UNITS:
+        raise ValueError(f'A synthetic store needs at least {2 * GARDEN_UNITS} listings.')
     generator = random.Random(11)
     by_listing = {}
     for file in sorted(Path(photo_directory).glob('*.jpg')):
