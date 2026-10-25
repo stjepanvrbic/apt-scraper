@@ -1,9 +1,9 @@
 ---
 title: Implicit signals recorded by the gallery
 type: Feature
-state: In Progress
+state: Done
 priority: 4
-assignee: agent
+assignee:
 milestone:
 parent: 0015
 blocked_by: []
@@ -21,7 +21,7 @@ The gallery records listing opens, how long a listing stays open and which photo
 - [x] Each rerank computes the leave-one-out check a second time with the signals as weak labels and reports both values. The ranks come from the model without them.
 - [x] Tests at the store and HTTP boundaries, and a headless Playwright test that opening a listing and paging its photos records the events.
 - [x] Pushed `feat/implicit_signals` and opened a pull request to `main`, without merging.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
