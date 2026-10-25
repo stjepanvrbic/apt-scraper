@@ -25,4 +25,13 @@ def pairwise_questions(store, count):
     scale and weak-negative weight of the latest rerank."""
     last = store.last_rerank()
     hyperparameters = (last['prior_scale'], last['unlabeled_weight']) if last else DEFAULT_HYPERPARAMETERS
-    return questions(store.ranking_inputs(), hyperparameters, count, store.pairwise_answers())
+    inputs = store.ranking_inputs()
+    return questions(inputs, hyperparameters, count, [*inputs['pairs'], *store.skipped_pairs()])
+
+
+def comparison(store):
+    pairs = pairwise_questions(store, 1)
+    question = None
+    if pairs:
+        question = {'listings': [store.listing(identifier, visible_only=True) for identifier in pairs[0]['listings']]}
+    return {'question': question, 'answered': len(store.pairwise_answers())}

@@ -13,8 +13,10 @@ Commands:
   features.py read FILE     save those readings from a JSON file in the scratch directory, then delete it
   features.py status        whether extraction needs the user's attention
   features.py retry         try again every extraction and judgment given up after 3 attempts
+  features.py invite-compare ask for the first 5 to 8 pairwise answers through the messaging gateway, once ready
 
-Exit codes: 0 done (for status: no problem), 3 extraction needs attention, 1 the input or a step failed, 2 usage error.
+Exit codes: 0 done (for status: no problem), 3 extraction needs attention or the invitation gateway is not connected,
+1 the input or a step failed, 2 usage error.
 
 Hermes wakes the model whenever a cron script fails (cron/scheduler_prompt.py, "Script Error"), so run records a
 failure for status and ends with {"wakeAgent": false} instead.
@@ -38,7 +40,9 @@ from string import Template
 
 SKILLS = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SKILLS / 'gallery' / 'scripts'))
+sys.path.insert(0, str(SKILLS / 'contact' / 'scripts'))
 
+from contact import NotConnected, tell_user  # noqa: E402
 from record import CATEGORIES, FLAGS, NOT_SHOWN, RATINGS, ROOM_TYPES, UNIT_LEVELS, choices, validate_judgments  # noqa: E402
 from scoring import stated_phrases  # noqa: E402
 from scratch import read_scratch_object, scratch_directory  # noqa: E402
@@ -247,7 +251,27 @@ class Features:
             lines.append(f'{len(work["notes"])} notes and {len(work["unread"])} stated preferences wait for a reading.')
         if work['judge']:
             lines.append(f'{len(work["judge"])} listings wait for judgments of preferences stated after their extraction.')
-        return lines, bool(tasks or work['judge'] or work['notes'] or work['unread'])
+        invite = self.compare_invitation_pending()
+        if invite:
+            lines.append('The first questions in Compare are ready. Run invite-compare to ask the user through the messaging gateway.')
+        return lines, bool(tasks or work['judge'] or work['notes'] or work['unread'] or invite)
+
+    def compare_invitation_pending(self):
+        if self.state.load().get('compare_invited_at') or self.store.missing_settings():
+            return False
+        inputs = self.store.ranking_inputs()
+        return not inputs['pairs'] and sum(
+            listing['rankable'] and listing['record'] is not None and not listing['id'].startswith('sample:')
+            for listing in inputs['listings']) >= 2
+
+    def invite_compare(self):
+        if not self.compare_invitation_pending():
+            return {'sent': False}
+        tell_user('Your first apartments are ready to compare. Please answer 5 to 8 questions in the gallery\'s Compare tab. '
+                  'For each pair, choose the apartment you prefer, or skip if you cannot decide. '
+                  'Your choices will count the next time you ask me to score and rerank.')
+        self.state.update(compare_invited_at=self.now().isoformat())
+        return {'sent': True}
 
     @staticmethod
     def reads(work):
@@ -512,6 +536,7 @@ def main(argv):
     reading.add_argument('file', type=Path, help='JSON object {"preferences": [...], "notes": [...]} in the scratch directory. Deleted once saved.')
     commands.add_parser('status')
     commands.add_parser('retry')
+    commands.add_parser('invite-compare')
     arguments = parser.parse_args(argv)
     if arguments.command == 'run':
         return run()
@@ -521,7 +546,9 @@ def main(argv):
             report = features.status()
             print(json.dumps(report, ensure_ascii=False))
             return ATTENTION if report['problems'] else 0
-        if arguments.command == 'retry':
+        if arguments.command == 'invite-compare':
+            print(json.dumps(features.invite_compare()))
+        elif arguments.command == 'retry':
             features.retry()
             print('Every extraction and judgment given up is tried again from the next run.')
         elif arguments.command == 'tags':
@@ -537,7 +564,10 @@ def main(argv):
             print(json.dumps(command(value), ensure_ascii=False))
             file.unlink()
         return 0
-    except (ValueError, KeyError, OSError, sqlite3.Error) as error:
+    except NotConnected as error:
+        print(str(error), file=sys.stderr)
+        return 3
+    except (ValueError, KeyError, OSError, sqlite3.Error, RuntimeError) as error:
         print(error.args[0] if isinstance(error, KeyError) else error, file=sys.stderr)
         return 1
 

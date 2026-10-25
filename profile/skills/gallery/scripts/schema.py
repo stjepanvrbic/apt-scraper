@@ -78,7 +78,13 @@ def scoring_model(connection):
         connection.execute(statement)
 
 
-MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model)
+def pairwise_skips(connection):
+    connection.execute('''CREATE TABLE pairwise_skips (
+        first TEXT NOT NULL REFERENCES listings(id), second TEXT NOT NULL REFERENCES listings(id),
+        remaining INTEGER NOT NULL CHECK (remaining > 0), PRIMARY KEY (first, second), CHECK (first < second))''')
+
+
+MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips)
 
 
 def migrate(connection):

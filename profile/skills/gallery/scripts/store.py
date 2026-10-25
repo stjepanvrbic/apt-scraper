@@ -596,13 +596,52 @@ class ListingStore:
 
     def answer_pair(self, chosen, other):
         """Records the user's answer to a pairwise question: chosen over other."""
-        if chosen == other:
-            raise ValueError('A pairwise answer compares two different listings.')
         with self.connect(write=True) as connection:
-            self.require_listing(connection, chosen)
-            self.require_listing(connection, other)
+            self.require_pair(connection, chosen, other)
+            previous = connection.execute('''SELECT chosen FROM pairwise_answers
+                WHERE (chosen = ? AND other = ?) OR (chosen = ? AND other = ?)''', (chosen, other, other, chosen)).fetchone()
+            if previous:
+                if previous['chosen'] != chosen:
+                    raise ValueError('This pair was already answered.')
+                return
             connection.execute('INSERT INTO pairwise_answers (chosen, other, answered_at) VALUES (?, ?, ?)',
                                (chosen, other, datetime.now(timezone.utc).isoformat()))
+            self.advance_pairwise_skips(connection)
+
+    def require_pair(self, connection, first, second):
+        require_text(first, 'First listing')
+        require_text(second, 'Second listing')
+        if first == second:
+            raise ValueError('A pairwise question compares two different listings.')
+        for identifier in (first, second):
+            self.require_listing(connection, identifier)
+            available = connection.execute('''SELECT 1 FROM listings l LEFT JOIN feedback f ON f.listing_id = l.id
+                WHERE l.id = ? AND l.status = 'available' AND l.matches_criteria = 1 AND COALESCE(f.dismissed, 0) = 0''',
+                                           (identifier,)).fetchone()
+            if not available:
+                raise ValueError('This listing is no longer available to compare. Refresh Compare.')
+
+    @staticmethod
+    def advance_pairwise_skips(connection):
+        connection.execute('DELETE FROM pairwise_skips WHERE remaining = 1')
+        connection.execute('UPDATE pairwise_skips SET remaining = remaining - 1')
+
+    def skip_pair(self, first, second):
+        """Suppresses this pair until twenty other questions have been answered or skipped."""
+        with self.connect(write=True) as connection:
+            self.require_pair(connection, first, second)
+            first, second = sorted((first, second))
+            if connection.execute('SELECT 1 FROM pairwise_skips WHERE first = ? AND second = ?', (first, second)).fetchone():
+                return
+            if connection.execute('''SELECT 1 FROM pairwise_answers
+                WHERE (chosen = ? AND other = ?) OR (chosen = ? AND other = ?)''', (first, second, second, first)).fetchone():
+                raise ValueError('This pair was already answered.')
+            self.advance_pairwise_skips(connection)
+            connection.execute('INSERT INTO pairwise_skips VALUES (?, ?, 20)', (first, second))
+
+    def skipped_pairs(self):
+        with self.connect() as connection:
+            return [tuple(row) for row in connection.execute('SELECT first, second FROM pairwise_skips')]
 
     def pairwise_answers(self):
         with self.connect() as connection:

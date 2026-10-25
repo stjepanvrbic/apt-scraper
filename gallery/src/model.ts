@@ -15,6 +15,7 @@ export type Listing = ListingSummary & {
   viewings_total: number;
 };
 export type ListingPage = { items: ListingSummary[]; total: number; page: number; page_size: number };
+export type Comparison = { question: { listings: [Listing, Listing] } | null; answered: number };
 
 export const price = (listing: ListingSummary) => listing.price === null ? listing.price_note ?? 'Price not listed' : new Intl.NumberFormat(undefined, {
   ...(listing.currency ? { style: 'currency', currency: listing.currency } : {}), maximumFractionDigits: 0,

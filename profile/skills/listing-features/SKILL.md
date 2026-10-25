@@ -13,7 +13,7 @@ metadata:
 
 # Listing features
 
-The ranking learns the user's taste from a feature record of every listing: what a model read once from all its photos and its text, and what code computes from the listing. Reading the photos and text is extraction. It runs as the Hermes cron job `apt-scraper-features` every 10 minutes, which the installer turns on. Its script prepares each listing that needs a record and wakes you only when something waits for a model read. A listing whose content has not changed is never read again.
+The ranking learns the user's taste from a feature record of every listing: what a model read once from all its photos and its text, and what code computes from the listing. Reading the photos and text is extraction. It runs as the Hermes cron job `apt-scraper-features` every 10 minutes, which the installer turns on. Its script prepares each listing that needs a record and wakes you when something waits for a model read or the first Compare invitation. A listing whose content has not changed is never read again.
 
 You never look at a listing's photos. Each listing is read by one subagent of its own, which sees the photos and saves the record itself, so the images stay in the subagent's conversation and only its one-line answer reaches yours.
 
@@ -44,6 +44,12 @@ The report's line after "Extraction calls, in order, one delegate_task call each
 Each subagent answers "saved" or why its record could not be saved. Do nothing about a failure: the next runs try that listing again, and after three failed attempts the job stops, and `status` reports it.
 
 Never call `vision_analyze` or `read_file` on a sheet, a photo or a task file yourself.
+
+## First comparisons
+
+After running extraction tasks, run `python "${HERMES_SKILL_DIR}/scripts/features.py" invite-compare`, even when the report had no tasks. Once the interview is complete and at least two available, matching, undismissed listings have current feature records, it asks the user through the checked messaging gateway to answer 5 to 8 questions in Compare. It sends once, records successful delivery, and does nothing if the invitation was already sent or the user has already answered a pair. Sample listings do not trigger it.
+
+A failed delivery stays pending for a later wake. Exit code 3 means the gateway is not connected; exit code 1 means delivery or storage failed. Report the error instead of claiming the invitation was sent. Do not send the invitation separately or put it only in your final response, which the scheduled job does not deliver.
 
 ## Reading notes and preferences
 
