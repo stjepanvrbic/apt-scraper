@@ -906,8 +906,8 @@ class GateTests(ContactTest):
 
 class ShippedJobTests(unittest.TestCase):
     def test_job_runs_the_shipped_gate_with_the_contact_skill_and_delivers_nothing(self):
-        [job] = json.loads((ROOT / 'profile' / 'cron' / 'jobs.json').read_text(encoding='utf-8'))['jobs']
-        self.assertEqual(job['id'], 'apt-scraper-contact')
+        jobs = json.loads((ROOT / 'profile' / 'cron' / 'jobs.json').read_text(encoding='utf-8'))['jobs']
+        [job] = [job for job in jobs if job['id'] == 'apt-scraper-contact']
         self.assertTrue((ROOT / 'profile' / 'scripts' / job['script']).is_file())
         self.assertEqual(job['skills'], ['contact'])
         self.assertTrue((ROOT / 'profile' / 'skills' / 'contact' / 'SKILL.md').is_file())

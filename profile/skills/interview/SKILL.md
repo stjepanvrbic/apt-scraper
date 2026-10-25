@@ -25,9 +25,7 @@ Before the first search you need four settings from the user: their criteria, th
 
 ```bash
 python "${HERMES_SKILL_DIR}/scripts/settings.py" status
-python "${HERMES_SKILL_DIR}/scripts/settings.py" listings
 python "${HERMES_SKILL_DIR}/scripts/settings.py" save "<scratch directory>/settings.json"
-python "${HERMES_SKILL_DIR}/scripts/settings.py" save "<scratch directory>/settings.json" --outside example:200 example:300
 ```
 
 `status` prints the saved `settings` and `missing`, the list of what the interview still needs. It exits 0 when nothing is missing and 3 otherwise.
@@ -39,8 +37,6 @@ To save, write a JSON object with any of `criteria`, `preferences`, `listing_sit
 ```
 
 Each setting in the object replaces the stored one whole. Settings left out stay as they are. To change one part of a setting, read the setting with `status`, change that part and save the whole setting. `save` prints `missing` after saving. Exit code 1 means the input was rejected and nothing was saved. The error says why. The file stays, so fix it and save again. Exit code 4 means the Python running the script has no time zone database, so it cannot check the viewing time zone and saved nothing. That is not the user's mistake. Tell the user, show them the output, and do not ask them for another time zone.
-
-`listings` prints the facts of every stored listing, for judging them against changed criteria.
 
 The script always uses the profile's real listing store, also when the gallery shows sample listings.
 
@@ -87,7 +83,7 @@ Turn vague answers into values you can save, and say back what you saved. "Under
 
 Save each topic as soon as it is settled, so an interrupted interview continues where it stopped. The next conversation's `status` lists what is left.
 
-When `status` exits 0, summarize the settings in a few lines and ask the user to correct anything. Then tell them you have what the search needs.
+When `status` exits 0, summarize the settings in a few lines and ask the user to correct anything. Then load the `search` skill and start the search as it says.
 
 Ask only for search settings. The interview never asks for the user's name, contact details, income or other personal information. When a listing agent needs such details later, the contact work asks the user for them.
 
@@ -98,7 +94,7 @@ When the user states or changes a criterion, a preference, a listing site or the
 1. Run `status` and read the current setting.
 2. Change only what the user changed. When their words were vague, confirm the value as in the interview.
 3. Save the whole setting. Preferences, listing sites and availability are saved as they are.
-4. For criteria, judge every stored listing against the new criteria before saving. Run `listings`. A listing is outside the criteria only when a fact it states contradicts one: a price above the maximum, a size or room count out of range, an address in none of the areas, a move-in date it cannot meet, or a description that rules out a must-have. Compare prices after converting a weekly or yearly price to the criterion's period. A fact the listing does not state never puts it outside. Then save the criteria with `--outside` followed by the ids of the listings outside them, or with `--outside` alone when none are. The store hides those listings in every gallery view and shows every other one again, in the same step that saves the criteria. While listings are stored, `save` refuses criteria without `--outside`.
+4. Saving criteria also judges every stored listing against them, from the facts and judgments the search stored with it, and hides the listings outside them, except in the Contacted and Viewings tabs. `save` prints `criteria` with how many listings are `outside`, `matching` and `awaiting_judgment`. A listing awaits judgment when a must-have is new to it, or when it has no facts from a listing site and a criterion changed. It stays hidden until judged. When `awaiting_judgment` is above 0, load the `search` skill and judge those listings now as its section "Judging must-haves" says.
 5. Confirm the change in one line. After a criteria change, say how many listings are hidden, from the `outside` count `save` prints.
 
 Never only acknowledge a change. A change is real once `save` exits 0.

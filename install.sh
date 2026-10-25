@@ -59,10 +59,28 @@ if $had_config; then cp "$saved_config" "$config"; fi
 rm -f "$saved_config"
 [ "$install_status" -eq 0 ] || exit "$install_status"
 
+# The search runs curl_cffi in an environment of its own, built from hash-pinned wheels with the Python
+# Hermes runs cron scripts with, which `hermes pm env` puts on PATH.
+step 'Search environment'
+hermes_path=$(hermes pm env | sed -n 's/^ *"PATH": "\(.*\)",\{0,1\}$/\1/p')
+python=""
+IFS=: read -r -a hermes_directories <<< "$hermes_path"
+for directory in "${hermes_directories[@]}"; do
+    if [ -x "$directory/python3" ]; then python="$directory/python3"; break; fi
+done
+if [ -z "$python" ]; then
+    echo 'Hermes reports no Python of its own in `hermes pm env`.' >&2
+    exit 1
+fi
+profile_home="$HOME/.hermes/profiles/$PROFILE_NAME"
+HERMES_HOME="$profile_home" "$python" "$profile_home/scripts/search-run.py" install
+
 # Hermes installs a profile's shipped cron jobs paused. The listing correspondence job wakes the
-# model only when a contact request or a reply needs it, so it stays on.
-step 'Listing correspondence job'
+# model only when a contact request or a reply needs it, and the listing search searches only once
+# the interview is complete, so both stay on.
+step 'Listing correspondence and listing search jobs'
 hermes -p "$PROFILE_NAME" cron resume apt-scraper-contact
+hermes -p "$PROFILE_NAME" cron resume apt-scraper-search
 
 step 'Claude subscription provider plugin'
 hermes -p "$PROFILE_NAME" plugins install "$PLUGIN_NAME" --force --enable

@@ -41,3 +41,15 @@ python "$HERMES_HOME/skills/contact/scripts/contact.py"
 ```
 
 Never email, text or fill in a form for a listing any other way. Before you reply to a message that reaches you through the messaging gateway, run the script with `questions`. When the message answers one of the open questions, load the `contact` skill and record the answer as it says before you reply.
+
+## Search
+
+The search script is:
+
+```bash
+python "$HERMES_HOME/skills/search/scripts/search.py"
+```
+
+The search runs every hour as the scheduled job `apt-scraper-search`, and searches once the interview is complete. When the interview becomes complete, load the `search` skill and run the search once now as it says.
+
+At the first message of every conversation, when the settings `status` exits 0, also run the search script with `status` before you reply. Exit code 3 means the search needs attention: load the `search` skill, tell the user in a sentence or two what `problems` says, and fix what the skill says you can, including running a search that has not run yet. When `new_since_report` is above 0, tell the user in one line how many new listings are in the gallery, then run the script with `reported`. Otherwise say nothing about the search. Any other exit code means the script itself failed, so show the user its output.
