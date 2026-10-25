@@ -731,10 +731,15 @@ def fit_model(inputs, hyperparameters=None, *, weak_labels=None, warm_start=None
     the one whose approximate check, one step from the full fit, gives the favorites the best mean held-out rank, the
     earlier on a tie. Before that, DEFAULT_HYPERPARAMETERS. The held-out ranks it reports come from converged fits.
     warm_start reuses a model fitted to the same inputs when only diagnostic labels change."""
-    model_design = warm_start.design if warm_start else design(inputs)
+    return fit_design(warm_start.design if warm_start else design(inputs), inputs, hyperparameters, weak_labels=weak_labels,
+                      start=warm_start.fit.weights if warm_start else None)
+
+
+def fit_design(model_design, inputs, hyperparameters=None, *, weak_labels=None, start=None):
+    """fit_model on a given design of the inputs' listings, its first Newton iteration from start when given."""
     dense_count = model_design.dense_count
     tuning = hyperparameters is None and len(model_design.favorites) >= TUNING_FAVORITES
-    fits, start = {}, [warm_start.fit.weights if warm_start else None]
+    fits, start = {}, [start]
 
     def candidate(scale, unlabeled_weight):
         if (scale, unlabeled_weight) not in fits:

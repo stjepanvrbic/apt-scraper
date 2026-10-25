@@ -118,7 +118,12 @@ def implicit_signals(connection):
     connection.execute('CREATE INDEX implicit_signals_listing_visit ON implicit_signals(listing_id, fingerprint, visit_id)')
 
 
-MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals)
+def listing_embeddings(connection):
+    connection.execute('''CREATE TABLE embeddings (listing_id TEXT NOT NULL REFERENCES listings(id), fingerprint TEXT NOT NULL,
+        model TEXT NOT NULL, part TEXT NOT NULL, count INTEGER NOT NULL, vector BLOB NOT NULL, PRIMARY KEY (listing_id, model, part))''')
+
+
+MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals, listing_embeddings)
 
 
 def migrate(connection):

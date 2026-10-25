@@ -877,6 +877,47 @@ class ListingStore:
                         AND l.fingerprint = r.fingerprint WHERE ? IS NULL OR r.listing_id = ?
                         ORDER BY r.listing_id''', (listing_id, listing_id))}
 
+    def embedding_inputs(self, models):
+        """Every listing whose current content has a feature record and no embeddings of that content from one of
+        models: its id, fingerprint, title, description, the record's photos with their room types, its traits and
+        concerns, and the models it lacks."""
+        with self.connect() as connection:
+            embedded = {}
+            for row in connection.execute('SELECT DISTINCT e.listing_id, e.model FROM embeddings e JOIN listings l '
+                                          'ON l.id = e.listing_id AND l.fingerprint = e.fingerprint'):
+                embedded.setdefault(row['listing_id'], set()).add(row['model'])
+            work = []
+            for row in connection.execute('SELECT l.id, l.fingerprint, l.data, r.extraction FROM listings l JOIN feature_records r '
+                                          'ON r.listing_id = l.id AND r.fingerprint = l.fingerprint ORDER BY l.id'):
+                missing = [model for model in models if model not in embedded.get(row['id'], ())]
+                if missing:
+                    data, record = json.loads(row['data']), json.loads(row['extraction'])
+                    work.append({'id': row['id'], 'fingerprint': row['fingerprint'], 'title': data.get('title'),
+                                 'description': data.get('description'), 'photos': [(photo['url'], photo['room']) for photo in record['photos']],
+                                 'traits': record['traits'], 'concerns': record['concerns'], 'missing': missing})
+            return work
+
+    def save_embeddings(self, listing_id, fingerprint, model, parts):
+        """Replaces the listing's embeddings from model with those of this content. parts maps each part, such as a
+        room type, to the number of inputs averaged into it and its vector as float32 bytes."""
+        if not parts or any(type(count) is not int or count < 1 or not isinstance(vector, bytes) or not vector or len(vector) % 4
+                            for count, vector in parts.values()):
+            raise ValueError('Each embedding part needs a positive count and a vector of float32 bytes.')
+        with self.connect(write=True) as connection:
+            self.require_fingerprint(connection, listing_id, fingerprint)
+            connection.execute('DELETE FROM embeddings WHERE listing_id = ? AND model = ?', (listing_id, model))
+            connection.executemany('INSERT INTO embeddings VALUES (?, ?, ?, ?, ?, ?)',
+                                   [(listing_id, fingerprint, model, part, count, vector) for part, (count, vector) in parts.items()])
+
+    def embeddings(self, model):
+        """The embeddings from model of every listing's current content: by listing id, each part's count and vector bytes."""
+        with self.connect() as connection:
+            result = {}
+            for row in connection.execute('SELECT e.* FROM embeddings e JOIN listings l ON l.id = e.listing_id AND l.fingerprint = e.fingerprint '
+                                          'WHERE e.model = ? ORDER BY e.listing_id, e.part', (model,)):
+                result.setdefault(row['listing_id'], {})[row['part']] = (row['count'], row['vector'])
+            return result
+
     def tags(self):
         """The tag list: the seed tags of record.py and every tag an extraction added."""
         with self.connect() as connection:

@@ -159,6 +159,10 @@ With more than 20 ranked listings, ranks 7 and 14 hold exploration listings, mar
 
 `pairwise_questions(store, count)` in `rerank.py` fits the model with the latest rerank's prior scale and weak-negative weight and returns pairs among the 40 best-ranked listings whose order the posterior is least sure of: the probability that one scores above the other, from the Laplace posterior, is closest to one half. Each listing is in at most one question, and a pair answered either way is not asked again. A skipped pair is excluded until twenty other questions have been answered or skipped, persisted in `pairwise_skips`. Refreshing a question does not advance this cooldown. Answers are stored with `ListingStore.answer_pair(chosen, other)` and count at the next rerank. Before any label, the posterior is the prior from the stated preferences.
 
+### Embedding models, measured and not used
+
+`embeddings.py`, `embedding_models.py` and `measure_embeddings.py` in the ranking skill's scripts compute CLIP photo embeddings and sentence embeddings of each listing once per content, cached in the store's `embeddings` table, and measure a Gaussian-process preference model and a similarity term against the scoring model. They run in an environment of their own, built from the hash-pinned `requirements-embeddings.txt` of the ranking skill. No rerank uses them. The [embedding research](research/embedding_preference_model.md) has the install steps, the costs and the measurement.
+
 ## The review pass
 
 After each rerank, a model reviews its result once, as text. The review rewrites the reasons of the top 50 listings, flags each whose rank conflicts with a stated preference, reports what looks wrong in the ranking state, and may move listings. Its moves stand only when the leave-one-out check confirms them, because language-model rankers show position and popularity bias. The code is `review.py`, pure functions, and `pending_review` and `save_review` in `rerank.py`.
@@ -221,5 +225,13 @@ python "$HERMES_HOME/skills/ranking/scripts/ranking.py" review-save "$HERMES_HOM
 python -m unittest discover -s tests -v
 ruff check profile tests
 ```
+
+The embedding tests run in the embedding environment and download the pinned models into `EMBEDDING_MODELS`, by default a directory in the system's temporary directory, when they are not there:
+
+```powershell
+& "<embedding environment>\Scripts\python.exe" -m unittest discover -s tests/embeddings -v
+```
+
+`tests/embeddings/test_embedding_models.py` covers the Gaussian-process model, among them that without the embedding kernel it is the scoring model and that its leave-one-out check finds nothing where there is nothing, and the similarity terms. `tests/embeddings/test_embeddings.py` embeds listings with the real models, `tests/test_embedding_store.py` covers the cache in the store.
 
 `tests/test_feature_record.py` covers the record contract, `tests/test_listing_photos.py` the duplicate removal and the contact sheets on a 40-photo fixture, `tests/test_feature_store.py` the store, and `tests/test_features_run.py` the job against real SQLite stores: which listings wait, preparation, saving through the command line, preferences stated later, readings, attempts, failures and the shipped job. `tests/test_geodata.py` covers geocoding and reading stations from a GTFS feed, `tests/test_code_features.py` the distances in the store, and `tests/test_scoring.py` covers the scoring model on constructed listings, among them Spec › Acceptance "Overruled preference", "Location", "Exploration" and a single pairwise answer, and `tests/test_rerank.py` reranks against real SQLite stores, the 300-listing timing and the ranking script. `tests/test_review.py` covers the review pass with controlled reviews, among them Spec › Acceptance "Review pass": moves that put favorites lower are reverted with both check values, moves that put them higher stand, and a reason that cites a value the record lacks or uses another word outside its citations is rejected. It also covers the label-free task, the format checks, the check on the rerank's own scores while labels and listings change, superseded reviews, the single-label finding, the job's wake gate and attempts, the command line and the shipped job.
