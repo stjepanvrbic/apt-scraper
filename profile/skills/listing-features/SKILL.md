@@ -13,7 +13,7 @@ metadata:
 
 # Listing features
 
-The ranking learns the user's taste from a feature record of every listing: what a model read once from all its photos and its text, and what code computes from the listing. Reading the photos and text is extraction. It runs as the Hermes cron job `apt-scraper-features` every 10 minutes, which the installer turns on. Its script prepares each listing that needs a record and wakes you only when something waits for a model read. A listing whose content has not changed is never read again.
+The ranking learns the user's taste from a feature record of every listing: what a model read once from all its photos and its text, and what code computes from the listing. Reading the photos and text is extraction. It runs as the Hermes cron job `apt-scraper-features` every 10 minutes, which the installer turns on. Its script prepares each listing that needs a record and wakes you when something waits for a model read. A listing whose content has not changed is never read again.
 
 You never look at a listing's photos. Each listing is read by one subagent of its own, which sees the photos and saves the record itself, so the images stay in the subagent's conversation and only its one-line answer reaches yours.
 

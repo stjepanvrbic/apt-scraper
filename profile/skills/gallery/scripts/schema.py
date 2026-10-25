@@ -76,6 +76,12 @@ def scoring_model(connection):
         connection.execute(statement)
 
 
+def pairwise_skips(connection):
+    connection.execute('''CREATE TABLE pairwise_skips (
+        first TEXT NOT NULL REFERENCES listings(id), second TEXT NOT NULL REFERENCES listings(id),
+        remaining INTEGER NOT NULL CHECK (remaining > 0), PRIMARY KEY (first, second), CHECK (first < second))''')
+
+
 def distances(connection):
     """Places become a name and an address, and the code features of every listing are computed again, now with its
     distances. Code features are first computed here, so a store from before them gets them with every column."""
@@ -96,7 +102,7 @@ def distances(connection):
     store_all_code_features(connection)
 
 
-MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, distances)
+MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances)
 
 
 def migrate(connection):

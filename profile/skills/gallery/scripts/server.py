@@ -8,9 +8,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 from chat import ChatController
+from rerank import pairwise_questions
 
 
 STATIC = Path(__file__).resolve().parents[1] / 'web'
+
+
+def comparison(store):
+    pairs = pairwise_questions(store, 1)
+    question = None
+    if pairs:
+        question = {'listings': [store.listing(identifier, visible_only=True) for identifier in pairs[0]['listings']]}
+    return {'question': question, 'answered': len(store.pairwise_answers())}
 
 
 def make_server(store, port=8765, chat_runner=None, install_id='development'):
@@ -57,6 +66,8 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                     query = parse_qs(urlsplit(self.path).query)
                     if path == '/api/revision':
                         result = {'revision': store.revision()}
+                    elif path == '/api/compare':
+                        result = comparison(store)
                     elif path == '/api/listings':
                         result = store.browse(query.get('view', ['Rankings'])[0], page=int(query.get('page', ['1'])[0]),
                                               page_size=int(query.get('page_size', ['24'])[0]))
@@ -116,6 +127,12 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                     if not set(body) <= {'message_id', 'prompt_id', 'answer', 'interrupt'} or 'message_id' not in body:
                         raise ValueError('Invalid conversation response.')
                     chat.respond(**body)
+                elif parts == ['api', 'compare', 'answer']:
+                    self.require_fields(body, {'chosen', 'other'})
+                    store.answer_pair(body['chosen'], body['other'])
+                elif parts == ['api', 'compare', 'skip']:
+                    self.require_fields(body, {'first', 'second'})
+                    store.skip_pair(body['first'], body['second'])
                 elif len(parts) == 4 and parts[:2] == ['api', 'listings']:
                     listing_id, action = parts[2:]
                     if action == 'feedback':
