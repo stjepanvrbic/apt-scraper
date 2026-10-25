@@ -1,13 +1,13 @@
 ---
 title: Ranking that learns from favorites and notes
 type: Feature
-state: In Progress
+state: Canceled
 priority: 2
 assignee: agent
 milestone:
 parent:
 blocked_by: [0003, 0008]
-related: []
+related: [0015]
 ---
 
 ## Outcome
@@ -31,3 +31,7 @@ The model scores each listing once against the preferences and stores features. 
 ## Deviations
 
 ## Result
+
+## Comments
+
+- 2026-10-25: Canceled. The owner redesigned the ranking: a feature record read once per listing content from every photo, and a scoring model fitted in code on each rerank the user asks for, with a review pass, exploration listings and pairwise questions. That replaces this ticket's cron reranking, its 3 photos per listing and its hand-weighted fixed vocabulary, so its brief would mislead. 0015 carries the outcome. PR #13 (`feat/learning_ranking`, https://github.com/stjepanvrbic/apt-scraper/pull/13) stays open and unmerged as the reference baseline: its experiment results, store changes and never-failing job pattern are reused by the redesign.

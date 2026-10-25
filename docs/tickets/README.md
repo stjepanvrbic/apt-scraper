@@ -17,3 +17,7 @@ related: []        # ticket numbers
 ```
 
 A work ticket's body has the sections Outcome, Acceptance, Spec, Design, Deviations and Result. A decision's body has Question, Options, Decision, Reason and Consequences.
+
+An umbrella is a ticket with children and no work of its own. Its `type` is empty, its body has Motivation, Outcome, Design, Spec and Exit criteria, and its last child, "Verify: <outcome>", is blocked by every sibling.
+
+Comments, such as the reason a ticket was canceled, go in a final Comments section, each dated, oldest first.

@@ -1,13 +1,13 @@
 ---
 title: Recognize garden units in the ranking vocabulary
 type: Feature
-state: Backlog
+state: Canceled
 priority: 4
 assignee:
 milestone:
 parent:
 blocked_by: []
-related: [0004]
+related: [0004, 0016, 0017, 0027]
 ---
 
 ## Outcome
@@ -29,3 +29,7 @@ Merge "garden unit" and "basement unit" into one vocabulary term and tell the mo
 ## Deviations
 
 ## Result
+
+## Comments
+
+- 2026-10-25: Canceled. The redesign drops the fixed vocabulary this ticket changes. 0017 reads unit level from unit labels such as `#G` in code, 0016 reads it from photos and text, and 0027 checks the garden units in the five-favorites experiment.
