@@ -42,7 +42,7 @@ SKILLS = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SKILLS / 'gallery' / 'scripts'))
 sys.path.insert(0, str(SKILLS / 'contact' / 'scripts'))
 
-from contact import NotConnected, tell_user  # noqa: E402
+from contact import NotConnected, tell_user, usable  # noqa: E402
 from record import CATEGORIES, FLAGS, NOT_SHOWN, RATINGS, ROOM_TYPES, UNIT_LEVELS, choices, validate_judgments  # noqa: E402
 from scoring import stated_phrases  # noqa: E402
 from scratch import read_scratch_object, scratch_directory  # noqa: E402
@@ -251,10 +251,9 @@ class Features:
             lines.append(f'{len(work["notes"])} notes and {len(work["unread"])} stated preferences wait for a reading.')
         if work['judge']:
             lines.append(f'{len(work["judge"])} listings wait for judgments of preferences stated after their extraction.')
-        invite = self.compare_invitation_pending()
-        if invite:
-            lines.append('The first questions in Compare are ready. Run invite-compare to ask the user through the messaging gateway.')
-        return lines, bool(tasks or work['judge'] or work['notes'] or work['unread'] or invite)
+        if self.compare_invitation_pending() and usable('gateway'):
+            self.invite_compare()
+        return lines, bool(tasks or work['judge'] or work['notes'] or work['unread'])
 
     def compare_invitation_pending(self):
         if self.state.load().get('compare_invited_at') or self.store.missing_settings():
