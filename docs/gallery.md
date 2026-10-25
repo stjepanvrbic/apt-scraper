@@ -30,7 +30,7 @@ The default port is 8765. If it serves another application or database, select a
 
 Inside Hermes, data is under `HERMES_HOME/workspace/gallery/`. Outside Hermes, Windows uses `%LOCALAPPDATA%/apt-scraper/` and macOS uses `~/Library/Application Support/apt-scraper/`. The databases are `listings.sqlite3` and `sample.sqlite3`, and `store_path(sample)` in `store.py` returns their paths. Search settings are always in `listings.sqlite3`. `--database <path>` selects an explicit database. Keep all global options before the command name.
 
-The shared Python interface is `ListingStore` in `profile/skills/gallery/scripts/store.py`. The schema is at version 2, recorded in `PRAGMA user_version`. Each version's migration runs in a transaction when the store opens, so a version-1 store gains the contact workflow's records without losing data. Databases from newer schema versions are rejected. Scraped fields, analysis, ranking, user feedback, contacts, approvals, viewings and chat records are separate.
+The shared Python interface is `ListingStore` in `profile/skills/gallery/scripts/store.py`. The schema is at version 3, recorded in `PRAGMA user_version`. Each version's migration runs in a transaction when the store opens, so a version-1 store gains the contact workflow's records without losing data, and a version-2 store gains the code-derived features of every stored listing. Databases from newer schema versions are rejected. Scraped fields, analysis, ranking, user feedback, contacts, approvals, viewings and chat records are separate.
 
 | Method | Behavior |
 | --- | --- |
@@ -41,6 +41,7 @@ The shared Python interface is `ListingStore` in `profile/skills/gallery/scripts
 | `set_availability(id, status)` | Marks a listing available or unavailable without requiring the original source payload or changing analysis. |
 | `analyze(id, fingerprint, features)` | Saves a JSON object of features against the exact content fingerprint. Rejects stale work. |
 | `features(id)` | Returns current stored features, or `None` when analysis is missing or stale. |
+| `code_features(today=None)` | The code-derived part of each listing's feature record, by listing id: monthly price, size, price per square foot, bedrooms, bathrooms, unit label, floor and level, photo count and coordinates, as `code_features.py` describes them, with the content fingerprint they belong to, `first_seen` and `days_since_first_seen` counted to `today` (by default today in UTC). Saving a listing whose content changed and saving its features recompute them, without a model call. |
 | `rank(id, fingerprint, rank, reason)` | Updates ranking independently of scraped content. Rejects stale content fingerprints. |
 | `listing(id, notes_page=1, correspondence_page=1, viewings_page=1)` | Full details for one listing. Each history has pages of 50 and a total count. |
 | `browse(view, page=1, page_size=24)` | Summaries for Rankings, Favorites, Contacted, Viewings or Dismissed. Page size is at most 100. Viewings sorts by UTC time and excludes canceled visits. |

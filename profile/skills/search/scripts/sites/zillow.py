@@ -27,6 +27,8 @@ RENTALS_ONLY = {'fr': {'value': True}, 'fsba': {'value': False}, 'fsbo': {'value
 DATA = re.compile(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.S)
 MAX_PHOTOS = 40
 MAX_UNIT_LINES = 40
+# Part of every card's signature, so a new reader reads each stored listing once more and adds the facts it reads.
+READER = 2
 
 
 def fetch(client, url):
@@ -145,7 +147,7 @@ def card(raw):
     return {'id': f'zillow:building-{raw["lotId"]}' if building else f'zillow:{raw["zpid"]}',
             'url': urljoin(ORIGIN, raw['detailUrl']), 'building': building, 'zpid': None if building else str(raw['zpid']),
             'available_on': day(raw.get('availabilityDate')),
-            'signature': hashlib.sha256(json.dumps({**shown, 'photos': photos}, sort_keys=True).encode()).hexdigest()}
+            'signature': hashlib.sha256(json.dumps({**shown, 'photos': photos, 'reader': READER}, sort_keys=True).encode()).hexdigest()}
 
 
 def day(value):
@@ -187,8 +189,23 @@ def rooms(beds, baths):
     return ', '.join(part for part in parts if part) or None
 
 
-def unit_fact(price, beds, sqft, available_on):
-    return {'price': price, 'period': 'month', 'bedrooms': beds, 'size_sqft': sqft, 'available_on': available_on}
+def unit_fact(price, beds, baths, sqft, available_on, label, floor):
+    return {'price': price, 'period': 'month', 'bedrooms': beds, 'bathrooms': baths, 'size_sqft': sqft, 'available_on': available_on,
+            'label': label, 'floor': floor}
+
+
+def count(value):
+    """A positive whole number of floors, as a number or digits, or None."""
+    if isinstance(value, str) and value.strip().isdigit():
+        value = int(value)
+    return value if type(value) is int and value > 0 else None
+
+
+def coordinates(place):
+    latitude, longitude = place.get('latitude'), place.get('longitude')
+    if not all(type(value) in (int, float) and math.isfinite(value) for value in (latitude, longitude)) or abs(latitude) > 90 or abs(longitude) > 180:
+        return {'latitude': None, 'longitude': None}
+    return {'latitude': latitude, 'longitude': longitude}
 
 
 def building_amenities(building):
@@ -219,8 +236,10 @@ def unique(values):
 
 
 def offer(source, plan, label, price):
-    return {'zpid': str(source.get('zpid')), 'plan': str(plan.get('zpid')), 'label': label, 'price': price, 'beds': source.get('beds'),
-            'baths': source.get('baths'), 'sqft': source.get('sqft'), 'available_on': day(source.get('availableFrom')), 'photos': source.get('photos')}
+    """label names the offer in its description line: the unit's number, or the floor plan's name for a plan without units."""
+    return {'zpid': str(source.get('zpid')), 'plan': str(plan.get('zpid')), 'label': label, 'unit': source.get('unitNumber'), 'price': price,
+            'beds': source.get('beds'), 'baths': source.get('baths'), 'sqft': source.get('sqft'), 'floor': count(source.get('floor')),
+            'available_on': day(source.get('availableFrom')), 'photos': source.get('photos')}
 
 
 def offers(building):
@@ -267,8 +286,9 @@ def read_building(card, building):
         'agent': compact({'name': (building.get('contactInfo') or {}).get('agentFullName') or building.get('buildingName'),
                           'phone': building.get('buildingPhoneNumber'), 'contact_form': card['url']}),
     }
-    units = [unit_fact(offer['price'], offer['beds'], offer['sqft'], offer['available_on']) for offer in selected]
-    return listing, {'currency': listing['currency'], 'units': units}
+    units = [unit_fact(offer['price'], offer['beds'], offer['baths'], offer['sqft'], offer['available_on'], offer['unit'], offer['floor'])
+             for offer in selected]
+    return listing, {'currency': listing['currency'], **coordinates(building), 'stories': None, 'units': units}
 
 
 def home_amenities(facts):
@@ -297,7 +317,8 @@ def read_home(card, home):
                           'email': attribution.get('agentEmail'), 'contact_form': card['url']}),
     }
     available_on = day(facts.get('availabilityDate')) or card.get('available_on')
-    return listing, {'currency': listing['currency'], 'units': [unit_fact(home.get('price'), home.get('bedrooms'), sqft, available_on)]}
+    unit = unit_fact(home.get('price'), home.get('bedrooms'), home.get('bathrooms'), sqft, available_on, None, count(facts.get('entryLevel')))
+    return listing, {'currency': listing['currency'], **coordinates(home), 'stories': count(facts.get('storiesTotal')), 'units': [unit]}
 
 
 def read(card, client):

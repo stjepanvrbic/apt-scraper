@@ -166,6 +166,16 @@ class SearchRunTests(unittest.TestCase):
         self.assertTrue(report['wake'])
         self.assertEqual(self.shown(), [])
 
+    def test_found_and_changed_listings_get_code_features_from_their_facts(self):
+        self.site.results = {'North': [1], 'South': []}
+        self.search()
+        features = self.store.code_features(today=NOW.date())['fake:1']
+        self.assertEqual((features['monthly_price'], features['bedrooms']), (2000, 2))
+        self.site.prices = {1: 2100}
+        self.search()
+        features = self.store.code_features(today=NOW.date())['fake:1']
+        self.assertEqual((features['fingerprint'], features['monthly_price']), (self.store.listing('fake:1')['content_fingerprint'], 2100))
+
     def test_reads_left_when_the_time_budget_runs_out_continue_in_the_next_run(self):
         self.site.results = {'North': [1, 2, 3], 'South': []}
         report = self.search(reads=0)

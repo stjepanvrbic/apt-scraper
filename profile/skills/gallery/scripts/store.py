@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
+from code_features import FEATURES, store_code_features
 from schema import content_fingerprint, migrate
 from queries import browse, snapshot, validate_page
 
@@ -285,6 +286,8 @@ class ListingStore:
                        ON CONFLICT(id) DO UPDATE SET data = excluded.data, status = excluded.status, fingerprint = excluded.fingerprint''',
                     (listing['id'], json.dumps(listing, ensure_ascii=False), listing['status'], listing['first_seen'], fingerprint),
                 )
+            if changed:
+                store_code_features(connection, listing['id'])
             if matches_criteria is not None:
                 connection.execute('UPDATE listings SET matches_criteria = ? WHERE id = ? AND matches_criteria != ?',
                                    (matches_criteria, listing['id'], matches_criteria))
@@ -353,12 +356,23 @@ class ListingStore:
                 ON CONFLICT(listing_id) DO UPDATE SET fingerprint = excluded.fingerprint, features = excluded.features,
                 rank = CASE WHEN ranking.fingerprint = excluded.fingerprint THEN ranking.rank END,
                 reason = CASE WHEN ranking.fingerprint = excluded.fingerprint THEN ranking.reason END''', (listing_id, fingerprint, features))
+            store_code_features(connection, listing_id)
 
     def features(self, listing_id):
         with self.connect() as connection:
             self.require_listing(connection, listing_id)
             row = connection.execute('SELECT features FROM ranking JOIN listings ON listings.id = ranking.listing_id WHERE listing_id = ? AND ranking.fingerprint = listings.fingerprint', (listing_id,)).fetchone()
             return json.loads(row['features']) if row and row['features'] else None
+
+    def code_features(self, today=None):
+        """The code-derived features of every listing's current content, as code_features.py describes them, by listing id,
+        with the content fingerprint, first_seen and days_since_first_seen counted to today, a date (by default today in UTC)."""
+        today = today or datetime.now(timezone.utc).date()
+        with self.connect() as connection:
+            return {row['listing_id']: {**{name: row[name] for name in ('fingerprint', *FEATURES, 'first_seen')},
+                                        'days_since_first_seen': (today - date.fromisoformat(row['first_seen'])).days}
+                    for row in connection.execute('''SELECT c.*, l.first_seen FROM code_features c
+                        JOIN listings l ON l.id = c.listing_id AND l.fingerprint = c.fingerprint ORDER BY c.listing_id''')}
 
     def rank(self, listing_id, fingerprint, rank, reason):
         if type(rank) is not int or rank < 1:

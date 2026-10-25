@@ -5,6 +5,7 @@ from contextlib import closing
 from pathlib import Path
 
 from test_gallery_store import ListingStore, listing
+from schema import MIGRATIONS
 
 
 class MigrationTests(unittest.TestCase):
@@ -17,7 +18,7 @@ class MigrationTests(unittest.TestCase):
             store.add_note('Keep the courtyard.', listing_id='example:100')
             for _ in range(2):
                 store = ListingStore(path)
-                self.assertEqual(store.schema_version, 2)
+                self.assertEqual(store.schema_version, len(MIGRATIONS))
                 saved = store.listing('example:100')
                 self.assertTrue(saved['favorite'])
                 self.assertEqual(saved['rental_period'], 'month')
