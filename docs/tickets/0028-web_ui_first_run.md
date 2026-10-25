@@ -41,4 +41,22 @@ After `install`, the user is in the Hermes web dashboard's chat for the `apt-scr
 
 ## Result
 
+The installers end by starting `hermes -p apt-scraper dashboard --no-open` in the background. They wait for its ready line, or for the address a running dashboard prints, and open `/chat?profile=apt-scraper`. The first start builds the web UI. Hermes rebuilds it only when its sources change, so a later start needs no npm. Before that, the installers install the `google-workspace` skill and the host gateway service. The account-connections skill takes the Telegram token through the dashboard's Channels form and never restarts the gateway during a turn. README, `docs/gallery.md` and Spec › Installation and setup now name the dashboard.
+
+Verified on Windows with Hermes 0.22.5, in throwaway `HERMES_HOME` roots that were deleted afterwards. The agent's `cmd` and `open` were stubbed to a log and computer use was off:
+
+- Both installers' dashboard steps were extracted and run for three cases: fresh start, a dashboard already running, and a failing start. `tests/test_installers.py` repeats this against a fake `hermes`.
+- First "Hello" in the dashboard chat: the agent ran the connection status, reported the unconnected accounts and started the interview.
+- Connection setup: the agent ran the Google check, opened the Cloud Console and stopped at sign-in. On the Telegram path it opened BotFather, the bot chat and userinfobot, wrote both IDs with `config set`, found the dashboard's port and opened the Channels page.
+- After a fake token was saved in that form, `check gateway` reached Telegram and reported "Unauthorized". Saving during a live turn left the turn running.
+- The deferred gateway restart ran after the turn and changed the gateway PID, and the reloaded chat answered in the same session.
+- `python -m unittest discover -s tests`: 408 passed, 0 skipped. `ruff check .` passed. Hermes's skill linter and skills guard report 0 findings on `account-connections`. The PowerShell parser reports 0 errors, and `bash -n install.sh` passes.
+- An independent review of `7bc84eb` found one high, four medium and four low issues. All are fixed in `95d77d6` and `a392db0` except two deliberate low ones: a timed-out dashboard is left running, and a missing `xdg-open` fails the Linux install. The reassessment found two new risks in the restart step, both fixed in `a392db0`.
+
+The acceptance item on the first conversation stays open. Real Google and Telegram sign-in were not possible, and computer use was off, so the agent asked the user to click where it would otherwise click itself. Also not run: the installer on a fresh machine (first web build, gateway service install), and anything on macOS.
+
+Tech debt fixed: the skill's gateway commands used `-p apt-scraper`, which Hermes 0.22.5 refuses for a profile served by the host gateway. The skill also told the user to quit and reopen the terminal to pick up the iMessage grant, which does not restart the gateway the agent runs in.
+
+Delivered on `feat/dashboard_first_run` in [PR #26](https://github.com/stjepanvrbic/apt-scraper/pull/26), open against `main`, not merged. Spec decisions checked: none have ADR identifiers.
+
 ## Comments
