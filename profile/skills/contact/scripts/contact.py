@@ -8,15 +8,18 @@ Commands:
   contact.py tell FILE            tell the user something through the gateway {"listing", "text"}
   contact.py questions            print the questions the user has not answered
   contact.py answer FILE          record the user's answer {"question", "answer", "share"}
-  contact.py agree FILE           record an agreed viewing {"listing", "time", "details", "viewing", "user_confirmed"}
-  contact.py cancel VIEWING       record that an agreed or booked viewing was canceled
+  contact.py agree FILE           record an agreed viewing and book it {"listing", "time", "details", "viewing", "user_confirmed"}
+  contact.py cancel VIEWING       record that an agreed or booked viewing was canceled and remove its event
   contact.py done LISTING         mark the listing's replies handled without sending anything
   contact.py close LISTING        end the contact
   contact.py fail LISTING ERROR   mark the contact failed with the reason the gallery shows
-  contact.py due                  record new replies from Gmail and iMessage, then print the cron wake gate
+  contact.py due                  record new replies from Gmail and iMessage, bring the calendar up to date with
+                                  the viewings, then print the cron wake gate
 
-FILE is a JSON object in the scratch directory, deleted once it is used. Every send first runs
-`connections.py require` for its channel and sends nothing unless it exits 0. Exit codes: 0 done,
+FILE is a JSON object in the scratch directory, deleted once it is used. Every send and every calendar write
+first runs `connections.py require` for its channel and goes ahead only if it exits 0. An agreed viewing becomes
+a calendar event, a moved one updates its event and a canceled one loses it, at the end of `agree` and `cancel`
+and again on every `due` until the write works. Exit codes: 0 done,
 1 rejected or failed and nothing was sent or recorded, 2 usage error, 3 the channel is not connected
 and nothing was sent, 4 the listing waits for the user and nothing was sent or recorded.
 """
@@ -26,6 +29,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import sys
 import tempfile
 import time
@@ -48,6 +52,7 @@ WAITING_FOR_USER = 4
 COMMAND_TIMEOUT_SECONDS = 120
 REQUIRE_TIMEOUT_SECONDS = 200
 CHANNEL_LABELS = {'gmail': 'Gmail', 'imessage': 'iMessage'}
+AGENT_DETAILS = (('name', 'Listing agent'), ('email', 'Email'), ('phone', 'Phone'), ('contact_form', 'Contact form'))
 LISTING_FACTS = ('id', 'title', 'price', 'price_note', 'currency', 'rental_period', 'size', 'rooms', 'address',
                  'description', 'amenities', 'sources', 'status')
 
@@ -265,11 +270,109 @@ def within_availability(availability, start):
                for window in availability.get('weekly', []))
 
 
-def calendar_conflicts(start):
-    """All-day events are left out: the saved availability's unavailable dates are where whole days off live."""
+def calendar_conflicts(store, start):
+    """All-day events are left out: the saved availability's unavailable dates are where whole days off live. Events
+    of agreed and booked viewings are left out too: the store's overlap rule decides about those, with its own answer,
+    and a moved viewing must not clash with its own event."""
     end = start + timedelta(minutes=VIEWING_MINUTES)
+    viewings = {event_id for viewing in store.scheduled_viewings()
+                for event_id in (viewing['calendar_event_id'], created_event_id(viewing['id']))}
     events = google_api('calendar', 'list', '--start', start.isoformat(), '--end', end.isoformat(), '--max', '10')
-    return [event for event in events if 'T' in event.get('start', '') and event.get('status') != 'cancelled']
+    return [event for event in events
+            if 'T' in event.get('start', '') and event.get('status') != 'cancelled' and event.get('id') not in viewings]
+
+
+def created_event_id(viewing_id):
+    """The identifier of the event this script creates for a viewing. Calendar event identifiers allow only lowercase
+    a to v and digits, 5 to 1024 characters (Calendar API, Events resource `id`), which a UUID without hyphens satisfies."""
+    return viewing_id.replace('-', '')
+
+
+def local_start(store, viewing):
+    zone = (store.settings().get('viewing_availability') or {}).get('timezone', 'UTC')
+    return datetime.fromisoformat(viewing['time']).astimezone(ZoneInfo(zone)), zone
+
+
+def viewing_event(store, viewing):
+    listing = store.listing(viewing['listing_id'])
+    agent = listing['contact']['agent'] if listing['contact'] else listing['agent']
+    start, zone = local_start(store, viewing)
+    lines = [label(listing), *(f'{source["label"]}: {source["url"]}' for source in listing['sources']), '',
+             *(f'{name}: {agent[key]}' for key, name in AGENT_DETAILS if agent.get(key))]
+    if viewing['details'].strip():
+        lines += ['', viewing['details'].strip()]
+    return {'summary': f'Apartment viewing: {listing.get("address") or label(listing)}', 'location': listing.get('address') or '',
+            'description': '\n'.join(lines), 'status': 'confirmed',
+            'start': {'dateTime': start.isoformat(), 'timeZone': zone},
+            'end': {'dateTime': (start + timedelta(minutes=VIEWING_MINUTES)).isoformat(), 'timeZone': zone}}
+
+
+def write_calendar(*arguments):
+    script = Path(__file__).resolve().with_name('viewing_calendar.py')
+    return json.loads(run([sys.executable, str(script), *arguments], 'Google Calendar ' + arguments[0]))
+
+
+def save_event(store, viewing):
+    with tempfile.NamedTemporaryFile('w', encoding='utf-8', suffix='.json', delete=False) as file:
+        json.dump({'event_id': viewing['calendar_event_id'], 'new_id': created_event_id(viewing['id']),
+                   'event': viewing_event(store, viewing)}, file, ensure_ascii=False)
+    try:
+        saved = write_calendar('save', file.name)
+    finally:
+        os.unlink(file.name)
+    return store.record_booking(viewing['id'], viewing['time'], viewing['details'], saved['id'])
+
+
+def remove_event(store, viewing):
+    write_calendar('delete', viewing['calendar_event_id'])
+    store.record_event_removed(viewing['id'], viewing['calendar_event_id'])
+    return False
+
+
+def sync_calendar(store):
+    """Returns the ids of the viewings it booked and, per viewing whose write failed, the viewing and the error. A
+    failed write does not hold up the others. A calendar that is not connected fails every remaining write unsent."""
+    booked, failures, disconnected = set(), {}, None
+    writes = [(save_event, viewing) for viewing in store.agreed_viewings()]
+    writes += [(remove_event, viewing) for viewing in store.canceled_viewing_events()]
+    for write, viewing in writes:
+        if disconnected:
+            failures[viewing['id']] = (viewing, disconnected)
+            continue
+        try:
+            require('calendar')
+            if write(store, viewing):
+                booked.add(viewing['id'])
+        except NotConnected as error:
+            disconnected = str(error)
+            failures[viewing['id']] = (viewing, disconnected)
+        except (RuntimeError, ValueError, KeyError, OSError, sqlite3.Error) as error:
+            failures[viewing['id']] = (viewing, str(error.args[0] if isinstance(error, KeyError) else error))
+    return booked, failures
+
+
+def sync_after(store, viewing_id):
+    """Runs after a command has committed its change, so a failure is reported in its output and never fails the
+    command, which would otherwise read as "nothing was recorded"."""
+    try:
+        booked, failures = sync_calendar(store)
+    except sqlite3.Error as error:
+        return False, f'The calendar was not updated, because the store could not be read: {error}'
+    return viewing_id in booked, failures[viewing_id][1] if viewing_id in failures else None
+
+
+def calendar_notices(store, failures):
+    """One notice per distinct error, naming the viewings it holds up."""
+    viewings_by_error = {}
+    for viewing, error in failures.values():
+        viewings_by_error.setdefault(error, []).append(viewing)
+    notices = {}
+    for error, viewings in viewings_by_error.items():
+        names = ', '.join(f'{label(store.listing(viewing["listing_id"]))} on {local_start(store, viewing)[0]:%a %d %b at %H:%M}'
+                          for viewing in viewings)
+        notices['calendar: ' + error] = (f'I could not update your Google Calendar for the viewing of {names}: {error} '
+                                         'I will keep trying every few minutes.')
+    return notices
 
 
 def command_agree(store, value):
@@ -281,14 +384,16 @@ def command_agree(store, value):
         if not availability or not within_availability(availability, start):
             raise WaitingForUser(f'{time} is outside the user\'s viewing availability. Ask the user before agreeing to it.')
         require('calendar')
-        conflicts = calendar_conflicts(start)
+        conflicts = calendar_conflicts(store, start)
         if conflicts:
             names = ', '.join(f'{event.get("summary", "an event")} ({event["start"]} to {event["end"]})' for event in conflicts)
             raise WaitingForUser(f'The calendar has {names} at {time}. Ask the user before agreeing to it.')
     try:
-        return {'viewing': store.agree_viewing(listing_id, time, details, viewing_id=value.get('viewing'))}
+        viewing_id = store.agree_viewing(listing_id, time, details, viewing_id=value.get('viewing'))
     except ViewingConflict as conflict:
         raise WaitingForUser(f'{conflict} Propose another time.') from None
+    booked, error = sync_after(store, viewing_id)
+    return {'viewing': viewing_id, 'booked': booked, 'calendar_error': error}
 
 
 def command_work(store):
@@ -363,27 +468,27 @@ def poll_imessage(store, contacts):
                 record(store, listing_id, 'imessage', message['guid'], message.get('chat_guid') or chat.get('guid'), message['text'])
 
 
-def poll_state_path():
-    return Path(os.environ['HERMES_HOME']) / 'apt-scraper' / 'contact-poll.json'
+def notice_state_path():
+    return Path(os.environ['HERMES_HOME']) / 'apt-scraper' / 'contact-notices.json'
 
 
-def report_poll_errors(errors):
-    """Tells the user once about each new polling error, so an outage does not message them every tick."""
-    path = poll_state_path()
+def report_errors(notices):
+    """Tells the user once about each new error of a background step, so an outage does not message them every tick.
+    `notices` maps each failing step to what the user is told."""
+    path = notice_state_path()
     try:
         reported = json.loads(path.read_text(encoding='utf-8'))
     except (FileNotFoundError, json.JSONDecodeError):
         reported = {}
-    for channel, error in errors.items():
-        if reported.get(channel) != error:
+    for step, notice in notices.items():
+        if reported.get(step) != notice:
             try:
-                tell_user(f'I could not check {CHANNEL_LABELS[channel]} for replies from listing agents: {error} '
-                          'I will keep trying every few minutes.')
+                tell_user(notice)
             except (NotConnected, RuntimeError, OSError) as failure:
-                print(f'Telling the user that {CHANNEL_LABELS[channel]} polling failed did not work: {failure}', file=sys.stderr)
+                print(f'Telling the user "{notice}" did not work: {failure}', file=sys.stderr)
                 continue
-            reported[channel] = error
-    current = {channel: error for channel, error in reported.items() if channel in errors}
+            reported[step] = notice
+    current = {step: notice for step, notice in reported.items() if step in notices}
     if current:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(current), encoding='utf-8')
@@ -393,7 +498,7 @@ def report_poll_errors(errors):
 
 def command_due(store):
     contacts = store.active_contacts()
-    errors = {}
+    notices = {}
     for channel, poll in (('gmail', poll_gmail), ('imessage', poll_imessage)):
         if not contacts:
             continue
@@ -401,8 +506,10 @@ def command_due(store):
             if usable(channel):
                 poll(store, contacts)
         except (RuntimeError, ValueError, KeyError, OSError) as error:
-            errors[channel] = str(error)
-    report_poll_errors(errors)
+            notices[channel] = (f'I could not check {CHANNEL_LABELS[channel]} for replies from listing agents: {error} '
+                                'I will keep trying every few minutes.')
+    notices.update(calendar_notices(store, sync_calendar(store)[1]))
+    report_errors(notices)
     due = store.due_contacts()
     starts = sum(item['reason'] == 'start' for item in due)
     replies = len(due) - starts
@@ -443,8 +550,8 @@ def main(argv=None):
         store.mark_handled(arguments.listing)
         result = {'handled': arguments.listing}
     elif arguments.command == 'cancel':
-        store.cancel_viewing(arguments.viewing)
-        result = {'canceled': arguments.viewing}
+        store.cancel_viewing(arguments.viewing, possible_event_id=created_event_id(arguments.viewing))
+        result = {'canceled': arguments.viewing, 'calendar_error': sync_after(store, arguments.viewing)[1]}
     elif arguments.command == 'close':
         store.set_contact(arguments.listing, 'closed')
         result = {'closed': arguments.listing}

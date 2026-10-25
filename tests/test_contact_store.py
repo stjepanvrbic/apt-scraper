@@ -104,7 +104,7 @@ class ContactStoreTests(unittest.TestCase):
                          ('agreed', None, '2026-10-31T16:00:00+00:00'))
         self.assertEqual(self.store.browse('Viewings')['total'], 0)
         self.assertEqual([item['id'] for item in self.store.agreed_viewings()], [viewing])
-        self.store.book_viewing('example:100', '2026-10-31T11:00:00-05:00', 'Meet in the lobby.', 'event-1', viewing_id=viewing)
+        self.store.record_booking(viewing, '2026-10-31T16:00:00+00:00', 'Meet in the lobby.', 'event-1')
         self.assertEqual(self.store.agreed_viewings(), [])
         self.assertEqual(self.store.browse('Viewings')['total'], 1)
 
@@ -142,12 +142,12 @@ class ContactStoreTests(unittest.TestCase):
         first = self.store.agree_viewing('example:100', '2026-10-31T11:00:00-05:00', 'Lobby')
         with self.assertRaisesRegex(ViewingConflict, 'example:100'):
             self.store.agree_viewing('other:200', '2026-10-31T11:30:00-05:00', 'Door')
-        self.store.book_viewing('example:100', '2026-10-31T11:00:00-05:00', 'Lobby', 'event-1', viewing_id=first)
+        self.store.record_booking(first, '2026-10-31T16:00:00+00:00', 'Lobby', 'event-1')
         with self.assertRaises(ViewingConflict):
             self.store.agree_viewing('other:200', '2026-10-31T10:30:00-05:00', 'Door')
         self.store.agree_viewing('other:200', '2026-10-31T12:00:00-05:00', 'Door')
         self.store.agree_viewing('example:100', '2026-10-31T10:00:00-05:00', 'Lobby', viewing_id=first)
-        self.store.cancel_viewing(first)
+        self.store.cancel_viewing(first, possible_event_id='first')
         self.store.agree_viewing('other:200', '2026-10-31T11:00:00-05:00', 'Door')
 
     def test_outgoing_threads_name_the_listing_that_wrote_last(self):
@@ -161,12 +161,55 @@ class ContactStoreTests(unittest.TestCase):
 
     def test_moving_a_booked_viewing_keeps_its_event_for_the_calendar_update(self):
         viewing = self.store.agree_viewing('example:100', '2026-10-31T11:00:00-05:00', 'Lobby')
-        self.store.book_viewing('example:100', '2026-10-31T11:00:00-05:00', 'Lobby', 'event-1', viewing_id=viewing)
+        self.store.record_booking(viewing, '2026-10-31T16:00:00+00:00', 'Lobby', 'event-1')
         self.store.agree_viewing('example:100', '2026-11-01T12:00:00-05:00', 'Lobby', viewing_id=viewing)
         moved = self.store.agreed_viewings()[0]
         self.assertEqual((moved['calendar_event_id'], moved['time']), ('event-1', '2026-11-01T17:00:00+00:00'))
         with self.assertRaisesRegex(ValueError, 'UTC offset'):
             self.store.agree_viewing('example:100', '2026-11-01T12:00:00', 'Lobby')
+
+    def test_a_booking_is_recorded_only_for_the_time_and_details_it_was_written_with(self):
+        viewing = self.store.agree_viewing('example:100', '2026-10-31T11:00:00-05:00', 'Lobby')
+        self.assertFalse(self.store.record_booking(viewing, '2026-10-31T16:00:00+00:00', 'Side door', 'event1'))
+        self.assertFalse(self.store.record_booking(viewing, '2026-10-31T17:00:00+00:00', 'Lobby', 'event1'))
+        self.assertTrue(self.store.record_booking(viewing, '2026-10-31T16:00:00+00:00', 'Lobby', 'event1'))
+        saved = self.store.listing('example:100')['viewings'][0]
+        self.assertEqual((saved['status'], saved['calendar_event_id']), ('booked', 'event1'))
+        self.assertFalse(self.store.record_booking(viewing, '2026-10-31T16:00:00+00:00', 'Lobby', 'event1'))
+        self.assertEqual([item['id'] for item in self.store.scheduled_viewings()], [viewing])
+
+    def test_canceled_viewing_keeps_its_event_until_the_removal_is_recorded(self):
+        viewing = self.store.agree_viewing('example:100', '2026-10-31T11:00:00-05:00', 'Lobby')
+        unbooked = self.store.agree_viewing('example:100', '2026-11-01T11:00:00-05:00', 'Lobby')
+        self.store.record_booking(viewing, '2026-10-31T16:00:00+00:00', 'Lobby', 'event1')
+        self.assertEqual(self.store.canceled_viewing_events(), [])
+        self.store.cancel_viewing(viewing, possible_event_id='derived1')
+        self.store.cancel_viewing(unbooked, possible_event_id='derived2')
+        self.assertEqual([(item['id'], item['calendar_event_id']) for item in self.store.canceled_viewing_events()],
+                         [(viewing, 'event1'), (unbooked, 'derived2')])
+        self.assertEqual(self.store.scheduled_viewings(), [])
+        self.assertFalse(self.store.record_event_removed(viewing, 'other-event'))
+        self.assertTrue(self.store.record_event_removed(viewing, 'event1'))
+        self.assertTrue(self.store.record_event_removed(unbooked, 'derived2'))
+        self.assertEqual(self.store.canceled_viewing_events(), [])
+        self.store.cancel_viewing(viewing, possible_event_id='derived1')
+        self.assertEqual(self.store.canceled_viewing_events(), [])
+        self.assertIsNone(self.store.listing('example:100')['viewings'][0]['calendar_event_id'])
+        with self.assertRaises(KeyError):
+            self.store.cancel_viewing('no-such-viewing', possible_event_id='x')
+
+    def test_viewing_canceled_while_its_event_was_written_keeps_the_event_for_removal(self):
+        viewing = self.store.agree_viewing('example:100', '2026-10-31T11:00:00-05:00', 'Lobby')
+        self.store.cancel_viewing(viewing, possible_event_id='derived1')
+        self.assertFalse(self.store.record_booking(viewing, '2026-10-31T16:00:00+00:00', 'Lobby', 'event1'))
+        self.assertEqual([(item['id'], item['status'], item['calendar_event_id']) for item in self.store.canceled_viewing_events()],
+                         [(viewing, 'canceled', 'event1')])
+
+    def test_a_canceled_viewing_cannot_be_moved(self):
+        viewing = self.store.agree_viewing('example:100', '2026-10-31T11:00:00-05:00', 'Lobby')
+        self.store.cancel_viewing(viewing, possible_event_id='derived1')
+        with self.assertRaisesRegex(KeyError, 'agreed or booked'):
+            self.store.agree_viewing('example:100', '2026-10-31T12:00:00-05:00', 'Lobby', viewing_id=viewing)
 
 
 if __name__ == '__main__':

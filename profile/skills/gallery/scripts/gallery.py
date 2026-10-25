@@ -36,12 +36,6 @@ def main():
     correspondence.add_argument('text')
     correspondence.add_argument('--message-id', required=True)
     correspondence.add_argument('--thread-id')
-    viewing = commands.add_parser('viewing')
-    viewing.add_argument('listing')
-    viewing.add_argument('time')
-    viewing.add_argument('details')
-    viewing.add_argument('--event-id', required=True)
-    viewing.add_argument('--id')
     arguments = parser.parse_args()
     path = arguments.database or store_path(arguments.sample)
     if arguments.command == 'stop':
@@ -90,9 +84,6 @@ def main():
     elif arguments.command == 'correspond':
         store.correspond(arguments.listing, arguments.direction, arguments.channel, arguments.text,
                          external_message_id=arguments.message_id, external_thread_id=arguments.thread_id)
-        print(json.dumps({'saved': True}))
-    elif arguments.command == 'viewing':
-        store.book_viewing(arguments.listing, arguments.time, arguments.details, arguments.event_id, viewing_id=arguments.id)
         print(json.dumps({'saved': True}))
 
 

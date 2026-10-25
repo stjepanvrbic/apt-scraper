@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
 
-from store import ListingStore
+from store import ListingStore, viewing_time
 
 
 def listing(**changes):
@@ -27,6 +27,12 @@ def listing(**changes):
         'status': 'available',
         **changes,
     }
+
+
+def book(store, listing_id, time, details, calendar_event_id):
+    viewing = store.agree_viewing(listing_id, time, details)
+    store.record_booking(viewing, viewing_time(time), details, calendar_event_id)
+    return viewing
 
 
 class ListingStoreTests(unittest.TestCase):
@@ -78,7 +84,7 @@ class ListingStoreTests(unittest.TestCase):
         self.assertEqual(self.store.state()['listings'][0]['contact']['status'], 'pending')
         self.store.correspond('example:100', 'outgoing', 'email', 'May I view it on Friday?', external_message_id='message-one', external_thread_id='thread-one')
         self.store.set_contact('example:100', 'contacted', channel='email')
-        self.store.book_viewing('example:100', '2026-10-30T15:00:00-05:00', 'Meet at the lobby.', 'event-100')
+        book(self.store, 'example:100', '2026-10-30T15:00:00-05:00', 'Meet at the lobby.', 'event-100')
         self.store.upsert_listing(listing(status='unavailable'))
         self.store.feedback('example:100', dismissed=True)
         saved = ListingStore(self.path).state()['listings'][0]
@@ -114,7 +120,7 @@ class ListingStoreTests(unittest.TestCase):
             lambda: self.store.add_note('   ', listing_id='example:100'),
             lambda: self.store.feedback('example:100', favorite='yes'),
             lambda: self.store.add_note('Note', listing_id='example:100', role='system'),
-            lambda: self.store.book_viewing('example:100', 'tomorrow', '', 'event-100'),
+            lambda: self.store.agree_viewing('example:100', 'tomorrow', ''),
             lambda: self.store.correspond('example:100', 'unknown', 'email', 'Hello', external_message_id='bad'),
         ]:
             with self.subTest(action=action), self.assertRaises(ValueError):

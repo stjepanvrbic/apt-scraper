@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -9,8 +10,10 @@ import textwrap
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from test_gallery_store import ListingStore, listing
+from store import viewing_time
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTACT = ROOT / 'profile' / 'skills' / 'contact' / 'scripts' / 'contact.py'
@@ -18,25 +21,105 @@ GATE = ROOT / 'profile' / 'scripts' / 'contact-due.py'
 
 FAKE_GOOGLE_API = '''
 import json, os, sys
-state = json.loads(open(os.environ["FAKE_STATE"], encoding="utf-8").read())
-with open(os.environ["FAKE_LOG"], "a", encoding="utf-8") as log:
-    log.write(json.dumps(["google_api", *sys.argv[1:]]) + "\\n")
-if state.get("google_error"):
-    print(state["google_error"], file=sys.stderr)
-    sys.exit(1)
-arguments = sys.argv[1:]
-if arguments[:2] == ["gmail", "send"]:
-    thread = arguments[arguments.index("--thread-id") + 1] if "--thread-id" in arguments else state.get("next_thread", "thread-1")
-    print(json.dumps({"status": "sent", "id": "sent-%d" % len(open(os.environ["FAKE_LOG"]).readlines()), "threadId": thread}))
-elif arguments[:2] == ["gmail", "reply"]:
-    print(json.dumps({"status": "sent", "id": "reply-%d" % len(open(os.environ["FAKE_LOG"]).readlines()), "threadId": "thread-1"}))
-elif arguments[:2] == ["gmail", "search"]:
-    print(json.dumps([{key: message[key] for key in ("id", "threadId", "from", "subject")} for message in state.get("inbox", [])]))
-elif arguments[:2] == ["gmail", "get"]:
-    message = next(message for message in state["inbox"] if message["id"] == arguments[2])
-    print(json.dumps(message))
-elif arguments[:2] == ["calendar", "list"]:
-    print(json.dumps(state.get("events", [])))
+from datetime import datetime
+from googleapiclient.errors import HttpError
+
+
+def load(variable):
+    try:
+        return json.loads(open(os.environ[variable], encoding="utf-8").read())
+    except FileNotFoundError:
+        return {}
+
+
+def log(*entry):
+    with open(os.environ["FAKE_LOG"], "a", encoding="utf-8") as file:
+        file.write(json.dumps(list(entry)) + "\\n")
+
+
+def overlaps(event, start, end):
+    return (datetime.fromisoformat(event["start"]) < datetime.fromisoformat(end)
+            and datetime.fromisoformat(start) < datetime.fromisoformat(event["end"]))
+
+
+class Request:
+    def __init__(self, action, calendar, **arguments):
+        self.action, self.calendar, self.arguments = action, calendar, arguments
+
+    def execute(self):
+        log("calendar_api", self.action, self.calendar, self.arguments)
+        state = load("FAKE_STATE")
+        identifier = self.arguments.get("eventId") or self.arguments["body"]["id"]
+        failure = state.get("calendar_error") or state.get("event_errors", {}).get(identifier)
+        if failure:
+            raise HttpError(failure["status"], failure["reason"])
+        events = load("FAKE_CALENDAR")
+        if self.action == "insert":
+            if identifier in events:
+                raise HttpError(409, "The requested identifier already exists.")
+            events[identifier] = {**self.arguments["body"], "status": "confirmed"}
+        elif identifier not in events:
+            raise HttpError(404, "Not Found")
+        elif self.action == "patch":
+            events[identifier].update(self.arguments["body"])
+        elif events[identifier]["status"] == "cancelled":
+            raise HttpError(410, "Resource has been deleted")
+        else:
+            events[identifier]["status"] = "cancelled"
+        open(os.environ["FAKE_CALENDAR"], "w", encoding="utf-8").write(json.dumps(events))
+        return "" if self.action == "delete" else {"id": identifier, "htmlLink": "https://calendar.example/" + identifier}
+
+
+class Events:
+    def insert(self, calendarId, body):
+        return Request("insert", calendarId, body=body)
+
+    def patch(self, calendarId, eventId, body):
+        return Request("patch", calendarId, eventId=eventId, body=body)
+
+    def delete(self, calendarId, eventId):
+        return Request("delete", calendarId, eventId=eventId)
+
+
+class Service:
+    def events(self):
+        return Events()
+
+
+def build_service(api, version):
+    assert (api, version) == ("calendar", "v3")
+    return Service()
+
+
+if __name__ == "__main__":
+    state = load("FAKE_STATE")
+    log("google_api", *sys.argv[1:])
+    if state.get("google_error"):
+        print(state["google_error"], file=sys.stderr)
+        sys.exit(1)
+    arguments = sys.argv[1:]
+    if arguments[:2] == ["gmail", "send"]:
+        thread = arguments[arguments.index("--thread-id") + 1] if "--thread-id" in arguments else state.get("next_thread", "thread-1")
+        print(json.dumps({"status": "sent", "id": "sent-%d" % len(open(os.environ["FAKE_LOG"]).readlines()), "threadId": thread}))
+    elif arguments[:2] == ["gmail", "reply"]:
+        print(json.dumps({"status": "sent", "id": "reply-%d" % len(open(os.environ["FAKE_LOG"]).readlines()), "threadId": "thread-1"}))
+    elif arguments[:2] == ["gmail", "search"]:
+        print(json.dumps([{key: message[key] for key in ("id", "threadId", "from", "subject")} for message in state.get("inbox", [])]))
+    elif arguments[:2] == ["gmail", "get"]:
+        message = next(message for message in state["inbox"] if message["id"] == arguments[2])
+        print(json.dumps(message))
+    elif arguments[:2] == ["calendar", "list"]:
+        start, end = arguments[arguments.index("--start") + 1], arguments[arguments.index("--end") + 1]
+        booked = [{"id": key, "summary": event["summary"], "start": event["start"]["dateTime"], "end": event["end"]["dateTime"],
+                   "status": event["status"]} for key, event in load("FAKE_CALENDAR").items()]
+        print(json.dumps([event for event in state.get("events", []) + booked if overlaps(event, start, end)]))
+'''
+
+FAKE_HTTP_ERROR = '''
+class HttpError(Exception):
+    def __init__(self, status, reason):
+        super().__init__(f'<HttpError {status} returned "{reason}">')
+        self.status_code, self.reason = status, reason
 '''
 
 FAKE_IMSG = '''
@@ -89,12 +172,16 @@ class ContactTest(unittest.TestCase):
         self.state = {}
         self.save_state()
         self.environment = {**os.environ, 'HERMES_HOME': str(self.home), 'FAKE_LOG': str(self.log), 'FAKE_STATE': str(self.state_file),
+                            'FAKE_CALENDAR': str(self.root / 'calendar.json'),
                             'PATH': str(self.bin) + os.pathsep + os.environ.get('PATH', ''), 'PYTHONDONTWRITEBYTECODE': '1'}
         self.write_tool('hermes', FAKE_HERMES)
         self.write_tool('imsg', FAKE_IMSG)
         google = self.home / 'skills' / 'productivity' / 'google-workspace' / 'scripts'
         google.mkdir(parents=True)
         (google / 'google_api.py').write_text(textwrap.dedent(FAKE_GOOGLE_API), encoding='utf-8')
+        (google / 'googleapiclient').mkdir()
+        (google / 'googleapiclient' / '__init__.py').touch()
+        (google / 'googleapiclient' / 'errors.py').write_text(textwrap.dedent(FAKE_HTTP_ERROR), encoding='utf-8')
         self.connect('gmail', 'calendar', 'gateway', 'imessage')
         self.store = ListingStore(self.home / 'workspace' / 'gallery' / 'listings.sqlite3')
         self.store.upsert_listing(listing(agent={'name': 'Example Agent', 'email': 'agent@example.com', 'phone': '+1 (312) 555-0100'}))
@@ -315,7 +402,7 @@ class QuestionTests(ContactTest):
         self.assertEqual(json.loads(self.contact('work').stdout)['due'], [])
         self.assertEqual(self.store.unhandled_answers('example:100'), [])
 
-    def test_time_the_user_confirmed_reaches_the_correspondence_job_and_is_agreed(self):
+    def test_time_the_user_confirmed_reaches_the_correspondence_job_and_is_booked(self):
         self.store.correspond('example:100', 'incoming', 'email', 'Could you do Friday at 18:00?', external_message_id='in-2')
         outside = self.contact('agree', self.file({'listing': 'example:100', 'time': '2026-10-30T18:00:00-05:00', 'details': 'Lobby'}))
         self.assertEqual(outside.returncode, 4)
@@ -329,7 +416,7 @@ class QuestionTests(ContactTest):
         self.assertEqual(agreed.returncode, 0, agreed.stderr)
         self.contact('send', self.file({'listing': 'example:100', 'channel': 'email', 'text': 'Friday at 18:00 works, see you then.'}))
         self.assertEqual(json.loads(self.contact('work').stdout)['due'], [])
-        self.assertEqual([viewing['status'] for viewing in self.store.listing('example:100')['viewings']], ['agreed'])
+        self.assertEqual([viewing['status'] for viewing in self.store.listing('example:100')['viewings']], ['booked'])
 
     def test_failed_gateway_delivery_records_no_question(self):
         self.state = {'gateway_error': 'Chat not found'}
@@ -386,9 +473,8 @@ class AgreeTests(ContactTest):
         self.assertEqual(listing_list[:2], ['calendar', 'list'])
         self.assertEqual(listing_list[listing_list.index('--start') + 1], '2026-10-31T16:00:00+00:00')
         self.assertEqual(listing_list[listing_list.index('--end') + 1], '2026-10-31T17:00:00+00:00')
-        [viewing] = self.store.agreed_viewings()
-        self.assertEqual((viewing['time'], viewing['details'], viewing['calendar_event_id']),
-                         ('2026-10-31T16:00:00+00:00', 'Meet in the lobby.', None))
+        [viewing] = self.store.listing('example:100')['viewings']
+        self.assertEqual((viewing['time'], viewing['details']), ('2026-10-31T16:00:00+00:00', 'Meet in the lobby.'))
 
     def test_time_outside_the_weekly_windows_waits_for_the_user(self):
         for time in ('2026-10-30T11:00:00-05:00', '2026-10-31T13:30:00-05:00', '2026-12-26T11:00:00-06:00'):
@@ -404,6 +490,7 @@ class AgreeTests(ContactTest):
         self.assertEqual(result.returncode, 4)
         self.assertIn('Dentist', result.stderr)
         self.assertEqual(self.store.agreed_viewings(), [])
+        self.assertEqual(self.calls('calendar_api'), [])
 
     def test_disconnected_calendar_cannot_confirm_a_free_time(self):
         self.connect('calendar', state='not connected')
@@ -433,12 +520,245 @@ class AgreeTests(ContactTest):
                                                       'user_confirmed': confirmed}))
             self.assertEqual(result.returncode, 4)
             self.assertIn('example:100', result.stderr)
-        self.assertEqual(len(self.store.agreed_viewings()), 1)
+        self.assertEqual(self.store.listing('other:200')['viewings'], [])
+        self.assertEqual([call[0] for call in self.calls('calendar_api')], ['insert'])
 
     def test_moving_an_agreed_viewing_updates_it(self):
         viewing = json.loads(self.agree('2026-10-31T11:00:00-05:00').stdout)['viewing']
         self.assertEqual(self.agree('2026-10-31T12:00:00-05:00', viewing=viewing).returncode, 0)
-        self.assertEqual([item['time'] for item in self.store.agreed_viewings()], ['2026-10-31T17:00:00+00:00'])
+        self.assertEqual([item['time'] for item in self.store.listing('example:100')['viewings']], ['2026-10-31T17:00:00+00:00'])
+
+
+class CalendarTests(ContactTest):
+    def setUp(self):
+        super().setUp()
+        self.store.correspond('example:100', 'outgoing', 'email', 'Hello', external_message_id='m1')
+        self.store.set_contact('example:100', 'contacted', channel='email')
+
+    def agree(self, time, **extra):
+        result = self.contact('agree', self.file({'listing': 'example:100', 'time': time, 'details': 'Meet Anna in the lobby.', **extra}))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def calendar(self):
+        path = self.root / 'calendar.json'
+        return json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+
+    def viewing(self):
+        [viewing] = self.store.listing('example:100')['viewings']
+        return viewing
+
+    def writes(self):
+        return [(call[0], call[2].get('eventId') or call[2]['body']['id']) for call in self.calls('calendar_api')]
+
+    def gate(self):
+        result = self.run_script(GATE)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout.strip().splitlines()[-1])['wakeAgent']
+
+    def notices(self):
+        return [call[-1] for call in self.calls('hermes') if call[0] == 'send']
+
+    def test_agreed_time_becomes_an_event_with_the_address_listing_link_and_agent_contact(self):
+        result = self.agree('2026-10-31T11:00:00-05:00')
+        event_id = result['viewing'].replace('-', '')
+        self.assertEqual((result['booked'], result['calendar_error']), (True, None))
+        self.assertEqual(self.writes(), [('insert', event_id)])
+        self.assertEqual(self.calls('calendar_api')[0][1], 'primary')
+        event = self.calendar()[event_id]
+        self.assertEqual(event['summary'], 'Apartment viewing: 100 Example Street, Chicago')
+        self.assertEqual(event['location'], '100 Example Street, Chicago')
+        self.assertEqual(event['start'], {'dateTime': '2026-10-31T11:00:00-05:00', 'timeZone': 'America/Chicago'})
+        self.assertEqual(event['end'], {'dateTime': '2026-10-31T12:00:00-05:00', 'timeZone': 'America/Chicago'})
+        for text in ('Courtyard apartment', 'Example Homes: https://example.com/listings/100', 'Listing agent: Example Agent',
+                     'Email: agent@example.com', 'Phone: +1 (312) 555-0100', 'Meet Anna in the lobby.'):
+            self.assertIn(text, event['description'])
+        viewing = self.viewing()
+        self.assertEqual((viewing['status'], viewing['calendar_event_id']), ('booked', event_id))
+        [booked] = self.store.browse('Viewings')['items']
+        self.assertEqual(booked['viewing']['time'], '2026-10-31T16:00:00+00:00')
+
+    def test_moved_viewing_updates_its_event(self):
+        viewing = self.agree('2026-10-31T11:00:00-05:00')['viewing']
+        event_id = viewing.replace('-', '')
+        result = self.agree('2026-10-31T11:30:00-05:00', viewing=viewing, details='Meet Ben at the side door.')
+        self.assertTrue(result['booked'])
+        self.assertEqual(self.writes(), [('insert', event_id), ('patch', event_id)])
+        [event] = self.calendar().values()
+        self.assertEqual(event['start']['dateTime'], '2026-10-31T11:30:00-05:00')
+        self.assertIn('Meet Ben at the side door.', event['description'])
+        self.assertEqual((self.viewing()['status'], self.viewing()['time']), ('booked', '2026-10-31T16:30:00+00:00'))
+
+    def booked(self, listing_id, time, event_id, status='confirmed'):
+        viewing = self.store.agree_viewing(listing_id, time, 'Lobby')
+        self.assertTrue(self.store.record_booking(viewing, viewing_time(time), 'Lobby', event_id))
+        calendar = self.calendar()
+        calendar[event_id] = {'summary': 'Viewing', 'start': {'dateTime': time}, 'end': {'dateTime': time}, 'status': status}
+        self.save_calendar(calendar)
+        return viewing
+
+    def save_calendar(self, calendar):
+        (self.root / 'calendar.json').write_text(json.dumps(calendar), encoding='utf-8')
+
+    def test_moved_viewing_keeps_an_event_with_another_identifier(self):
+        viewing = self.booked('example:100', '2026-10-31T11:00:00-05:00', 'otherevent1')
+        self.agree('2026-10-31T12:00:00-05:00', viewing=viewing)
+        self.assertEqual(self.writes(), [('patch', 'otherevent1')])
+        self.assertEqual(self.calendar()['otherevent1']['start']['dateTime'], '2026-10-31T12:00:00-05:00')
+
+    def test_moving_a_viewing_whose_event_the_user_deleted_restores_the_event(self):
+        viewing = self.booked('example:100', '2026-10-31T11:00:00-05:00', 'otherevent1', status='cancelled')
+        self.assertTrue(self.agree('2026-10-31T12:00:00-05:00', viewing=viewing)['booked'])
+        self.assertEqual(self.calendar()['otherevent1']['status'], 'confirmed')
+
+    def test_retried_create_of_an_event_the_user_deleted_restores_it(self):
+        self.connect('calendar', state='not connected')
+        viewing = self.agree('2026-10-31T11:00:00-05:00', user_confirmed=True)['viewing']
+        event_id = viewing.replace('-', '')
+        self.save_calendar({event_id: {'summary': 'Viewing', 'start': {'dateTime': '2026-10-31T11:00:00-05:00'},
+                                       'end': {'dateTime': '2026-10-31T12:00:00-05:00'}, 'status': 'cancelled'}})
+        self.connect('calendar')
+        self.gate()
+        self.assertEqual(self.writes(), [('insert', event_id), ('patch', event_id)])
+        self.assertEqual(self.calendar()[event_id]['status'], 'confirmed')
+        self.assertEqual(self.viewing()['status'], 'booked')
+
+    def test_moved_viewing_whose_event_is_gone_from_the_calendar_gets_a_new_event(self):
+        viewing = self.booked('example:100', '2026-10-31T11:00:00-05:00', 'otherevent1')
+        self.save_calendar({})
+        self.assertTrue(self.agree('2026-10-31T12:00:00-05:00', viewing=viewing)['booked'])
+        event_id = viewing.replace('-', '')
+        self.assertEqual(self.writes(), [('patch', 'otherevent1'), ('insert', event_id)])
+        self.assertEqual(self.calendar()[event_id]['start']['dateTime'], '2026-10-31T12:00:00-05:00')
+        self.assertEqual(self.viewing()['calendar_event_id'], event_id)
+
+    def test_one_failing_write_does_not_stop_the_others(self):
+        self.store.upsert_listing(listing(id='other:200', address='200 Example Street'))
+        self.store.request_contact('other:200')
+        stuck = self.booked('other:200', '2026-10-31T10:00:00-05:00', 'stuckevent1')
+        self.store.agree_viewing('other:200', '2026-10-31T09:00:00-05:00', 'Lobby', viewing_id=stuck)
+        canceled = self.booked('example:100', '2026-11-07T10:00:00-06:00', 'canceledevent1')
+        self.store.cancel_viewing(canceled, possible_event_id=canceled.replace('-', ''))
+        self.state = {'event_errors': {'stuckevent1': {'status': 403, 'reason': 'Forbidden'}}}
+        self.save_state()
+        result = self.agree('2026-10-31T11:00:00-05:00')
+        self.assertEqual((result['booked'], result['calendar_error']), (True, None))
+        self.assertEqual(self.calendar()['canceledevent1']['status'], 'cancelled')
+        self.assertEqual(self.store.listing('other:200')['viewings'][0]['status'], 'agreed')
+        self.gate()
+        [notice] = self.notices()
+        self.assertIn('200 Example Street', notice)
+        self.assertIn('Forbidden', notice)
+        self.gate()
+        self.assertEqual(len(self.notices()), 1)
+
+    def test_a_store_error_after_agreeing_is_reported_without_failing_the_command(self):
+        sys.path.insert(0, str(CONTACT.parent))
+        import contact
+        with patch.dict(os.environ, self.environment), \
+                patch.object(ListingStore, 'record_booking', side_effect=sqlite3.OperationalError('database is locked')):
+            result = contact.command_agree(self.store, {'listing': 'example:100', 'time': '2026-10-31T11:00:00-05:00', 'details': ''})
+        self.assertFalse(result['booked'])
+        self.assertIn('database is locked', result['calendar_error'])
+        self.assertEqual(self.viewing()['status'], 'agreed')
+
+    def test_canceled_viewing_removes_its_event(self):
+        viewing = self.agree('2026-10-31T11:00:00-05:00')['viewing']
+        result = self.contact('cancel', viewing)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {'canceled': viewing, 'calendar_error': None})
+        self.assertEqual(self.calendar()[viewing.replace('-', '')]['status'], 'cancelled')
+        self.assertEqual((self.viewing()['status'], self.viewing()['calendar_event_id']), ('canceled', None))
+        self.assertEqual(self.store.browse('Viewings')['total'], 0)
+
+    def test_canceling_a_viewing_without_a_recorded_event_removes_an_event_its_lost_write_made(self):
+        self.connect('calendar', state='not connected')
+        viewing = self.agree('2026-10-31T11:00:00-05:00', user_confirmed=True)['viewing']
+        event_id = viewing.replace('-', '')
+        self.save_calendar({event_id: {'summary': 'Viewing', 'start': {'dateTime': '2026-10-31T11:00:00-05:00'},
+                                       'end': {'dateTime': '2026-10-31T12:00:00-05:00'}, 'status': 'confirmed'}})
+        self.connect('calendar')
+        self.assertEqual(json.loads(self.contact('cancel', viewing).stdout)['calendar_error'], None)
+        self.assertEqual(self.writes(), [('delete', event_id)])
+        self.assertEqual(self.calendar()[event_id]['status'], 'cancelled')
+        self.assertIsNone(self.viewing()['calendar_event_id'])
+
+    def test_canceling_a_viewing_that_never_got_an_event_counts_the_missing_event_as_removed(self):
+        self.connect('calendar', state='not connected')
+        viewing = self.agree('2026-10-31T11:00:00-05:00', user_confirmed=True)['viewing']
+        self.connect('calendar')
+        self.assertEqual(json.loads(self.contact('cancel', viewing).stdout)['calendar_error'], None)
+        self.assertEqual(self.writes(), [('delete', viewing.replace('-', ''))])
+        self.assertIsNone(self.viewing()['calendar_event_id'])
+        self.assertFalse(self.gate())
+        self.assertEqual(len(self.writes()), 1)
+
+    def test_an_event_already_gone_counts_as_removed(self):
+        viewing = self.agree('2026-10-31T11:00:00-05:00')['viewing']
+        calendar = self.calendar()
+        calendar[viewing.replace('-', '')]['status'] = 'cancelled'
+        (self.root / 'calendar.json').write_text(json.dumps(calendar), encoding='utf-8')
+        self.assertEqual(json.loads(self.contact('cancel', viewing).stdout)['calendar_error'], None)
+        self.assertIsNone(self.viewing()['calendar_event_id'])
+
+    def test_a_canceled_viewing_cannot_be_moved(self):
+        viewing = self.agree('2026-10-31T11:00:00-05:00')['viewing']
+        self.contact('cancel', viewing)
+        result = self.contact('agree', self.file({'listing': 'example:100', 'time': '2026-10-31T12:00:00-05:00', 'details': '',
+                                                  'viewing': viewing}))
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.viewing()['status'], 'canceled')
+
+    def test_disconnected_calendar_writes_nothing_and_books_once_it_passes(self):
+        self.connect('calendar', state='not connected')
+        result = self.agree('2026-10-31T11:00:00-05:00', user_confirmed=True)
+        self.assertFalse(result['booked'])
+        self.assertIn('Do not use Google Calendar', result['calendar_error'])
+        self.assertEqual(self.calls('calendar_api'), [])
+        self.assertEqual(self.viewing()['status'], 'agreed')
+        self.assertFalse(self.gate())
+        self.assertEqual(self.calls('calendar_api'), [])
+        [notice] = self.notices()
+        self.assertIn('Google Calendar', notice)
+        self.assertFalse(self.gate())
+        self.assertEqual(len(self.notices()), 1)
+        self.connect('calendar')
+        self.assertFalse(self.gate())
+        self.assertEqual(self.writes(), [('insert', result['viewing'].replace('-', ''))])
+        self.assertEqual(self.viewing()['status'], 'booked')
+        self.assertFalse((self.home / 'apt-scraper' / 'contact-notices.json').exists())
+
+    def test_disconnected_calendar_keeps_the_event_of_a_canceled_viewing_until_it_passes(self):
+        viewing = self.agree('2026-10-31T11:00:00-05:00')['viewing']
+        self.connect('calendar', state='not connected')
+        self.assertIn('Do not use Google Calendar', json.loads(self.contact('cancel', viewing).stdout)['calendar_error'])
+        self.assertEqual(self.calendar()[viewing.replace('-', '')]['status'], 'confirmed')
+        self.connect('calendar')
+        self.gate()
+        self.assertEqual(self.calendar()[viewing.replace('-', '')]['status'], 'cancelled')
+        self.assertIsNone(self.viewing()['calendar_event_id'])
+
+    def test_failed_write_is_retried_without_a_second_event(self):
+        self.state = {'calendar_error': {'status': 503, 'reason': 'Backend Error'}}
+        self.save_state()
+        result = self.agree('2026-10-31T11:00:00-05:00')
+        self.assertIn('Backend Error', result['calendar_error'])
+        self.assertEqual(self.viewing()['status'], 'agreed')
+        event_id = result['viewing'].replace('-', '')
+        (self.root / 'calendar.json').write_text(json.dumps({event_id: {
+            'summary': 'Apartment viewing', 'start': {'dateTime': '2026-10-31T11:00:00-05:00'},
+            'end': {'dateTime': '2026-10-31T12:00:00-05:00'}, 'status': 'confirmed'}}), encoding='utf-8')
+        self.state = {}
+        self.save_state()
+        self.assertFalse(self.gate())
+        self.assertEqual(self.writes(), [('insert', event_id), ('insert', event_id), ('patch', event_id)])
+        self.assertEqual(len(self.calendar()), 1)
+        self.assertEqual(self.viewing()['status'], 'booked')
+
+    def test_viewing_moved_while_its_event_was_written_stays_agreed_for_the_next_write(self):
+        viewing = self.store.agree_viewing('example:100', '2026-10-31T11:00:00-05:00', 'Lobby')
+        self.assertFalse(self.store.record_booking(viewing, '2026-10-31T17:00:00+00:00', 'Lobby', viewing.replace('-', '')))
+        self.assertEqual(self.viewing()['status'], 'agreed')
 
 
 class GateTests(ContactTest):
@@ -463,7 +783,7 @@ class GateTests(ContactTest):
         self.contacted()
         wake, _ = self.gate()
         self.assertFalse(wake)
-        self.assertFalse((self.home / 'apt-scraper' / 'contact-poll.json').exists())
+        self.assertFalse((self.home / 'apt-scraper' / 'contact-notices.json').exists())
 
     def test_new_email_reply_is_recorded_and_wakes_the_agent_once(self):
         self.contacted()

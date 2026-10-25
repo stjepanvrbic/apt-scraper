@@ -108,7 +108,7 @@ test('contact requests, correspondence and viewings share the store', async ({ p
   await page.getByRole('tab', { name: 'Contacted', exact: true }).click();
   await expect(page.getByRole('article')).toHaveCount(1);
   execFileSync('python', [script, '--database', gallery.database, 'correspond', 'sample:lincoln', 'incoming', 'email', 'Friday at 3 pm works.', '--message-id', 'reply-1', '--thread-id', 'thread-1']);
-  execFileSync('python', [script, '--database', gallery.database, 'viewing', 'sample:lincoln', '2026-10-30T15:00:00-05:00', 'Meet in the lobby.', '--event-id', 'test-event']);
+  execFileSync('python', ['-c', `import sys; sys.path.insert(0,sys.argv[1]); from store import ListingStore; store=ListingStore(sys.argv[2]); viewing=store.agree_viewing('sample:lincoln','2026-10-30T15:00:00-05:00','Meet in the lobby.'); assert store.record_booking(viewing,'2026-10-30T20:00:00+00:00','Meet in the lobby.','testevent1')`, resolve('../profile/skills/gallery/scripts'), gallery.database]);
   await page.getByRole('button', { name: 'Refresh listings' }).click();
   await page.getByRole('button', { name: 'View Sunlit home in Lincoln Park', exact: true }).click();
   await expect(page.getByRole('dialog').getByText('Friday at 3 pm works.', { exact: true })).toBeVisible();
@@ -120,7 +120,7 @@ test('contact requests, correspondence and viewings share the store', async ({ p
 });
 
 test('an agreed time shows in the listing and reaches Viewings once booked', async ({ page, gallery }) => {
-  execFileSync('python', ['-c', `import sys; sys.path.insert(0,sys.argv[1]); from store import ListingStore; store=ListingStore(sys.argv[2]); store.request_contact('sample:lincoln'); print(store.agree_viewing('sample:lincoln','2026-10-31T11:00:00-05:00','Meet Anna in the lobby.'))`, resolve('../profile/skills/gallery/scripts'), gallery.database]);
+  const viewing = execFileSync('python', ['-c', `import sys; sys.path.insert(0,sys.argv[1]); from store import ListingStore; store=ListingStore(sys.argv[2]); store.request_contact('sample:lincoln'); print(store.agree_viewing('sample:lincoln','2026-10-31T11:00:00-05:00','Meet Anna in the lobby.'))`, resolve('../profile/skills/gallery/scripts'), gallery.database], { encoding: 'utf8' }).trim();
   await page.goto(gallery.url);
   await page.getByRole('button', { name: 'View Sunlit home in Lincoln Park', exact: true }).click();
   await expect(page.getByText('Agreed viewing, not yet in your calendar', { exact: true })).toBeVisible();
@@ -131,6 +131,14 @@ test('an agreed time shows in the listing and reaches Viewings once booked', asy
   await page.getByRole('button', { name: 'Close listing details' }).click();
   await page.getByRole('tab', { name: 'Viewings', exact: true }).click();
   await expect(page.getByRole('article')).toHaveCount(0);
+  execFileSync('python', ['-c', `import sys; sys.path.insert(0,sys.argv[1]); from store import ListingStore; assert ListingStore(sys.argv[2]).record_booking(sys.argv[3],'2026-10-31T16:00:00+00:00','Meet Anna in the lobby.',sys.argv[3].replace('-',''))`, resolve('../profile/skills/gallery/scripts'), gallery.database, viewing]);
+  await page.getByRole('button', { name: 'Refresh listings' }).click();
+  await expect(page.getByRole('article')).toHaveCount(1);
+  await expect(page.getByRole('article').getByText(/Oct 31/)).toBeVisible();
+  await page.getByRole('article').getByText(/Oct 31/).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath('booked-viewing.png') });
+  await page.getByRole('article').getByRole('button', { name: 'View Sunlit home in Lincoln Park', exact: true }).click();
+  await expect(page.getByText('Booked viewing', { exact: true })).toBeVisible();
 });
 
 test('a failed save keeps the draft and reports the failure before retry', async ({ page, gallery }) => {

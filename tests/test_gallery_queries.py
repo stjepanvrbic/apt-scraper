@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from test_gallery_store import ListingStore, listing
+from test_gallery_store import ListingStore, book, listing
 
 
 class GalleryQueryTests(unittest.TestCase):
@@ -35,7 +35,7 @@ class GalleryQueryTests(unittest.TestCase):
         self.add('excluded', 1)
         self.store.feedback('excluded', favorite=True)
         self.store.request_contact('excluded')
-        self.store.book_viewing('excluded', '2026-11-01T10:00:00Z', '', 'event')
+        book(self.store, 'excluded', '2026-11-01T10:00:00Z', '', 'event')
         self.store.set_matches_criteria('excluded', False)
         self.store.upsert_listing(listing(id='excluded'))
         for view in ['Rankings', 'Favorites', 'Contacted', 'Viewings', 'Dismissed']:
@@ -49,8 +49,8 @@ class GalleryQueryTests(unittest.TestCase):
     def test_viewings_use_chronological_order_and_contact_cards_include_bounded_messages(self):
         self.add('late', 1)
         self.add('early', 2)
-        self.store.book_viewing('late', '2026-11-01T10:00:00-06:00', '', 'late-event')
-        self.store.book_viewing('early', '2026-10-31T15:00:00+01:00', '', 'early-event')
+        book(self.store, 'late', '2026-11-01T10:00:00-06:00', '', 'late-event')
+        book(self.store, 'early', '2026-10-31T15:00:00+01:00', '', 'early-event')
         self.assertEqual([item['id'] for item in self.store.browse('Viewings')['items']], ['early', 'late'])
         self.store.request_contact('early')
         for index in range(60):

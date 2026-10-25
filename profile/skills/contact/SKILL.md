@@ -104,7 +104,7 @@ Act on each answer first. If the user shared a value, it is in `approvals`. If t
 
 ### Viewing times
 
-When the listing agent proposes or accepts a time, run `agree` with the time and its UTC offset, the meeting details from the correspondence, and `"viewing"` when it moves a viewing already agreed:
+When the listing agent proposes or accepts a time, run `agree` with the time and its UTC offset, the meeting details from the correspondence, and `"viewing"` with the viewing's id from `work` when it moves an agreed or booked viewing:
 
 ```json
 {"listing": "example:100", "time": "2026-10-31T11:00:00-05:00", "details": "Meet Anna in the lobby.", "viewing": null}
@@ -112,7 +112,9 @@ When the listing agent proposes or accepts a time, run `agree` with the time and
 
 `agree` checks that a one-hour viewing fits the user's availability and that the calendar is free then, and it always refuses a time within an hour of another agreed or booked viewing. On exit 0, confirm the time to the listing agent with `send`. On exit 4 for availability or the calendar, `ask` the user whether the time works, quoting it in their time zone, and do not confirm it to the agent. On exit 4 for another viewing, propose a different time to the listing agent. On exit 3, the calendar is not connected, so ask the user too. When the user accepts a time in their answer, run `agree` with `"user_confirmed": true`, which skips both checks.
 
-An agreed viewing appears in the gallery's listing details and goes to the user's calendar. When a viewing is canceled, run `cancel` with its id from `work`.
+After agreeing, the script puts the viewing in the user's Google Calendar itself, with the address, the listing links, the listing agent's contact details and your `details`, and a moved viewing updates its event. Its output says whether the viewing is `booked`. A `calendar_error` needs nothing from you: the cron job retries every few minutes and tells the user once. Confirm the time to the listing agent either way. Never create, change or delete a viewing's calendar event any other way.
+
+When the listing agent or the user cancels a viewing, run `cancel` with its id from `work`, which also removes its calendar event. A canceled viewing cannot be moved. Agree a new time without `"viewing"` instead.
 
 ## Questions to the user
 

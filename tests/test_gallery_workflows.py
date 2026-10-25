@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from test_gallery_store import ListingStore, listing
+from test_gallery_store import ListingStore, book, listing
 
 
 class SearchRankingTests(unittest.TestCase):
@@ -60,26 +60,25 @@ class SearchRankingTests(unittest.TestCase):
         self.assertEqual(saved['agent']['email'], 'office@example.com')
         self.assertEqual(saved['error'], 'Mailbox unavailable')
 
-    def test_multiple_viewings_move_cancel_and_remove_without_losing_event_identity(self):
+    def test_multiple_viewings_move_and_cancel_without_losing_event_identity(self):
         self.store.upsert_listing(listing())
-        first = self.store.book_viewing('example:100', '2026-10-30T15:00:00-05:00', 'Lobby', 'calendar-first')
-        second = self.store.book_viewing('example:100', '2026-11-01T10:00:00-06:00', 'Second visit', 'calendar-second')
-        self.store.book_viewing('example:100', '2026-10-31T15:00:00-05:00', 'Moved', 'calendar-first', viewing_id=first)
-        self.store.cancel_viewing(first)
+        first = book(self.store, 'example:100', '2026-10-30T15:00:00-05:00', 'Lobby', 'calendar-first')
+        second = book(self.store, 'example:100', '2026-11-01T10:00:00-06:00', 'Second visit', 'calendar-second')
+        self.store.agree_viewing('example:100', '2026-10-31T15:00:00-05:00', 'Moved', viewing_id=first)
+        self.store.cancel_viewing(first, possible_event_id='unused')
         saved = type(self.store)(self.path).listing('example:100')['viewings']
         self.assertEqual(len(saved), 2)
         moved = next(viewing for viewing in saved if viewing['id'] == first)
         self.assertEqual(moved['calendar_event_id'], 'calendar-first')
         self.assertEqual(moved['status'], 'canceled')
         self.assertEqual(moved['time'], '2026-10-31T20:00:00+00:00')
-        self.store.remove_viewing(second)
-        self.assertEqual(len(self.store.listing('example:100')['viewings']), 1)
+        self.assertEqual(next(viewing for viewing in saved if viewing['id'] == second)['status'], 'booked')
 
     def test_drawer_and_export_order_viewings_by_time_not_identifier(self):
         self.store.upsert_listing(listing())
         with patch('store.uuid4', side_effect=['first-id', 'second-id']):
-            late = self.store.book_viewing('example:100', '2026-10-28T10:00:00Z', '', 'event-late')
-            early = self.store.book_viewing('example:100', '2026-10-26T10:00:00Z', '', 'event-early')
+            late = book(self.store, 'example:100', '2026-10-28T10:00:00Z', '', 'event-late')
+            early = book(self.store, 'example:100', '2026-10-26T10:00:00Z', '', 'event-early')
         self.assertEqual([row['id'] for row in self.store.listing('example:100')['viewings']], [early, late])
         self.assertEqual([row['id'] for row in self.store.state()['listings'][0]['viewings']], [early, late])
 
