@@ -46,25 +46,26 @@ Each listing's feature record has its straight-line distance to the nearest rapi
 
 ## Result
 
-Delivered on branch `feat/distance_features` at `7929944`, in a pull request to `main`, not merged.
+Delivered on branch `feat/distance_features` in pull request #22 to `main`, not merged. The reviewed change is `7929944`; `2054b19` merges `main` (the Compare tab) into it.
 
-- A place is `name` and `address`. Store migration 6 strips `travel_mode`, `longest_trip_minutes` and `visits_per_week` from saved places, and validation rejects them.
+- A place is `name` and `address`. Store migration 7 strips `travel_mode`, `longest_trip_minutes` and `visits_per_week` from saved places, and validation rejects them.
 - `settings.py save` geocodes each new place address through Nominatim (`geodata.py`), one request a second, User-Agent `apt-scraper (Hermes Agent apartment search)`. Results are kept by address in the `geocodes` table. Nothing found exits 5, Nominatim unreachable exits 6, and both save nothing. The interview skill asks the user to describe the place again, and says back where each place was found with the OpenStreetMap attribution.
 - The `transit_feed` setting defaults to CTA's feed. The features job downloads it once per URL and keeps the stations (`stations`, `transit_feed` tables): stops a rail route serves, at their parent station.
 - `code_features` has `nearest_station`, `station_distance_km` and `place_distances_km`, great-circle distances from stored coordinates. Unknown without coordinates.
 - `scoring.py` adds the columns `station_distance` and `place:<name>`. Their starting weights are −1, −0.5 or −0.25 by the location priority of rapid transit and of places. An unknown distance is the column mean, so it counts neither way.
 
-Verification at `7929944`:
+Verification at `2054b19`, unless a line names another revision:
 
-- `python -m unittest discover -s tests`: 432 passed, 0 skipped. Spec › Acceptance "Location" is `DistanceTests` in `tests/test_scoring.py`, with and without favorites, and `test_the_distances_to_stations_and_places_count_by_the_location_priorities` in `tests/test_rerank.py` runs it through a real store. With the place prior set to zero, the acceptance test fails.
-- The touched test modules under Hermes's Python 3.14.9: 158 passed at the first candidate.
-- `ruff check profile tests`: clean. Hermes's skill linter (`tools/skill_linter.py`): 0 findings for `interview`, `listing-features` and `ranking`; `gallery` keeps its 6 earlier warnings. Skills guard: nothing new in the gallery scripts, `interview` safe. `_scan_context_content` leaves `SOUL.md` and both changed skills unchanged.
+- `python -m unittest discover -s tests`: 446 passed, 0 skipped (432 at `7929944`). Spec › Acceptance "Location" is `DistanceTests` in `tests/test_scoring.py`, with and without favorites, and `test_the_distances_to_stations_and_places_count_by_the_location_priorities` in `tests/test_rerank.py` runs it through a real store. With the place prior set to zero, the acceptance test fails.
+- The touched test modules under Hermes's Python 3.14.9: 158 passed at `d874550`.
+- `ruff check profile tests`: clean. Hermes's skill linter (`tools/skill_linter.py`): 0 findings for `interview`, `listing-features` and `ranking`; `gallery` keeps its 6 earlier warnings. Skills guard: nothing new in the gallery scripts, `interview` safe. `_scan_context_content` leaves `SOUL.md` and both changed skills unchanged (`7929944`).
 - Real services, once, on a throwaway Hermes home that was then removed: Nominatim placed "233 S Wacker Dr, Chicago, IL 60606" at Willis Tower and returned no result for a nonsense address (exit 5, nothing saved). Saving the found place again sent no request. The CTA feed (68,738,293 bytes, published 2026-09-14) gave 143 stations in 4.0 s, the count the research report measured. Listings got Logan Square at 1.31 km, Damen (Blue) at 0.035 km and Midway at 0.026 km.
-- Rerank of 300 listings with 50 favorites: 1.39 to 1.41 s on a quiet machine. Under load from another process, `main` took 1.60 to 2.31 s and this branch 1.55 to 2.42 s, so the 2-second timing test can fail on either. The reviewer profiled the change at about 1% of a rerank, from the haversine distance.
+- Rerank of 300 listings with 50 favorites: 1.39 to 1.41 s at `d874550` and 1.42 to 1.46 s at `2054b19`, on a quiet machine. Under load from another process, `main` took 1.60 to 2.31 s and this branch 1.55 to 2.42 s, so the 2-second timing test can fail on either. The reviewer profiled the change at about 1% of a rerank, from the haversine distance.
 - Review: an independent `review-code` pass in two rounds. Fixed from it: two places at one address never counted as geocoded; places without coordinates stopped extraction; feed parse errors escaped the retry; partial geocodes were lost when Nominatim failed partway; the User-Agent named a private repository; the feed URL was resolved in two places; `SOUL.md` read exit 3 as an incomplete interview only.
+- Merging `main`: the distances migration became version 7, after `pairwise_skips`. Main's version-5 Compare migration test ran today's store code on an unmigrated store, which fails once a later migration adds tables, so it now builds the version-5 rows with SQL.
 - No ADR applies: the spec has no decision on location.
 
-Tech debt fixed: one great-circle `distance_km` in `code_features.py` replaces the equirectangular approximation `scoring.py` used for `near_favorites`. Migration 3 no longer computes code features with today's code; migration 6 does, after creating the tables that computation reads.
+Tech debt fixed: one great-circle `distance_km` in `code_features.py` replaces the equirectangular approximation `scoring.py` used for `near_favorites`. Migration 3 no longer computes code features with today's code; migration 7 does, after creating the tables that computation reads.
 
 Found, not fixed: `tests/test_gallery_launcher.py` writes into the real `~/.secrets/apt-scraper/gallery/`, so two suites running at once can fail with "Permission denied" there. The rerank timing test has about 0.6 s of headroom on a quiet machine and fails under load.
 
