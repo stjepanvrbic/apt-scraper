@@ -1,13 +1,13 @@
 ---
 title: Log in to Claude with a pasted setup token
 type: Feature
-state: In Progress
+state: Backlog
 priority: 4
-assignee: agent
+assignee:
 milestone:
 parent:
 blocked_by: []
-related: []
+related: [0011]
 ---
 
 ## Outcome
@@ -28,5 +28,7 @@ The installer asks the user for a token from `claude setup-token`, stores it as 
 The plugin accepts `CLAUDE_CODE_OAUTH_TOKEN` from Hermes' environment. The token lasts one year and only makes model requests.
 
 ## Deviations
+
+A token in the `apt-scraper` profile `.env` never reaches Claude Code under Hermes 0.22.5, because the host gateway serves every profile from the default profile's environment. The owner deferred the ticket (`0011`); the installer change is on the draft pull request of `feat/claude_setup_token_login`.
 
 ## Result
