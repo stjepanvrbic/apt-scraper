@@ -50,7 +50,7 @@ After each rerank, the model reviews the top 50 and the state of the whole ranki
 
 ## Result
 
-The implementation is the single commit on `feat/review_pass` with subject "Review pass after each rerank", in a pull request to `main`, not merged. The ticket stays In Progress until it merges.
+The implementation is on `feat/review_pass` in a pull request to `main`, not merged. The ticket stays In Progress until it merges.
 
 ```
 profile/skills/gallery/scripts/review.py     the task, format and citation checks, reviewed order, adjustments, held-out ranks on the stored scores

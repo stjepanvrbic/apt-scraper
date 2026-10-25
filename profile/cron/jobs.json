@@ -38,7 +38,7 @@
     {
       "id": "apt-scraper-review",
       "name": "Ranking review",
-      "prompt": "Above is the report of the ranking review job. Follow the ranking skill's section \"Review pass\": read the review task file the report names with read_file, write the review it asks for and save it with the command it gives, then stop. Do not contact anyone, do not change any settings and run no other ranking command. End with the one line the task file asks for.",
+      "prompt": "Above is the report of the ranking review job. Follow the ranking skill's section \"Review pass\": read the review task file the report names with read_file, write the review it asks for and save it with the command it gives, then stop. If the report shows a script error instead of a task file, report that error to the user through the messaging gateway and stop. Do not contact anyone else, do not change any settings and run no other ranking command. End with the one line the task file asks for.",
       "skills": ["ranking"],
       "script": "review-run.py",
       "schedule": "every 1m",
