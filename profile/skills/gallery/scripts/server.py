@@ -131,6 +131,10 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                     if not set(body) <= {'message_id', 'prompt_id', 'answer', 'interrupt'} or 'message_id' not in body:
                         raise ValueError('Invalid conversation response.')
                     chat.respond(**body)
+                elif parts == ['api', 'signals']:
+                    self.require_fields(body, {'events'})
+                    self.reply(200, {'recorded': store.record_signals(body['events'])})
+                    return
                 elif parts == ['api', 'compare', 'answer']:
                     self.require_fields(body, {'chosen', 'other'})
                     store.answer_pair(body['chosen'], body['other'])

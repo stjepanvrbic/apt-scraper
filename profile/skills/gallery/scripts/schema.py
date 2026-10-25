@@ -107,7 +107,18 @@ def review_pass(connection):
                        'attempts INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, snapshot TEXT, result TEXT)')
 
 
-MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass)
+def implicit_signals(connection):
+    connection.execute('''CREATE TABLE implicit_signals (
+        event_id TEXT PRIMARY KEY, visit_id TEXT NOT NULL, listing_id TEXT NOT NULL REFERENCES listings(id),
+        fingerprint TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('open', 'dwell', 'photo', 'close')),
+        occurred_at TEXT NOT NULL, duration_ms INTEGER, photo_url TEXT,
+        CHECK ((kind = 'dwell' AND duration_ms >= 0 AND photo_url IS NULL)
+            OR (kind = 'photo' AND photo_url IS NOT NULL AND duration_ms IS NULL)
+            OR (kind IN ('open', 'close') AND duration_ms IS NULL AND photo_url IS NULL)))''')
+    connection.execute('CREATE INDEX implicit_signals_listing_visit ON implicit_signals(listing_id, fingerprint, visit_id)')
+
+
+MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals)
 
 
 def migrate(connection):

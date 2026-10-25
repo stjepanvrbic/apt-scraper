@@ -1,13 +1,13 @@
 ---
 title: Implicit signals recorded by the gallery
 type: Feature
-state: In Progress
+state: Done
 priority: 4
-assignee: agent
+assignee:
 milestone:
 parent: 0015
 blocked_by: []
-related: []
+related: [0030]
 ---
 
 ## Outcome
@@ -16,11 +16,12 @@ The gallery records listing opens, how long a listing stays open and which photo
 
 ## Acceptance
 
-- [ ] Opening a listing, the time its details stay open and visible, and each photo viewed in the full photo set are recorded through an authenticated HTTP route, batched, in a new store table. Time while the browser tab is hidden does not count.
-- [ ] The gallery's visible behavior does not change, and nothing is sent anywhere but the local server.
-- [ ] Each rerank computes the leave-one-out check a second time with the signals as weak labels and reports both values. The ranks come from the model without them.
-- [ ] Tests at the store and HTTP boundaries, and a headless Playwright test that opening a listing and paging its photos records the events.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Opening a listing, the time its details stay open and visible, and each photo viewed in the full photo set are recorded through an authenticated HTTP route, batched, in a new store table. Time while the browser tab is hidden does not count.
+- [x] The gallery's visible behavior does not change, and nothing is sent anywhere but the local server.
+- [x] Each rerank computes the leave-one-out check a second time with the signals as weak labels and reports both values. The ranks come from the model without them.
+- [x] Tests at the store and HTTP boundaries, and a headless Playwright test that opening a listing and paging its photos records the events.
+- [x] Pushed `feat/implicit_signals` and opened a pull request to `main`, without merging.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
@@ -34,4 +35,22 @@ Candidate weak labels: a listing kept open well above the median time is a weak 
 
 ## Deviations
 
+The diagnostic evaluates completed visible dwell only. Opens and photo views are retained without preference inference; rank-order click pairs need evidence of which earlier results were actually seen. With no usable weak labels, the second report reuses the identical baseline check instead of refitting it. There is no zoom control in the current gallery, and the accepted capture contract does not include scroll impressions.
+
+Capture is best effort during browser termination or a server outage: the queue holds 200 events, logs failures to the console and retries the same event identities without duplication. Overflow leaves the affected visit out of the diagnostic. Delivery stops at an open pull request, as requested.
+
 ## Result
+
+Schema migration 9 adds `implicit_signals` after the review-pass migration; authenticated `POST /api/signals` validates and atomically deduplicates batches. Existing Mantine hooks and the lightbox view callback capture opens, visible dwell increments, photo views and closes through the existing fetch layer. Signal writes do not change the gallery revision. Reranks report a separate weak-label leave-one-out result while retaining the ordinary ranks, explanations, exploration and Compare questions.
+
+Ten new Python tests cover storage, migration, authentication, batch validation, diagnostic isolation, held-out leakage and the two-second CPU budget with 300 listings, 50 favorites and 250 weak labels. Four new headless browser tests cover photo paging, hidden time, retries after lost responses, page exit, refreshes and reopened visits. After rebasing onto the distance features, the full Python suite passed 456 tests and the full headless Playwright suite passed 30 tests, including desktop/mobile accessibility and screenshots, with zero skipped tests. Lint, production build and `ruff check profile tests` passed. Independent review and merge remain pending.
+
+The governing requirements are Spec Terms, Ranking and Gallery and the existing Spec Decisions; the repository has no separate ADR register. Adjacent cleanup stabilizes lightbox slides during rerenders. Numerical dot products now use `math.sumprod` to meet the diagnostic timing budget, requiring Python 3.12 or newer outside Hermes; the supplied Hermes runtime is 3.14.9, as the [ranking guide](../ranking.md#implicit-signal-diagnostic) documents. A 40-listing characterization kept ranks, held-out ranks and exploration unchanged, with maximum weight difference 1.39e-17. No new package was added. The owner's installed profiles were not used for verification.
+
+The new signal timing test measures CPU time, following [0030: the rerank timing test fails on a busy machine](0030-rerank_timing_test_under_load.md). The existing timing test is unchanged. Verification uses an isolated temporary home so launcher tests do not access the owner's secrets directory.
+
+Delivered as [PR #23](https://github.com/stjepanvrbic/apt-scraper/pull/23), branch `feat/implicit_signals`. Verified code and test revision: `394f1e11d65d6591ccfb24926e4a04829432be98`. macOS and a connected installed profile were not exercised. Independent review and merge remain pending.
+
+## Comments
+
+- 2026-10-25: Integrated `main` at `c46b407` with the reviewed head `a16cb86`. Review passes remain migration 8 and implicit signals become migration 9. Reranks retain the ordinary model's review snapshot and waiting review alongside the separate implicit-signal diagnostic and `math.sumprod` solver. Tests cover upgrades from versions 7 and 8 and confirm that signals leave review scores unchanged. The full Python suite passed 482 tests in 146.858 seconds; headless Playwright passed all 30 in 58.7 seconds, both with zero skipped tests. Ruff, frontend lint and the production build passed; rebuilt assets are unchanged. The initial concurrent run hit 2.016 seconds on the signal CPU check, and Playwright hit two Python-launcher setup failures and a drawer contrast failure. Standalone timing trials took 1.31 to 1.33 seconds. Separate full-suite reruns passed with the installed Python interpreter selected directly, without changing tests or thresholds. Verification used temporary homes and stores; installed Hermes profiles were untouched. Delivery remains the open pull request, without merging it.

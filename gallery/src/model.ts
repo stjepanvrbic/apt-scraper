@@ -10,6 +10,7 @@ export type ListingSummary = {
 };
 export type Listing = ListingSummary & {
   explanation: Explanation | null;
+  content_fingerprint: string;
   description: string | null; amenities: string[]; sources: { label: string; url: string }[];
   notes: Note[]; notes_total: number;
   viewings: { id: string; time: string; details: string; status: 'booked' | 'agreed' | 'canceled'; calendar_event_id: string | null }[];

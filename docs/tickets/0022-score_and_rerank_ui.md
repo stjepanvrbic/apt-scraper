@@ -38,7 +38,7 @@ The button could show how many listings and labels changed since the last rerank
 ## Deviations
 
 - Delivery stops at an open pull request, per the owner's implementation request. The ticket stays In Progress; no merge is authorized.
-- No migration is needed. The gallery reads the existing rerank and review records at schema version 8.
+- No migration is needed. The gallery reads the existing rerank and review records. The merged implicit-signals work uses schema version 9.
 
 ## Result
 
