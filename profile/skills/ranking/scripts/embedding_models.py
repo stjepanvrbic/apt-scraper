@@ -23,6 +23,7 @@ IMAGE_PARTS = ('photos', 'photos:kitchen', 'photos:bathroom', 'photos:bedroom', 
 RELATIVE_AMPLITUDES = (0.5, 1.0, 2.0)
 NEWTON_TOLERANCE = 1e-8
 NEWTON_ITERATIONS = 100
+STALLED_STEP = 1e-3
 
 
 def unit_rows(matrix):
@@ -173,7 +174,10 @@ def sigmoid(values):
 def posterior_mode(kernel, mean, matrix, labels, weights):
     """The latent scores at the posterior mode: f = mean + K a, minimizing the weighted logistic loss of matrix f plus
     ½ aᵀKa. Each Newton step solves through B = I + S K Sᵀ, S the rows of matrix scaled by the root of their curvature,
-    which is positive definite whatever the rank of K, with step halving."""
+    which is positive definite whatever the rank of K, with step halving. The intercept's nearly flat prior puts a
+    variance of 10⁶ into K, which limits the scores' precision to about 10⁻⁴: near the mode, rounding can hide the
+    objective's decrease. A step that no halving makes lower counts as converged when the full Newton step moves no
+    score by STALLED_STEP, and as a failure otherwise."""
     alpha, latent = numpy.zeros(len(mean)), mean.copy()
 
     def objective(alpha, latent):
@@ -196,7 +200,7 @@ def posterior_mode(kernel, mean, matrix, labels, weights):
             if value <= current:
                 break
             if length < 1e-10:
-                if numpy.max(numpy.abs(kernel @ (alpha - gradient))) < NEWTON_TOLERANCE:
+                if numpy.max(numpy.abs(kernel @ step)) < STALLED_STEP:
                     return latent
                 raise ArithmeticError('The Gaussian-process fit found no step that lowers its objective.')
             length /= 2
