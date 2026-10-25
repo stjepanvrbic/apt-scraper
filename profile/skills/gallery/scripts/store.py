@@ -627,9 +627,9 @@ class ListingStore:
                 if abs(datetime.fromisoformat(other['time']) - start) < timedelta(minutes=VIEWING_MINUTES):
                     raise ViewingConflict(f'The viewing of {other["listing_id"]} at {other["time"]} overlaps {time}.')
             if viewing_id:
-                if not connection.execute("UPDATE viewings SET time = ?, details = ?, status = 'agreed' WHERE id = ? AND listing_id = ?",
-                                          (time, details, viewing_id, listing_id)).rowcount:
-                    raise KeyError('Viewing not found for this listing.')
+                if not connection.execute('''UPDATE viewings SET time = ?, details = ?, status = 'agreed'
+                    WHERE id = ? AND listing_id = ? AND status IN ('agreed', 'booked')''', (time, details, viewing_id, listing_id)).rowcount:
+                    raise KeyError('No agreed or booked viewing with that id for this listing.')
                 return viewing_id
             viewing_id = str(uuid4())
             connection.execute("INSERT INTO viewings (id, listing_id, time, details, status) VALUES (?, ?, ?, ?, 'agreed')",
@@ -640,32 +640,39 @@ class ListingStore:
         with self.connect() as connection:
             return [dict(row) for row in connection.execute("SELECT * FROM viewings WHERE status = 'agreed' ORDER BY time, id")]
 
-    def book_viewing(self, listing_id, time, details, calendar_event_id, *, viewing_id=None):
-        time = viewing_time(time)
+    def scheduled_viewings(self):
+        with self.connect() as connection:
+            return [dict(row) for row in connection.execute("SELECT * FROM viewings WHERE status IN ('agreed', 'booked') ORDER BY time, id")]
+
+    def canceled_viewing_events(self):
+        with self.connect() as connection:
+            return [dict(row) for row in connection.execute(
+                "SELECT * FROM viewings WHERE status = 'canceled' AND calendar_event_id IS NOT NULL ORDER BY time, id")]
+
+    def record_booking(self, viewing_id, time, details, calendar_event_id):
+        """Books only a viewing still agreed with the time and details the event was written with, so a move that arrives
+        during the calendar write stays agreed for the next write. A viewing canceled meanwhile takes the identifier of
+        the event just written, so that event is removed instead of left behind."""
         require_text(calendar_event_id, 'Calendar event id', limit=1000)
-        if not isinstance(details, str):
-            raise ValueError('Viewing details must be text.')
         with self.connect(write=True) as connection:
-            self.require_listing(connection, listing_id)
-            if viewing_id:
-                if not connection.execute('SELECT 1 FROM viewings WHERE id = ? AND listing_id = ?', (viewing_id, listing_id)).fetchone():
-                    raise KeyError('Viewing not found for this listing.')
-                connection.execute("UPDATE viewings SET time = ?, details = ?, calendar_event_id = ?, status = 'booked' WHERE id = ?",
-                                   (time, details, calendar_event_id, viewing_id))
-            else:
-                viewing_id = str(uuid4())
-                connection.execute('INSERT INTO viewings (id, listing_id, time, details, calendar_event_id) VALUES (?, ?, ?, ?, ?)',
-                                   (viewing_id, listing_id, time, details, calendar_event_id))
-            return viewing_id
+            if connection.execute('''UPDATE viewings SET status = 'booked', calendar_event_id = ?
+                WHERE id = ? AND status = 'agreed' AND time = ? AND details = ?''', (calendar_event_id, viewing_id, time, details)).rowcount:
+                return True
+            connection.execute("UPDATE viewings SET calendar_event_id = ? WHERE id = ? AND status = 'canceled'", (calendar_event_id, viewing_id))
+            return False
 
-    def cancel_viewing(self, viewing_id):
+    def record_event_removed(self, viewing_id, calendar_event_id):
         with self.connect(write=True) as connection:
-            if not connection.execute("UPDATE viewings SET status = 'canceled' WHERE id = ?", (viewing_id,)).rowcount:
-                raise KeyError('Viewing not found.')
+            return bool(connection.execute('''UPDATE viewings SET calendar_event_id = NULL
+                WHERE id = ? AND status = 'canceled' AND calendar_event_id = ?''', (viewing_id, calendar_event_id)).rowcount)
 
-    def remove_viewing(self, viewing_id):
+    def cancel_viewing(self, viewing_id, *, possible_event_id):
+        """A viewing without a recorded event may still have one, written by a create whose answer was lost, so it keeps
+        `possible_event_id` for the removal, which counts an event that does not exist as removed."""
+        require_text(possible_event_id, 'Calendar event id', limit=1000)
         with self.connect(write=True) as connection:
-            if not connection.execute('DELETE FROM viewings WHERE id = ?', (viewing_id,)).rowcount:
+            if not connection.execute('''UPDATE viewings SET status = 'canceled', calendar_event_id = CASE WHEN status = 'canceled'
+                THEN calendar_event_id ELSE COALESCE(calendar_event_id, ?) END WHERE id = ?''', (possible_event_id, viewing_id)).rowcount:
                 raise KeyError('Viewing not found.')
 
     @staticmethod
