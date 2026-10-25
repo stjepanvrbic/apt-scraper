@@ -77,6 +77,24 @@ class EmbedStoreTests(unittest.TestCase):
         self.assertEqual([entry['id'] for entry in self.store.embedding_inputs([pin.name for pin in MODELS])], ['example:300'])
 
 
+class NothingToEmbedTests(unittest.TestCase):
+    def test_a_listing_without_text_is_reported_and_keeps_waiting(self):
+        class Store:
+            saved = []
+
+            def embedding_inputs(self, models):
+                return [{'id': 'example:100', 'fingerprint': 'f', 'title': None, 'description': None, 'photos': [], 'traits': [], 'concerns': [],
+                         'missing': [TEXT_MODEL.name]}]
+
+            def save_embeddings(self, *arguments):
+                self.saved.append(arguments)
+
+        store = Store()
+        report = embed_store(store, ENCODERS)
+        self.assertEqual(report[0]['error'], 'It has no title, description, traits or concerns.')
+        self.assertEqual(store.saved, [])
+
+
 class PartsTests(unittest.TestCase):
     def test_photo_parts_average_the_unit_vectors_over_all_photos_and_each_room_type(self):
         vectors = numpy.array([[1, 0], [0, 1], [0, 1]], dtype='float32')

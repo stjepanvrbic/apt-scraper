@@ -69,6 +69,8 @@ MODELS = (IMAGE_MODEL, TEXT_MODEL)
 
 
 def models_directory():
+    if 'HERMES_HOME' not in os.environ:
+        raise ValueError('HERMES_HOME is not set, so the models directory is unknown.')
     return Path(os.environ['HERMES_HOME']) / 'workspace' / 'embeddings' / 'models'
 
 
@@ -185,11 +187,12 @@ def load_photos(photos, fetch):
 
 def embed_store(store, encoders, *, fetch=download):
     """Embeds every listing that lacks embeddings of its current content and saves them, one listing at a time.
-    Returns, per listing, the photos embedded, the seconds spent downloading and embedding, the CPU seconds of
-    embedding, how many photos CLIP's zero-shot room type agrees with the record on, and any failure."""
+    Returns, per listing, the photos embedded, the seconds spent downloading photos, embedding them and embedding in
+    all, the CPU seconds of embedding, how many photos CLIP's zero-shot room type agrees with the record on, and what
+    could not be embedded. A listing with nothing to embed for a model stays waiting and is reported every time."""
     report = []
     for listing in store.embedding_inputs([pin.name for pin in MODELS]):
-        entry = {'id': listing['id']}
+        entry, errors = {'id': listing['id']}, []
         started = time.perf_counter()
         try:
             photos = load_photos(listing['photos'], fetch) if IMAGE_MODEL.name in listing['missing'] else []
@@ -199,17 +202,22 @@ def embed_store(store, encoders, *, fetch=download):
         entry['download_seconds'] = time.perf_counter() - started
         started, cpu = time.perf_counter(), time.process_time()
         if IMAGE_MODEL.name in listing['missing']:
-            if not photos:
-                entry['error'] = 'No photo of its record loads.'
-            else:
+            if photos:
                 vectors = encoders.images([image for image, _ in photos])
+                entry['image_seconds'] = time.perf_counter() - started
                 rooms = [room for _, room in photos]
                 store.save_embeddings(listing['id'], listing['fingerprint'], IMAGE_MODEL.name, photo_parts(vectors, rooms))
                 entry['room_types_agreeing'] = sum(map(str.__eq__, encoders.room_types(vectors), rooms))
-        chunks = text_chunks(listing)
-        if TEXT_MODEL.name in listing['missing'] and chunks:
-            store.save_embeddings(listing['id'], listing['fingerprint'], TEXT_MODEL.name, text_part(encoders.texts(chunks)))
-        report.append({**entry, 'photos': len(photos), 'embed_seconds': time.perf_counter() - started, 'embed_cpu_seconds': time.process_time() - cpu})
+            else:
+                errors.append('No photo of its record loads.')
+        if TEXT_MODEL.name in listing['missing']:
+            chunks = text_chunks(listing)
+            if chunks:
+                store.save_embeddings(listing['id'], listing['fingerprint'], TEXT_MODEL.name, text_part(encoders.texts(chunks)))
+            else:
+                errors.append('It has no title, description, traits or concerns.')
+        entry.update(photos=len(photos), embed_seconds=time.perf_counter() - started, embed_cpu_seconds=time.process_time() - cpu)
+        report.append({**entry, 'error': ' '.join(errors)} if errors else entry)
     return report
 
 

@@ -8,7 +8,7 @@ the photos their feature records name, so a later run with the same WORK embeds 
 as JSON, has:
 
 - costs: per listing the seconds to download its photos, to embed them and its text, and the CPU seconds of
-  embedding; the photos per second; the seconds to load the models; the peak memory after embedding and at the end;
+  embedding; the photos per second of the image model alone; the seconds to load the models; the peak memory after embedding and at the end;
   the size of this Python environment and of the models; and how often CLIP's zero-shot room type agrees with the
   record's.
 - labels: each model's leave-one-out check on the copy's own labels, with the seconds its fit and check took. Every
@@ -24,7 +24,8 @@ as JSON, has:
 
 The models: the scoring model, the scoring model with a similarity term for the most similar favorite in photos,
 text or both, and the Gaussian-process model with an embedding kernel of photos, text or both at each relative
-amplitude of RELATIVE_AMPLITUDES and at the one its leave-one-out check chooses. Ranks are the models' own order,
+amplitude of RELATIVE_AMPLITUDES and at the one its leave-one-out check selects. The selected row's check is the
+one it was selected by, so it is optimistic by the choice among three. Ranks are the models' own order,
 without exploration listings.
 
 Exit codes: 0 done, 1 a step failed, 2 usage error.
@@ -32,7 +33,6 @@ Exit codes: 0 done, 1 a step failed, 2 usage error.
 
 import argparse
 import json
-import os
 import sqlite3
 import sys
 import time
@@ -130,8 +130,8 @@ def compare(inputs, embeddings_by_model):
             results[f'gaussian process ({name}, amplitude {amplitude})'] = checked(order(model_design, process.scores),
                                                                                    process.held_out, started)
         best = best_checked(fits)
-        results[f'gaussian process ({name}, chosen)'] = {**results[f'gaussian process ({name}, amplitude {best.relative_amplitude})'],
-                                                         'relative_amplitude': best.relative_amplitude}
+        results[f'gaussian process ({name}, selected)'] = {**results[f'gaussian process ({name}, amplitude {best.relative_amplitude})'],
+                                                           'relative_amplitude': best.relative_amplitude}
     return results, embeddings
 
 
@@ -158,12 +158,33 @@ def placement(ranked, favorites, alike, prices):
 
 
 def five_favorites(inputs, embeddings_by_model, favorites, alike):
+    """Each model before and after the five favorites. A selected Gaussian process is compared with the same
+    amplitude before, since without favorites there is nothing to select by."""
     prices = {listing['id']: listing['code'].get('monthly_price') for listing in inputs['listings']}
     before, _ = compare(with_favorites(inputs, ()), embeddings_by_model)
     after, _ = compare(with_favorites(inputs, favorites), embeddings_by_model)
-    return {name: {'before': placement(before[name]['order'], favorites, alike, prices),
-                   'after': placement(after[name]['order'], favorites, alike, prices),
-                   **{key: value for key, value in after[name].items() if key != 'order'}} for name in after}
+    report = {}
+    for name, result in after.items():
+        same = name.replace('selected', f'amplitude {result["relative_amplitude"]}') if 'relative_amplitude' in result else name
+        report[name] = {'before': placement(before[same]['order'], favorites, alike, prices), 'after': placement(result['order'], favorites, alike, prices),
+                        **{key: value for key, value in result.items() if key != 'order'}}
+    return report
+
+
+def validated_experiment(inputs, experiment):
+    """The experiment's favorites and alike listings, each a ranked listing of the store, five distinct favorites and
+    no listing in both."""
+    if not isinstance(experiment, dict) or not isinstance(experiment.get('favorites'), list) or not isinstance(experiment.get('alike'), list):
+        raise ValueError('The experiment file is {"favorites": [five listing ids], "alike": [listing ids]}.')
+    favorites, alike = experiment['favorites'], experiment['alike']
+    model_design = design(inputs)
+    ranked = {identifier for identifier in model_design.ids if model_design.listings[identifier]['rankable']}
+    unknown = [identifier for identifier in (*favorites, *alike) if identifier not in ranked]
+    if unknown:
+        raise ValueError(f'Not ranked listings of the store: {", ".join(map(str, unknown))}.')
+    if len(set(favorites)) != 5 or len(set(alike)) != len(alike) or not alike or set(favorites) & set(alike):
+        raise ValueError('The experiment needs five distinct favorites and at least one alike listing, none of them repeated or in both.')
+    return favorites, alike
 
 
 def embedding_costs(report, load_seconds):
@@ -171,7 +192,7 @@ def embedding_costs(report, load_seconds):
     photos = sum(entry['photos'] for entry in embedded)
     per_listing = {key: round(fmean(entry[key] for entry in embedded), 3) if embedded else None
                    for key in ('download_seconds', 'embed_seconds', 'embed_cpu_seconds', 'photos')}
-    seconds = sum(entry['embed_seconds'] for entry in embedded)
+    seconds = sum(entry.get('image_seconds', 0) for entry in embedded)
     return {'listings_embedded': len(embedded), 'failed': [entry for entry in report if 'error' in entry], 'photos': photos,
             'per_listing': per_listing, 'photos_per_second': round(photos / seconds, 2) if seconds else None,
             'model_load_seconds': round(load_seconds, 2),
@@ -184,6 +205,8 @@ def measure(store, work, models, experiment, threads):
     if threads:
         torch.set_num_threads(threads)
     copy = working_copy(store, work)
+    if experiment:
+        validated_experiment(copy.ranking_inputs(), experiment)
     download_models(models)
     started = time.perf_counter()
     encoders = Encoders(models)
@@ -199,7 +222,7 @@ def measure(store, work, models, experiment, threads):
               'listings': {'ranked': len(labels['scoring']['order']), 'without_photo_embeddings': embeddings.missing_image,
                            'without_text_embeddings': embeddings.missing_text}}
     if experiment:
-        report['five_favorites'] = five_favorites(inputs, embeddings_by_model, experiment['favorites'], experiment['alike'])
+        report['five_favorites'] = five_favorites(inputs, embeddings_by_model, *validated_experiment(inputs, experiment))
     costs['peak_memory_mb'] = megabytes(peak_memory_bytes())
     costs['environment_mb'] = megabytes(directory_bytes(sys.prefix))
     costs['models_mb'] = megabytes(directory_bytes(models))
@@ -216,11 +239,7 @@ def main(argv):
     arguments = parser.parse_args(argv)
     try:
         experiment = json.loads(arguments.experiment.read_text(encoding='utf-8')) if arguments.experiment else None
-        if experiment is not None and (len(experiment.get('favorites', ())) != 5 or not experiment.get('alike')):
-            raise ValueError('The experiment file needs "favorites", five listing ids, and "alike", the unseen alike listing ids.')
-        models = arguments.models or (models_directory() if 'HERMES_HOME' in os.environ else None)
-        if models is None:
-            raise ValueError('Give --models or set HERMES_HOME.')
+        models = arguments.models or models_directory()
         print(json.dumps(measure(arguments.store, arguments.work, models, experiment, arguments.threads), ensure_ascii=False, indent=1))
         return 0
     except (ValueError, KeyError, OSError, sqlite3.Error, ArithmeticError) as error:

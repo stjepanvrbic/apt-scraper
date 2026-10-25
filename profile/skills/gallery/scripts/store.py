@@ -902,7 +902,7 @@ class ListingStore:
         room type, to the number of inputs averaged into it and its vector as float32 bytes."""
         if not parts or any(type(count) is not int or count < 1 or not isinstance(vector, bytes) or not vector or len(vector) % 4
                             for count, vector in parts.values()):
-            raise ValueError('Each embedding part needs a positive count and a vector of float32 bytes.')
+            raise ValueError('Embeddings need at least one part, each with a positive count and a vector of float32 bytes.')
         with self.connect(write=True) as connection:
             self.require_fingerprint(connection, listing_id, fingerprint)
             connection.execute('DELETE FROM embeddings WHERE listing_id = ? AND model = ?', (listing_id, model))

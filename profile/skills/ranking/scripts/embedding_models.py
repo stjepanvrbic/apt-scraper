@@ -38,48 +38,65 @@ def vector(blob):
 class ListingEmbeddings:
     """The unit embeddings of a design's listings, in its order: image[i, r] listing i's mean photo vector for
     IMAGE_PARTS[r], where a room type without photos takes the mean over all its photos, and text[i] its text vector.
-    A listing without embeddings takes the mean of the others, so it is as near to every listing as the average."""
+    has_image and has_text mark the listings that have them. A listing without them carries no information: its
+    similarity to any listing is unknown, and its kernel row is zero but for its own variance."""
     image: numpy.ndarray
     text: numpy.ndarray
-    missing_image: int
-    missing_text: int
+    has_image: numpy.ndarray
+    has_text: numpy.ndarray
 
     @classmethod
     def of(cls, ids, image_parts, text_parts):
         """From the store's embeddings by listing id, ListingStore.embeddings of the image and the text model."""
         if not any(identifier in image_parts for identifier in ids) or not any(identifier in text_parts for identifier in ids):
             raise ValueError('No listing has embeddings. Run embeddings.py embed first.')
-        image = [[vector(parts.get(part, parts['photos'])[1]) for part in IMAGE_PARTS] if (parts := image_parts.get(identifier)) else None
-                 for identifier in ids]
-        text = [vector(text_parts[identifier]['text'][1]) if identifier in text_parts else None for identifier in ids]
-        return cls(filled(image), filled(text), sum(row is None for row in image), sum(row is None for row in text))
+        has_image = numpy.array([identifier in image_parts for identifier in ids])
+        has_text = numpy.array([identifier in text_parts for identifier in ids])
+        image_size = len(vector(next(iter(image_parts[ids[numpy.argmax(has_image)]].values()))[1]))
+        text_size = len(vector(text_parts[ids[numpy.argmax(has_text)]]['text'][1]))
+        image = unit_rows(numpy.array([[vector(parts.get(part, parts['photos'])[1]) for part in IMAGE_PARTS]
+                                       if (parts := image_parts.get(identifier)) else numpy.zeros((len(IMAGE_PARTS), image_size)) for identifier in ids]))
+        text = unit_rows(numpy.array([vector(text_parts[identifier]['text'][1]) if identifier in text_parts else numpy.zeros(text_size)
+                                      for identifier in ids]))
+        return cls(image, text, has_image, has_text)
+
+    @property
+    def missing_image(self):
+        return int((~self.has_image).sum())
+
+    @property
+    def missing_text(self):
+        return int((~self.has_text).sum())
 
     def similarities(self):
-        """The cosine similarity of every pair of listings, averaged over IMAGE_PARTS for photos."""
-        return {'photos': numpy.einsum('irk,jrk->ij', self.image, self.image) / len(IMAGE_PARTS), 'text': self.text @ self.text.T}
+        """The cosine similarity of every pair of listings, averaged over IMAGE_PARTS for photos, and NaN where a
+        listing lacks the embedding."""
+        image = numpy.einsum('irk,jrk->ij', self.image, self.image) / len(IMAGE_PARTS)
+        return {'photos': unknown_where_missing(image, self.has_image), 'text': unknown_where_missing(self.text @ self.text.T, self.has_text)}
 
     def kernels(self):
         """Squared-exponential kernels exp(-d² / 2l²) of the unit vectors, l² the median squared distance between two
-        listings, averaged over IMAGE_PARTS for photos."""
-        image = numpy.mean([squared_exponential(self.image[:, part]) for part in range(len(IMAGE_PARTS))], axis=0)
-        return {'photos': image, 'text': squared_exponential(self.text)}
+        listings that have them, averaged over IMAGE_PARTS for photos."""
+        image = numpy.mean([squared_exponential(self.image[:, part], self.has_image) for part in range(len(IMAGE_PARTS))], axis=0)
+        return {'photos': image, 'text': squared_exponential(self.text, self.has_text)}
 
 
-def filled(rows):
-    present = unit_rows(numpy.array([row for row in rows if row is not None]))
-    average = unit_rows(present.mean(axis=0))
-    return unit_rows(numpy.array([average if row is None else unit_rows(numpy.asarray(row)) for row in rows]))
+def unknown_where_missing(matrix, present):
+    return numpy.where(numpy.outer(present, present), matrix, numpy.nan)
 
 
-def squared_exponential(vectors):
+def squared_exponential(vectors, present):
     squared = numpy.clip(2 - 2 * vectors @ vectors.T, 0, None)
-    pairs = squared[numpy.triu_indices(len(vectors), 1)]
+    known = squared[numpy.ix_(present, present)]
+    pairs = known[numpy.triu_indices(len(known), 1)]
     length = numpy.median(pairs) if pairs.size and numpy.median(pairs) > 0 else 1.0
-    return numpy.exp(-squared / (2 * length))
+    kernel = numpy.where(numpy.outer(present, present), numpy.exp(-squared / (2 * length)), 0.0)
+    numpy.fill_diagonal(kernel, 1.0)
+    return kernel
 
 
 def most_similar(similarity, index, favorites):
-    values = [float(similarity[index, favorite]) for favorite in favorites if favorite != index]
+    values = [float(similarity[index, favorite]) for favorite in favorites if favorite != index and not numpy.isnan(similarity[index, favorite])]
     return max(values) if values else None
 
 
@@ -176,8 +193,12 @@ def posterior_mode(kernel, mean, matrix, labels, weights):
             candidate = alpha + length * step
             candidate_latent = mean + kernel @ candidate
             value = objective(candidate, candidate_latent)
-            if value <= current or length < 1e-10:
+            if value <= current:
                 break
+            if length < 1e-10:
+                if numpy.max(numpy.abs(kernel @ (alpha - gradient))) < NEWTON_TOLERANCE:
+                    return latent
+                raise ArithmeticError('The Gaussian-process fit found no step that lowers its objective.')
             length /= 2
         change = numpy.max(numpy.abs(candidate_latent - latent))
         alpha, latent, current = candidate, candidate_latent, value

@@ -54,7 +54,7 @@ class GaussianProcessTests(unittest.TestCase):
             self.assertEqual(order(model_design, process.scores), [model_design.ids[index] for index in ranked_order(model_design, model.fit.weights)])
             self.assertEqual(sorted(process.held_out), sorted(model.held_out))
 
-    def test_with_no_signal_the_held_out_favorites_rank_no_better_than_chance(self):
+    def test_with_no_signal_a_held_out_favorite_is_not_ranked_first_for_lacking_its_label(self):
         listings = neighborhood(60, seed=4)
         for listing in listings[::7]:
             listing['favorite'] = True
@@ -64,6 +64,7 @@ class GaussianProcessTests(unittest.TestCase):
         held_out = gaussian_process(model_design, data, noise, 2.0, 1.0, 0.05).held_out
         others = len(model_design.ids) - len(model_design.favorites)
         self.assertGreater(numpy.mean(list(held_out.values())), others / 2.5, held_out)
+        self.assertLess(numpy.mean(list(held_out.values())), others * 0.9, held_out)
 
     def test_the_embedding_kernel_lifts_a_listing_whose_photos_and_text_resemble_the_favorites(self):
         data, image, text = alike_listings()
@@ -120,16 +121,55 @@ class SimilarityTests(unittest.TestCase):
         ranked = [augmented.ids[index] for index in ranked_order(augmented, model.fit.weights) if augmented.ids[index] not in augmented.favorites]
         self.assertEqual(ranked[0], 'listing:target')
 
-    def test_a_listing_without_embeddings_is_as_near_as_the_average_and_a_room_without_photos_takes_all_photos(self):
-        image = {'a': {'photos': (2, blob([1, 0])), 'photos:kitchen': (1, blob([0, 1]))}, 'b': {'photos': (1, blob([0, 2]))}}
-        text = {'a': {'text': (1, blob([3, 4]))}}
-        embeddings = ListingEmbeddings.of(('a', 'b', 'c'), image, text)
+    def test_a_room_without_photos_takes_all_photos_and_a_listing_without_embeddings_carries_no_information(self):
+        image = {'a': {'photos': (2, blob([1, 0])), 'photos:kitchen': (1, blob([0, 1]))}, 'b': {'photos': (1, blob([0, 2]))},
+                 'd': {'photos': (1, blob([1, 1]))}}
+        text = {'a': {'text': (1, blob([3, 4]))}, 'b': {'text': (1, blob([4, 3]))}}
+        embeddings = ListingEmbeddings.of(('a', 'b', 'c', 'd'), image, text)
         self.assertEqual((embeddings.missing_image, embeddings.missing_text), (1, 2))
         kitchen = IMAGE_PARTS.index('photos:kitchen')
         numpy.testing.assert_allclose(embeddings.image[0, kitchen], [0, 1])
         numpy.testing.assert_allclose(embeddings.image[1, kitchen], [0, 1])
-        numpy.testing.assert_allclose(embeddings.image[2, 0], [2 ** -0.5, 2 ** -0.5])
-        numpy.testing.assert_allclose(embeddings.text[2], [0.6, 0.8])
+        similarities, kernels = embeddings.similarities(), embeddings.kernels()
+        self.assertTrue(numpy.isnan(similarities['photos'][2]).all() and numpy.isnan(similarities['text'][:, 3]).all())
+        self.assertAlmostEqual(similarities['text'][0, 1], 0.96)
+        for kernel in kernels.values():
+            numpy.testing.assert_allclose(numpy.diag(kernel), 1.0)
+        numpy.testing.assert_allclose(kernels['photos'][2], [0, 0, 1, 0])
+        numpy.testing.assert_allclose(kernels['text'][[2, 3]][:, [0, 1, 3]], [[0, 0, 0], [0, 0, 1]])
+        self.assertGreater(kernels['photos'][0, 3], 0)
+        numpy.testing.assert_allclose(numpy.linalg.eigvalsh(kernels['photos']) >= -1e-12, True)
+
+    def test_the_held_out_check_recomputes_the_similarity_and_the_nearness_to_the_favorites_without_the_favorite(self):
+        listings = neighborhood(20, seed=6)
+        for listing in listings[:4]:
+            listing['favorite'] = True
+        data = inputs(listings)
+        model_design = design(data)
+        generator = numpy.random.default_rng(2)
+        image = {listing['id']: {'photos': (1, blob(generator.normal(size=6)))} for listing in listings}
+        text = {listing['id']: {'text': (1, blob(generator.normal(size=6)))} for listing in listings}
+        similarity = ListingEmbeddings.of(model_design.ids, image, text).similarities()['photos']
+        augmented = with_similarity(model_design, {'photos': similarity})
+        nearness, column = augmented.index('near_favorites'), augmented.index('similar_favorite:photos')
+        favorites = [augmented.ids.index(favorite) for favorite in augmented.favorites]
+        for favorite in augmented.favorites:
+            plain = model_design.rows_without[favorite]
+            others = [index for index in favorites if augmented.ids[index] != favorite]
+            for index, row in enumerate(augmented.rows_without[favorite]):
+                self.assertEqual(row.head[nearness + 1], plain[index].head[model_design.index('near_favorites') + 1])
+                expected = max(similarity[index, other] for other in others if other != index)
+                self.assertAlmostEqual(row.head[column + 1], (expected - augmented.columns[column].mean) / augmented.columns[column].scale)
+
+    def test_a_favorite_without_embeddings_lends_no_similarity(self):
+        data, image, text = alike_listings()
+        model_design = design(data)
+        del image['listing:000'], image['listing:target']
+        similarities = ListingEmbeddings.of(model_design.ids, image, text).similarities()
+        augmented = with_similarity(model_design, {'photos': similarities['photos']})
+        target = model_design.ids.index('listing:target')
+        self.assertNotIn('similar_favorite:photos', augmented.raw[target])
+        self.assertEqual(augmented.rows[target][augmented.dense_count - 1], 0.0)
 
     def test_no_embeddings_at_all_is_an_error(self):
         with self.assertRaisesRegex(ValueError, 'embeddings.py embed'):
