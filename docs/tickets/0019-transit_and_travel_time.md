@@ -3,7 +3,7 @@ title: Distance to rapid transit and travel time to the user's places
 type: Feature
 state: Todo
 priority: 3
-assignee:
+assignee: Stjepan Vrbic
 milestone:
 parent: 0015
 blocked_by: [0017, 0018, 0020]
@@ -37,3 +37,7 @@ Each listing's feature record has its distance to the nearest rapid-transit stop
 ## Deviations
 
 ## Result
+
+## Comments
+
+- 2026-10-25: The provider research is in [Geocoding and routing provider](../research/geocoding_and_routing_provider.md). It recommends Nominatim for the places and a local r5py engine on OpenStreetMap and CTA's GTFS for the nearest station and every travel mode. Waiting on the owner's decision on the provider and on that report's six open questions (local engine or API, departure time, Metra, walking or straight-line distance, default speeds, cache key).
