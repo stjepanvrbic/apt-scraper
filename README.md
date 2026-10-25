@@ -22,18 +22,18 @@ macOS:
 
 The installer:
 
-1. installs Claude Code if it is missing, and opens the Claude login if you are logged out,
+1. installs or updates Claude Code, and opens the Claude login if you are logged out,
 2. installs Hermes Agent with its computer-use driver, or updates an older Hermes,
 3. installs `profile/` as the Hermes profile `apt-scraper`,
 4. installs the Claude subscription provider plugin into that profile,
 5. prepares the computer-use driver, and on macOS asks for Accessibility and Screen Recording access,
 6. sends one test message through your subscription.
 
-Run it again after pulling changes. Your memories, sessions and credentials stay in place.
+Run it again after pulling changes. Your settings, memories, sessions and credentials stay in place.
 
 ## Run
 
-Open a new terminal and run `apt-scraper`.
+Open a new terminal and run `hermes -p apt-scraper`.
 
 ## Usage and billing
 

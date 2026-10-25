@@ -16,9 +16,9 @@ A contact request starts and continues correspondence with the listing agent by 
 
 ## Acceptance
 
-- [ ] A contact request on a test listing produces a first message in Gmail Sent or Messages within ten minutes.
+- [ ] Within ten minutes of a contact request on a test listing, a first message is in Gmail Sent or Messages, or submitted through the listing's contact form.
 - [ ] Replies are answered and the thread shows in Contacted.
-- [ ] A test request for the user's date of birth reaches the user and nothing is sent until the user answers.
+- [ ] A test request for the user's date of birth reaches the user through the messaging gateway, and nothing is sent until the user answers.
 
 ## Spec
 
