@@ -1,9 +1,9 @@
 ---
 title: Gallery with listings, favorites and notes
 type: Feature
-state: In Progress
+state: Done
 priority: 2
-assignee: agent
+assignee: Stjepan Vrbic
 milestone:
 parent:
 blocked_by: []
