@@ -1,9 +1,9 @@
 ---
 title: The gallery launcher test writes into the real secrets directory
 type: Bug
-state: Todo
+state: In Progress
 priority: 2
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []
