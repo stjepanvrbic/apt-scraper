@@ -1,12 +1,12 @@
 ---
 title: Distance to the nearest rapid-transit station and to the user's places
 type: Feature
-state: Todo
+state: In Progress
 priority: 3
-assignee:
+assignee: agent
 milestone:
 parent: 0015
-blocked_by: [0017, 0018, 0020]
+blocked_by: []
 related: []
 ---
 

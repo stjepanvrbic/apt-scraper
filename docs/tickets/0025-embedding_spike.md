@@ -1,12 +1,12 @@
 ---
 title: "Spike: image and text embeddings with a Gaussian-process preference model"
 type: Chore
-state: Todo
+state: In Progress
 priority: 3
-assignee:
+assignee: agent
 milestone:
 parent: 0015
-blocked_by: [0016, 0020]
+blocked_by: []
 related: []
 ---
 

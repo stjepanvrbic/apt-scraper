@@ -1,9 +1,9 @@
 ---
 title: Scoring model with explanations and the leave-one-out check
 type: Feature
-state: In Progress
+state: Done
 priority: 2
-assignee: agent
+assignee:
 milestone:
 parent: 0015
 blocked_by: [0016, 0017]
@@ -26,7 +26,7 @@ A rerank fits the scoring model in code on the stored feature records, labels an
 - [x] Location counts through the areas of the criteria and a location preference learned from the favorites' coordinates, weighted by the location priorities when they exist.
 - [x] Spec › Acceptance "Rerank" timing passes on fixtures of 300 listings and 50 favorites on this Windows machine.
 - [x] The five-favorites experiment of Spec › Acceptance, on real Chicago listings including the garden units, is run and its numbers are in Result.
-- [ ] `docs/ranking.md` describes scoring. Merged to `main` through a reviewed pull request.
+- [x] `docs/ranking.md` describes scoring. Merged to `main` through a reviewed pull request.
 
 ## Spec
 

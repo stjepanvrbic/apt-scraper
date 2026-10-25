@@ -1,12 +1,12 @@
 ---
 title: Review pass after each rerank
 type: Feature
-state: Todo
+state: In Progress
 priority: 3
-assignee:
+assignee: agent
 milestone:
 parent: 0015
-blocked_by: [0020]
+blocked_by: []
 related: []
 ---
 
