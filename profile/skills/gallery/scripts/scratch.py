@@ -3,10 +3,14 @@ import os
 from pathlib import Path
 
 
+def scratch_directory():
+    return (Path(os.environ['HERMES_HOME']) / 'cache' / 'scratch').resolve()
+
+
 def read_scratch_object(file, name):
     """Agents pass structured input in a file they write to the profile's scratch directory, because Hermes
     asks the user to approve every heredoc into Python and shell escaping mangles quotes."""
-    scratch = (Path(os.environ['HERMES_HOME']) / 'cache' / 'scratch').resolve()
+    scratch = scratch_directory()
     path = Path(file).resolve()
     if not path.is_relative_to(scratch):
         raise ValueError(f'{name} files must be in the scratch directory {scratch}.')

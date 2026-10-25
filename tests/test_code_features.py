@@ -8,7 +8,7 @@ from pathlib import Path
 
 from test_gallery_store import ListingStore, listing
 from code_features import code_features, unit_level
-from schema import MIGRATIONS, content_fingerprint
+from schema import MIGRATIONS, code_derived_features, content_fingerprint
 from store import validate_listing
 
 
@@ -136,7 +136,7 @@ class StoredCodeFeatureTests(unittest.TestCase):
         data = validate_listing(home('2326 N Sacramento Ave #Basement, Chicago, IL 60647'))
         fingerprint = content_fingerprint(data)
         with closing(sqlite3.connect(older)) as connection, connection:
-            for index, migration in enumerate(MIGRATIONS[:-1]):
+            for index, migration in enumerate(MIGRATIONS[:MIGRATIONS.index(code_derived_features)]):
                 migration(connection)
                 connection.execute(f'PRAGMA user_version = {index + 1}')
             connection.execute('INSERT INTO listings (id, data, status, first_seen, fingerprint) VALUES (?, ?, ?, ?, ?)',

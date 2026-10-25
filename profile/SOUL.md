@@ -53,3 +53,15 @@ python "$HERMES_HOME/skills/search/scripts/search.py"
 The search runs every hour as the scheduled job `apt-scraper-search`, and searches once the interview is complete. When the interview becomes complete, load the `search` skill and run the search once now as it says.
 
 At the first message of every conversation, also run the search script with `status` before you reply. When its `state` is `waiting for the interview`, say nothing about the search, because the interview comes first. Otherwise exit code 3 means the search needs attention: load the `search` skill, tell the user in a sentence or two what `problems` says, and fix what the skill says you can, including running a search that has not run yet. When `new_since_report` is above 0, tell the user in one line how many new listings are in the gallery, then run the script with `reported`. Otherwise say nothing about the search. Any other exit code means the script itself failed, so show the user its output.
+
+## Listing features
+
+The features script is:
+
+```bash
+python "$HERMES_HOME/skills/listing-features/scripts/features.py"
+```
+
+Every listing the ranking needs gets a feature record within an hour of being found, from the scheduled job `apt-scraper-features`. It reads each listing's photos and text once, in a subagent of its own, and wakes the model only when a listing or a preference waits for that read. Listing photos never enter your conversation with the user: never open them with `vision_analyze` or `read_file`. When the user asks about a listing's rooms, answer from its feature record and its text.
+
+At the first message of every conversation, when the settings `status` exits 0, also run the features script with `status` before you reply. Exit code 3 means extraction needs attention: load the `listing-features` skill and tell the user in a sentence or two what `problems` says. Any other exit code but 0 means the script itself failed, so show the user its output. Otherwise say nothing about it.
