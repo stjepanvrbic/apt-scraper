@@ -22,14 +22,17 @@ macOS:
 
 The installer:
 
-1. installs or updates Claude Code, and opens the Claude login if you are logged out,
+1. installs or updates Claude Code,
 2. installs Hermes Agent with its computer-use driver, or updates an older Hermes,
 3. installs `profile/` as the Hermes profile `apt-scraper`,
-4. installs the Claude subscription provider plugin into that profile,
-5. prepares the computer-use driver, and on macOS asks for Accessibility and Screen Recording access,
-6. sends one test message through your subscription.
+4. asks for a Claude setup token and saves it in that profile's `.env`,
+5. installs the Claude subscription provider plugin into that profile,
+6. prepares the computer-use driver, and on macOS asks for Accessibility and Screen Recording access,
+7. sends one test message through your subscription.
 
-Run it again after pulling changes. Your settings, memories, sessions and credentials stay in place.
+When the installer asks for the token, open a second terminal and run `claude setup-token`. It opens your browser, and after you approve access it prints a token that lasts one year. Paste it into the installer, which keeps the input hidden.
+
+Run the installer again after pulling changes, and press Enter at the token prompt to keep the saved token. Your settings, memories, sessions and credentials stay in place. When the token expires, run the installer again and paste a new one.
 
 ## Run
 
