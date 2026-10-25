@@ -28,6 +28,7 @@ import math
 import random
 from dataclasses import dataclass
 from functools import cached_property
+from math import sumprod as dot
 from operator import mul
 from statistics import fmean, median, pstdev
 
@@ -77,10 +78,6 @@ FLAG_WORDS = {
 CATEGORY_WORDS = {'floor': '{} floor', 'style': '{} style', 'outdoor_space': 'outdoor space: {}', 'building_type': '{} building'}
 
 
-def dot(left, right):
-    return sum(map(mul, left, right))
-
-
 def sigmoid(value):
     if value >= 0:
         return 1 / (1 + math.exp(-value))
@@ -95,11 +92,12 @@ def softplus(value):
 def cholesky(matrix):
     """The rows of the lower triangular L with L L^T = matrix, for a symmetric positive definite matrix, each up to its
     diagonal."""
-    lower = []
+    lower, prefixes = [], []
     for row, values in enumerate(matrix):
         current = []
         for column in range(row):
-            current.append((values[column] - dot(current, lower[column])) / lower[column][column])
+            current.append((values[column] - dot(current, prefixes[column])) / lower[column][column])
+        prefixes.append(current[:])
         current.append(math.sqrt(values[row] - dot(current, current)))
         lower.append(current)
     return lower
@@ -121,9 +119,13 @@ class Factor:
     def forward(self, vector):
         """L^-1 vector."""
         result = []
-        for index, row in enumerate(self.lower):
-            result.append((vector[index] - dot(row, result)) / row[index])
+        for index, row in enumerate(self.prefixes):
+            result.append((vector[index] - dot(row, result)) / self.lower[index][index])
         return result
+
+    @cached_property
+    def prefixes(self):
+        return [row[:-1] for row in self.lower]
 
     def backward(self, vector):
         """L^-T vector."""
@@ -479,7 +481,7 @@ def label(listing, sentiment):
     return None
 
 
-def observations(model_design, inputs, unlabeled_weight, rows=None, leave_out=None):
+def observations(model_design, inputs, unlabeled_weight, rows=None, leave_out=None, *, weak_labels=None):
     """The likelihood's rows: each listing's label, or a weak negative for a ranked listing without one, and each
     pairwise answer. leave_out is a listing whose labels and answers are left out, rows the listing rows to use."""
     rows = model_design.likelihood_rows if rows is None else rows
@@ -490,6 +492,8 @@ def observations(model_design, inputs, unlabeled_weight, rows=None, leave_out=No
             continue
         listing = model_design.listings[identifier]
         labeled_as = label(listing, inputs['sentiments'].get(identifier))
+        if labeled_as is None and weak_labels:
+            labeled_as = weak_labels.get(identifier)
         if labeled_as is None and listing['rankable']:
             labeled_as = (0, unlabeled_weight)
         if labeled_as is not None:
@@ -720,21 +724,22 @@ def summary_of(held_out):
     return {'median': median(values) if values else None, 'mean': fmean(values) if values else None}
 
 
-def fit_model(inputs, hyperparameters=None):
+def fit_model(inputs, hyperparameters=None, *, weak_labels=None, warm_start=None):
     """The fitted scoring model with the given (prior scale, weak-negative weight). Without them, once there are
     TUNING_FAVORITES favorites, the leave-one-out check chooses them: first the weak-negative weight among
     UNLABELED_WEIGHTS at the first of PRIOR_SCALES, then the prior scale among PRIOR_SCALES at that weight, each time
     the one whose approximate check, one step from the full fit, gives the favorites the best mean held-out rank, the
-    earlier on a tie. Before that, DEFAULT_HYPERPARAMETERS. The held-out ranks it reports come from converged fits."""
-    model_design = design(inputs)
+    earlier on a tie. Before that, DEFAULT_HYPERPARAMETERS. The held-out ranks it reports come from converged fits.
+    warm_start reuses a model fitted to the same inputs when only diagnostic labels change."""
+    model_design = warm_start.design if warm_start else design(inputs)
     dense_count = model_design.dense_count
     tuning = hyperparameters is None and len(model_design.favorites) >= TUNING_FAVORITES
-    fits, start = {}, [None]
+    fits, start = {}, [warm_start.fit.weights if warm_start else None]
 
     def candidate(scale, unlabeled_weight):
         if (scale, unlabeled_weight) not in fits:
             mean, precision = prior(model_design, scale)
-            data = observations(model_design, inputs, unlabeled_weight)
+            data = observations(model_design, inputs, unlabeled_weight, weak_labels=weak_labels)
             full = fit(data, mean, precision, dense_count, start[0], settle=not tuning)
             start[0] = full.weights
             check = summary_of(held_out_ranks(model_design, held_out_scores(model_design, inputs, full, data, unlabeled_weight, mean, precision, steps=1)))['mean'] if tuning else None
@@ -885,10 +890,11 @@ def ranked_order(model_design, weights):
     return sorted(rankable, key=lambda index: (-values[index], model_design.ids[index]))
 
 
-def rank_listings(inputs, seed):
+def rank_listings(inputs, seed, *, model=None):
     """The rerank's result: each ranked listing's rank, reason, explanation and exploration mark, the reason each
-    other listing shown in Rankings is not ranked, and the summary with each favorite's held-out rank."""
-    model = fit_model(inputs)
+    other listing shown in Rankings is not ranked, and the summary with each favorite's held-out rank.
+    model, when supplied, is already fitted to these inputs."""
+    model = model or fit_model(inputs)
     model_design, weights = model.design, model.fit.weights
     order = ranked_order(model_design, weights)
     exploring = explore(model_design, model.fit, order, seed) if len(order) > TOP else []

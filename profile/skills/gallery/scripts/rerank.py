@@ -8,8 +8,9 @@ review job hands to the agent with pending_review and the agent saves with save_
 import random
 import time
 
+from implicit_signals import diagnostic
 from review import citable_values, review_outcome, review_task, validated_review
-from scoring import DEFAULT_HYPERPARAMETERS, questions, rank_listings, stated_phrases
+from scoring import DEFAULT_HYPERPARAMETERS, fit_model, questions, rank_listings, stated_phrases
 
 REVIEW_ATTEMPTS = 3
 
@@ -20,7 +21,11 @@ def rerank(store, *, seed=None):
     which seed draws, the same store gives the same result. Without a seed, one is drawn and recorded in the summary."""
     started = time.perf_counter()
     seed = random.SystemRandom().randrange(2 ** 32) if seed is None else seed
-    rerank_id = store.save_rerank(rank_listings(store.ranking_inputs(), seed))
+    inputs = store.ranking_inputs(include_signals=True)
+    model = fit_model(inputs)
+    result = rank_listings(inputs, seed, model=model)
+    result['summary']['implicit_signals'] = diagnostic(inputs, result['summary'], model)
+    rerank_id = store.save_rerank(result)
     return {**store.rerank(rerank_id), 'seconds': round(time.perf_counter() - started, 3)}
 
 

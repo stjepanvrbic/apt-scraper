@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import {
   Alert, Anchor, Badge, Box, Button, Container, Divider, Drawer,
   Group, Loader, Paper, Pagination, SimpleGrid, Stack, Tabs, Text, Textarea, Title,
@@ -10,6 +10,7 @@ import { date, period, price, title, viewingTime } from './model';
 import { useGallery, useListing } from './useGallery';
 import { ListingCard, Photo, listingPath, type Save } from './ListingCard';
 import { Compare } from './Compare';
+import { useListingSignals } from './useListingSignals';
 
 const NotesChat = lazy(() => import('./NotesChat'));
 
@@ -43,8 +44,10 @@ function Details({ id, close, save, busy, saveError, readError, compare }: { com
   const [pages, setPages] = useState({ notes_page: 1, correspondence_page: 1, viewings_page: 1 });
   const details = useListing(id, pages);
   const listing = details.data;
+  const viewedPhoto = useListingSignals(id, listing?.content_fingerprint);
+  const slides = useMemo(() => listing?.photos.map((src, index) => ({ src, alt: `${title(listing)}, photo ${index + 1}` })) ?? [], [listing]);
   return <>
-    <Drawer opened={!!id} onClose={() => { setPhoto(-1); setPages({ notes_page: 1, correspondence_page: 1, viewings_page: 1 }); close(); }} position="right" size="min(760px, 100%)" padding="xl"
+    <Drawer opened={!!id} onClose={() => { viewedPhoto(undefined); setPhoto(-1); setPages({ notes_page: 1, correspondence_page: 1, viewings_page: 1 }); close(); }} position="right" size="min(760px, 100%)" padding="xl"
       attributes={{ header: { role: 'presentation' } }}
       title="Listing details" closeButtonProps={{ 'aria-label': 'Close listing details' }}
       trapFocus={photo < 0} closeOnEscape={photo < 0}>
@@ -99,8 +102,8 @@ function Details({ id, close, save, busy, saveError, readError, compare }: { com
           <NoteForm key={listing.id} path={listingPath(listing, 'notes')} save={save} /></div>
       </Stack>}
     </Drawer>
-    {listing && <Lightbox open={photo >= 0} close={() => setPhoto(-1)} index={photo}
-      slides={listing.photos.map((src, index) => ({ src, alt: `${title(listing)}, photo ${index + 1}` }))}
+    {listing && <Lightbox open={photo >= 0} close={() => { viewedPhoto(undefined); setPhoto(-1); }} index={photo}
+      slides={slides} on={{ view: ({ index }) => { setPhoto(index); viewedPhoto(listing.photos[index]); } }}
       plugins={[Counter]} counter={{ container: { style: { top: 'unset', bottom: 16 } } }} />}
   </>;
 }
