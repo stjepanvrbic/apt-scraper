@@ -1,9 +1,9 @@
 ---
 title: Interview captures places and location priorities
 type: Feature
-state: In Progress
+state: Done
 priority: 3
-assignee: agent
+assignee: Stjepan Vrbic
 milestone:
 parent: 0015
 blocked_by: []
