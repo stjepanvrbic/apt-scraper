@@ -344,11 +344,14 @@ class ListingStore:
         return missing + [f'viewing_availability.{key}' for key in ('timezone', 'weekly') if not availability.get(key)]
 
     def analyze(self, listing_id, fingerprint, features):
+        """Merges the given top-level keys into the listing's current features, so the search and the ranking
+        each write their own keys without overwriting the other's."""
         if not isinstance(features, dict):
             raise ValueError('Features must be an object.')
-        features = json.dumps(features, allow_nan=False)
         with self.connect(write=True) as connection:
             self.require_fingerprint(connection, listing_id, fingerprint)
+            current = connection.execute('SELECT features FROM ranking WHERE listing_id = ? AND fingerprint = ?', (listing_id, fingerprint)).fetchone()
+            features = json.dumps({**(json.loads(current['features']) if current and current['features'] else {}), **features}, allow_nan=False)
             connection.execute('''INSERT INTO ranking (listing_id, fingerprint, features) VALUES (?, ?, ?)
                 ON CONFLICT(listing_id) DO UPDATE SET fingerprint = excluded.fingerprint, features = excluded.features,
                 rank = CASE WHEN ranking.fingerprint = excluded.fingerprint THEN ranking.rank END,
@@ -370,6 +373,61 @@ class ListingStore:
                 ON CONFLICT(listing_id) DO UPDATE SET rank = excluded.rank, reason = excluded.reason,
                 features = CASE WHEN ranking.fingerprint = excluded.fingerprint THEN ranking.features END,
                 fingerprint = excluded.fingerprint''', (listing_id, fingerprint, rank, reason))
+
+    def rerank(self, ranked, unranked):
+        """Replaces the whole ranking in one transaction. ranked maps listing ids to (fingerprint, rank, reason),
+        unranked maps listing ids to (fingerprint, reason) for listings left out of it. Every other listing loses
+        its rank and reason. An entry whose fingerprint is no longer current is skipped and returned as stale."""
+        entries = [(identifier, fingerprint, rank, require_text(reason, 'Reason', limit=500)) for identifier, (fingerprint, rank, reason) in ranked.items()]
+        entries += [(identifier, fingerprint, None, require_text(reason, 'Reason', limit=500)) for identifier, (fingerprint, reason) in unranked.items()]
+        if any(rank is not None and (type(rank) is not int or rank < 1) for _, _, rank, _ in entries):
+            raise ValueError('Rank must be a positive integer.')
+        with self.connect(write=True) as connection:
+            current = dict(connection.execute('SELECT id, fingerprint FROM listings').fetchall())
+            stale = sorted(identifier for identifier, fingerprint, _, _ in entries if current.get(identifier) != fingerprint)
+            fresh = [entry for entry in entries if entry[0] not in stale]
+            connection.executemany('''INSERT INTO ranking (listing_id, fingerprint, rank, reason) VALUES (?, ?, ?, ?)
+                ON CONFLICT(listing_id) DO UPDATE SET rank = excluded.rank, reason = excluded.reason,
+                features = CASE WHEN ranking.fingerprint = excluded.fingerprint THEN ranking.features END, fingerprint = excluded.fingerprint
+                WHERE ranking.rank IS NOT excluded.rank OR ranking.reason IS NOT excluded.reason OR ranking.fingerprint != excluded.fingerprint''',
+                                   [(identifier, fingerprint, rank, reason) for identifier, fingerprint, rank, reason in fresh])
+            kept = [identifier for identifier, _, _, _ in fresh]
+            connection.execute(f'''UPDATE ranking SET rank = NULL, reason = NULL WHERE (rank IS NOT NULL OR reason IS NOT NULL)
+                AND listing_id NOT IN ({",".join("?" for _ in kept)})''', kept)
+            return {'ranked': sum(rank is not None for _, _, rank, _ in fresh), 'stale': stale}
+
+    def unread_notes(self):
+        with self.connect() as connection:
+            return [dict(row) for row in connection.execute('''SELECT n.id, n.listing_id, n.text, n.created_at FROM notes n
+                LEFT JOIN note_readings r ON r.note_id = n.id WHERE n.role = 'user' AND r.note_id IS NULL ORDER BY n.id''')]
+
+    def read_note(self, note_id, reading):
+        if not isinstance(reading, dict):
+            raise ValueError('A note reading must be an object.')
+        with self.connect(write=True) as connection:
+            note = connection.execute('SELECT role FROM notes WHERE id = ?', (note_id,)).fetchone()
+            if not note:
+                raise KeyError('Note not found.')
+            if note['role'] != 'user':
+                raise ValueError('Only notes by the user are read for the ranking.')
+            connection.execute('INSERT INTO note_readings VALUES (?, ?) ON CONFLICT(note_id) DO UPDATE SET reading = excluded.reading',
+                               (note_id, json.dumps(reading, allow_nan=False)))
+
+    def note_readings(self):
+        with self.connect() as connection:
+            return {row['note_id']: json.loads(row['reading']) for row in connection.execute('SELECT * FROM note_readings')}
+
+    def read_preference(self, phrase, reading):
+        phrase = require_text(phrase, 'Preference', limit=1000)
+        if not isinstance(reading, dict):
+            raise ValueError('A preference reading must be an object.')
+        with self.connect(write=True) as connection:
+            connection.execute('INSERT INTO preference_readings VALUES (?, ?) ON CONFLICT(phrase) DO UPDATE SET reading = excluded.reading',
+                               (phrase, json.dumps(reading, allow_nan=False)))
+
+    def preference_readings(self):
+        with self.connect() as connection:
+            return {row['phrase']: json.loads(row['reading']) for row in connection.execute('SELECT * FROM preference_readings')}
 
     @staticmethod
     def require_fingerprint(connection, listing_id, fingerprint):

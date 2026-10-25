@@ -22,6 +22,18 @@
       "deliver": "local",
       "failure_deliver": "origin",
       "enabled_toolsets": ["terminal", "file"]
+    },
+    {
+      "id": "apt-scraper-ranking",
+      "name": "Listing ranking",
+      "prompt": "Above is the report of the listing ranking, which has already ranked every analyzed listing. It lists a batch of listings, notes and preferences that wait for analysis. Analyze this batch as the ranking skill's section \"Analyzing listings, notes and preferences\" says, save it with one analyze command, then stop: the next run brings the next batch. Do not contact anyone and do not change any settings. End with one line saying how many listings, notes and preferences you analyzed.",
+      "skills": ["ranking"],
+      "script": "ranking-run.py",
+      "schedule": "every 2m",
+      "schedule_display": "every 2m",
+      "deliver": "local",
+      "failure_deliver": "origin",
+      "enabled_toolsets": ["terminal", "file", "vision"]
     }
   ]
 }

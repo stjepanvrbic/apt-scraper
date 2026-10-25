@@ -45,7 +45,12 @@ def contact_workflow(connection):
         connection.execute(statement)
 
 
-MIGRATIONS = (initial_schema, contact_workflow)
+def ranking_readings(connection):
+    connection.execute('CREATE TABLE note_readings (note_id INTEGER PRIMARY KEY REFERENCES notes(id), reading TEXT NOT NULL)')
+    connection.execute('CREATE TABLE preference_readings (phrase TEXT PRIMARY KEY, reading TEXT NOT NULL)')
+
+
+MIGRATIONS = (initial_schema, contact_workflow, ranking_readings)
 
 
 def migrate(connection):

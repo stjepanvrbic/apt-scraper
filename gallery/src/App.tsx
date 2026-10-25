@@ -31,13 +31,17 @@ function Photo({ listing }: { listing: ListingSummary }) {
   </AspectRatio>;
 }
 
+function ranking(listing: ListingSummary) {
+  return !listing.analysis_current ? 'awaiting' : listing.rank ? 'ranked' : listing.reason ? 'not ranked' : 'awaiting';
+}
+
 function ListingCard({ listing, open, save, busy, headingOrder = 2 }: { listing: ListingSummary; open: () => void; save: Save; busy: boolean; headingOrder?: 2 | 3 }) {
   return <Card component="article" padding={0} radius={20} className="listing-card">
     <Box pos="relative">
     <UnstyledButton onClick={open} aria-label={`View ${title(listing)}`} className="photo-button">
       <Photo listing={listing} />
     </UnstyledButton>
-      <Badge className="rank-badge" color="dark" variant="white" radius="sm">{listing.analysis_current && listing.rank ? `#${listing.rank} match` : 'Awaiting ranking'}</Badge>
+      <Badge className="rank-badge" color="dark" variant="white" radius="sm">{({ ranked: `#${listing.rank} match`, 'not ranked': 'Not ranked', awaiting: 'Awaiting ranking' })[ranking(listing)]}</Badge>
       <ActionIcon className="favorite-button" variant="white" color={listing.favorite ? 'pink' : 'dark'} size={44} radius="xl"
         aria-label={`${listing.favorite ? 'Unfavorite' : 'Favorite'} ${title(listing)}`} aria-pressed={listing.favorite}
         disabled={busy || listing.dismissed} onClick={() => save(listingPath(listing, 'feedback'), { favorite: !listing.favorite })}>
@@ -52,7 +56,7 @@ function ListingCard({ listing, open, save, busy, headingOrder = 2 }: { listing:
       <Text size="sm" c="dimmed">{listing.rooms ?? 'Rooms not listed'} · {listing.size ?? 'Size not listed'}</Text>
       <Text size="sm" lineClamp={1}>{listing.address ?? 'Address not listed'}</Text>
       <Divider />
-      <Text size="sm" c="dimmed" mih={42}>{listing.analysis_current ? listing.reason : 'Awaiting ranking.'}</Text>
+      <Text size="sm" c="dimmed" mih={42}>{ranking(listing) === 'awaiting' ? 'Awaiting ranking.' : listing.reason}</Text>
       <Badge variant="light" color={listing.status === 'available' ? 'green' : 'gray'}>{listing.status === 'available' ? 'Available' : 'Unavailable'}</Badge>
       {listing.viewing && <Text size="sm" fw={600}>{viewingTime(listing.viewing.time)}</Text>}
       {listing.contact && <Badge variant="light" color={listing.contact.status === 'pending' ? 'gray' : 'blue'}>
@@ -118,7 +122,7 @@ function Details({ id, close, save, busy, saveError, readError }: { id: string |
         {listing.contact?.status === 'failed' && <Alert color="red" title="Contact failed">{listing.contact.error}</Alert>}
         {listing.contact?.status === 'pending' && <Text size="sm" c="dimmed">Request saved. No message has been sent yet.</Text>}
         {listing.dismissed && <Text size="sm" c="dimmed">Hidden from Rankings and Favorites. Your notes and contact history are kept.</Text>}
-        <Paper p="md" bg="gray.0" radius="md"><Text size="sm" fw={600} mb={4}>{listing.analysis_current && listing.rank ? `Why it ranks #${listing.rank}` : 'Awaiting ranking'}</Text><Text size="sm">{listing.analysis_current ? listing.reason : 'The listing is waiting for analysis of its current content.'}</Text></Paper>
+        <Paper p="md" bg="gray.0" radius="md"><Text size="sm" fw={600} mb={4}>{({ ranked: `Why it ranks #${listing.rank}`, 'not ranked': 'Not ranked', awaiting: 'Awaiting ranking' })[ranking(listing)]}</Text><Text size="sm">{ranking(listing) === 'awaiting' ? 'The listing is waiting for analysis of its current content.' : listing.reason}</Text></Paper>
         <div><Title order={3} size="h4" mb="xs">About this apartment</Title><Text className="preserve-lines">{listing.description ?? 'No description provided.'}</Text></div>
         <div><Title order={3} size="h4" mb="sm">Amenities</Title><Group gap="xs">{listing.amenities.map(amenity =>
           <Badge key={amenity} variant="light" color="gray" size="lg" tt="none" fw={400}>{amenity}</Badge>)}
@@ -155,9 +159,9 @@ export default function App() {
   const [dismissed, setDismissed] = useState(false);
   const { state, readError, saveError, busy, loading, refresh, save } = useGallery(dismissed ? 'Dismissed' : tab!, page);
   const listings = state?.items ?? [];
-  const awaiting = listings.filter(listing => !listing.analysis_current || !listing.rank);
+  const awaiting = listings.filter(listing => ranking(listing) !== 'ranked');
   const groups = tab === 'Rankings' && !dismissed ? [
-    { heading: null, items: listings.filter(listing => listing.analysis_current && listing.rank) },
+    { heading: null, items: listings.filter(listing => ranking(listing) === 'ranked') },
     { heading: 'Awaiting ranking', items: awaiting },
   ] : [{ heading: null, items: listings }];
   const current = tabs.find(item => item.name === tab)!;

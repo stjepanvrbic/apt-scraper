@@ -42,6 +42,59 @@ class SearchRankingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'changed'):
             self.store.rank('example:100', fingerprint, 1, 'Stale result.')
 
+    def test_analysis_merges_its_keys_so_search_and_ranking_keep_each_others_features(self):
+        fingerprint = self.store.upsert_listing(listing())['content_fingerprint']
+        self.store.analyze('example:100', fingerprint, {'facts': {'units': []}, 'must_haves': {}})
+        self.store.analyze('example:100', fingerprint, {'profile': {'photos': ['hardwood floors']}})
+        self.store.analyze('example:100', fingerprint, {'must_haves': {'Dogs allowed': True}})
+        self.assertEqual(self.store.features('example:100'), {'facts': {'units': []}, 'must_haves': {'Dogs allowed': True},
+                                                              'profile': {'photos': ['hardwood floors']}})
+        changed = self.store.upsert_listing(listing(price=1900))['content_fingerprint']
+        self.store.analyze('example:100', changed, {'facts': {'units': []}})
+        self.assertEqual(self.store.features('example:100'), {'facts': {'units': []}})
+
+    def test_rerank_sets_every_rank_in_one_step_clears_the_rest_and_writes_nothing_when_unchanged(self):
+        prints = {identifier: self.store.upsert_listing(listing(id=identifier))['content_fingerprint']
+                  for identifier in ('example:100', 'example:200', 'example:300')}
+        self.store.rank('example:300', prints['example:300'], 1, 'Old rank.')
+        self.store.rerank({'example:100': (prints['example:100'], 2, 'Second.'), 'example:200': (prints['example:200'], 1, 'First.')},
+                          {'example:300': (prints['example:300'], 'Dismissed, so not ranked.')})
+        self.assertEqual([(item['id'], item['rank'], item['reason']) for item in self.store.browse('Rankings')['items']],
+                         [('example:200', 1, 'First.'), ('example:100', 2, 'Second.'), ('example:300', None, 'Dismissed, so not ranked.')])
+        self.assertTrue(self.store.listing('example:300')['analysis_current'])
+        revision = self.store.revision()
+        self.store.rerank({'example:100': (prints['example:100'], 2, 'Second.'), 'example:200': (prints['example:200'], 1, 'First.')},
+                          {'example:300': (prints['example:300'], 'Dismissed, so not ranked.')})
+        self.assertEqual(self.store.revision(), revision)
+        self.store.upsert_listing(listing(id='example:200', price=1500))
+        self.assertEqual(self.store.rerank({'example:100': (prints['example:100'], 1, 'Only.'), 'example:200': (prints['example:200'], 2, 'Stale.')}, {}),
+                         {'ranked': 1, 'stale': ['example:200']})
+        self.assertIsNone(self.store.listing('example:300')['rank'])
+        self.assertIsNone(self.store.listing('example:300')['reason'])
+
+    def test_user_notes_wait_for_one_reading_each(self):
+        self.store.upsert_listing(listing())
+        self.store.add_note('Loved the light, but the kitchen is tiny.', listing_id='example:100')
+        self.store.add_note('Agent summary of the call.', listing_id='example:100', role='agent')
+        [note] = self.store.unread_notes()
+        self.assertEqual((note['listing_id'], note['text']), ('example:100', 'Loved the light, but the kitchen is tiny.'))
+        reading = {'sentiment': 'mixed', 'likes': ['bright natural light'], 'dislikes': ['small kitchen']}
+        self.store.read_note(note['id'], reading)
+        self.assertEqual(self.store.unread_notes(), [])
+        self.assertEqual(type(self.store)(self.path).note_readings(), {note['id']: reading})
+        agent_note = self.store.listing('example:100')['notes'][1]['id']
+        with self.assertRaisesRegex(ValueError, 'user'):
+            self.store.read_note(agent_note, reading)
+        with self.assertRaises(KeyError):
+            self.store.read_note(999, reading)
+
+    def test_a_stated_preference_is_read_once_and_kept_by_its_phrase(self):
+        self.store.read_preference('Balcony', {'terms': ['balcony or terrace'], 'reason': None})
+        self.store.read_preference('Balcony', {'terms': ['balcony or terrace', 'patio'], 'reason': None})
+        self.assertEqual(type(self.store)(self.path).preference_readings(), {'Balcony': {'terms': ['balcony or terrace', 'patio'], 'reason': None}})
+        with self.assertRaises(ValueError):
+            self.store.read_preference(' ', {'terms': [], 'reason': 'x'})
+
     def test_contact_channel_agent_and_approval_are_scoped_to_request(self):
         self.store.upsert_listing(listing())
         self.store.upsert_listing(listing(id='other:200'))

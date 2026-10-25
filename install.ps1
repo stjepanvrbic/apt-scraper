@@ -104,6 +104,11 @@ Write-Step 'Listing correspondence and listing search jobs'
 Invoke-Checked $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-contact')
 Invoke-Checked $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-search')
 
+# The listing ranking ranks in code and wakes the model only for listings and notes it has not
+# analyzed yet, so it stays on as well.
+Write-Step 'Listing ranking job'
+Invoke-Checked $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-ranking')
+
 Write-Step 'Claude subscription provider plugin'
 Invoke-Checked $hermes @('-p', $ProfileName, 'plugins', 'install', $PluginName, '--force', '--enable')
 

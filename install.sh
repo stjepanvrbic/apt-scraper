@@ -82,6 +82,11 @@ step 'Listing correspondence and listing search jobs'
 hermes -p "$PROFILE_NAME" cron resume apt-scraper-contact
 hermes -p "$PROFILE_NAME" cron resume apt-scraper-search
 
+# The listing ranking ranks in code and wakes the model only for listings and notes it has not
+# analyzed yet, so it stays on as well.
+step 'Listing ranking job'
+hermes -p "$PROFILE_NAME" cron resume apt-scraper-ranking
+
 step 'Claude subscription provider plugin'
 hermes -p "$PROFILE_NAME" plugins install "$PLUGIN_NAME" --force --enable
 

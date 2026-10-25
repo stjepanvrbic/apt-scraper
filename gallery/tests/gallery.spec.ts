@@ -214,6 +214,20 @@ test('dismissed listings can be restored after closing their drawer', async ({ p
   await expect(page.getByRole('article')).toHaveCount(4);
 });
 
+test('a listing left out of the ranking says why instead of awaiting ranking', async ({ page, gallery }) => {
+  execFileSync('python', ['-c', `import sys; sys.path.insert(0,sys.argv[1]); from store import ListingStore; store=ListingStore(sys.argv[2]); store.feedback('sample:lincoln', dismissed=True); items={item['id']: item for item in store.state()['listings']}; store.rerank({key: (item['content_fingerprint'], item['rank'], item['reason']) for key, item in items.items() if key != 'sample:lincoln'}, {'sample:lincoln': (items['sample:lincoln']['content_fingerprint'], 'Dismissed, so not ranked.')})`, resolve('../profile/skills/gallery/scripts'), gallery.database]);
+  await page.goto(gallery.url);
+  await page.getByRole('button', { name: 'Dismissed listings' }).click();
+  const card = page.getByRole('article');
+  await expect(card.getByText('Not ranked', { exact: true })).toBeVisible();
+  await expect(card.getByText('Dismissed, so not ranked.')).toBeVisible();
+  await expect(card.getByText('Awaiting ranking')).toHaveCount(0);
+  await page.getByRole('button', { name: 'View Sunlit home in Lincoln Park', exact: true }).click();
+  const drawer = page.getByRole('dialog');
+  await expect(drawer.getByText('Not ranked', { exact: true })).toBeVisible();
+  await expect(drawer.getByText('Dismissed, so not ranked.')).toBeVisible();
+});
+
 test('Notes uses a chat composer, streamed reply, tool timeline and choices', async ({ page, gallery }) => {
   const messages: Record<string, unknown>[] = [];
   await page.route('**/api/chat**', async route => {

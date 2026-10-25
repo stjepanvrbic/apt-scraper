@@ -21,12 +21,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'gallery' / 'scripts'))
 
 from matching import INSIDE, OUTSIDE, PENDING, evaluate, required, unjudged  # noqa: E402
-from schema import content_fingerprint  # noqa: E402
 from scratch import read_scratch_object  # noqa: E402
 from sites import site_for, site_named  # noqa: E402
 from sites.errors import Blocked, Gone  # noqa: E402
 from state import SearchState  # noqa: E402
-from store import ListingStore, store_path, validate_listing  # noqa: E402
+from store import ListingStore, store_path  # noqa: E402
 
 ATTENTION = 3
 RUN_BUDGET = timedelta(minutes=25)
@@ -174,15 +173,8 @@ class Search:
 
     def save(self, listing, facts, areas):
         """Saves the listing hidden. The run applies the criteria current at its end to every listing."""
-        fingerprint = content_fingerprint(validate_listing({**listing, 'status': 'available'}))
-        try:
-            current = self.store.listing(listing['id'])['content_fingerprint'] == fingerprint
-        except KeyError:
-            current = False
-        previous = (self.store.features(listing['id']) if current else None) or {}
-        features = {**previous, 'facts': {**facts, 'areas': areas}, 'must_haves': previous.get('must_haves', {})}
-        self.store.upsert_listing({**listing, 'status': 'available'}, matches_criteria=False)
-        self.store.analyze(listing['id'], fingerprint, features)
+        fingerprint = self.store.upsert_listing({**listing, 'status': 'available'}, matches_criteria=False)['content_fingerprint']
+        self.store.analyze(listing['id'], fingerprint, {'facts': {**facts, 'areas': areas}})
 
     def add_area(self, listing_id, area):
         previous = self.state.card(listing_id)
@@ -192,8 +184,7 @@ class Search:
         self.state.saw(listing_id, previous['signature'], areas, self.now())
         features = self.store.features(listing_id)
         if features is not None:
-            features = {**features, 'facts': {**features.get('facts', {}), 'areas': areas}}
-            self.store.analyze(listing_id, self.store.listing(listing_id)['content_fingerprint'], features)
+            self.store.analyze(listing_id, self.store.listing(listing_id)['content_fingerprint'], {'facts': {**features.get('facts', {}), 'areas': areas}})
 
     def recheck_missing(self, site, criteria, seen, complete, deadline, result):
         prefix = site_key(site) + ':'
@@ -258,10 +249,9 @@ class Search:
             if self.store.listing(entry['id'])['content_fingerprint'] != entry['fingerprint']:
                 result['stale'].append(entry['id'])
                 continue
-            features = self.store.features(entry['id']) or {'must_haves': {}}
-            features = {**features, 'must_haves': {**features.get('must_haves', {}), **entry['must_haves']}}
-            self.store.analyze(entry['id'], entry['fingerprint'], features)
-            verdict = evaluate(criteria, features)
+            judged = (self.store.features(entry['id']) or {}).get('must_haves', {})
+            self.store.analyze(entry['id'], entry['fingerprint'], {'must_haves': {**judged, **entry['must_haves']}})
+            verdict = evaluate(criteria, self.store.features(entry['id']))
             result['saved'] += 1
             result['shown'] += verdict == INSIDE
             result['outside'] += verdict == OUTSIDE

@@ -53,3 +53,15 @@ python "$HERMES_HOME/skills/search/scripts/search.py"
 The search runs every hour as the scheduled job `apt-scraper-search`, and searches once the interview is complete. When the interview becomes complete, load the `search` skill and run the search once now as it says.
 
 At the first message of every conversation, when the settings `status` exits 0, also run the search script with `status` before you reply. Exit code 3 means the search needs attention: load the `search` skill, tell the user in a sentence or two what `problems` says, and fix what the skill says you can, including running a search that has not run yet. When `new_since_report` is above 0, tell the user in one line how many new listings are in the gallery, then run the script with `reported`. Otherwise say nothing about the search. Any other exit code means the script itself failed, so show the user its output.
+
+## Ranking
+
+The ranking script is:
+
+```bash
+python "$HERMES_HOME/skills/ranking/scripts/ranking.py"
+```
+
+The ranking runs every two minutes as the scheduled job `apt-scraper-ranking`. It ranks the listings in code from the user's favorites, dismissals, notes and preferences. Its runs read a listing only when something about it or about the user's preferences needs judging, and routine re-ranking costs no model call.
+
+At the first message of every conversation, when the settings `status` exits 0, also run the ranking script with `status` before you reply. Exit code 3 means the ranking needs attention: load the `ranking` skill and tell the user in a sentence or two what `problems` says. Any other exit code but 0 means the script itself failed, so show the user its output. Otherwise say nothing about the ranking. When the user asks why a listing ranks where it does, load the `ranking` skill.

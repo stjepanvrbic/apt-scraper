@@ -30,7 +30,7 @@ The default port is 8765. If it serves another application or database, select a
 
 Inside Hermes, data is under `HERMES_HOME/workspace/gallery/`. Outside Hermes, Windows uses `%LOCALAPPDATA%/apt-scraper/` and macOS uses `~/Library/Application Support/apt-scraper/`. The databases are `listings.sqlite3` and `sample.sqlite3`, and `store_path(sample)` in `store.py` returns their paths. Search settings are always in `listings.sqlite3`. `--database <path>` selects an explicit database. Keep all global options before the command name.
 
-The shared Python interface is `ListingStore` in `profile/skills/gallery/scripts/store.py`. The schema is at version 2, recorded in `PRAGMA user_version`. Each version's migration runs in a transaction when the store opens, so a version-1 store gains the contact workflow's records without losing data. Databases from newer schema versions are rejected. Scraped fields, analysis, ranking, user feedback, contacts, approvals, viewings and chat records are separate.
+The shared Python interface is `ListingStore` in `profile/skills/gallery/scripts/store.py`. The schema is at version 3, recorded in `PRAGMA user_version`. Each version's migration runs in a transaction when the store opens, so an older store gains the contact workflow's records and the ranking's note and preference readings without losing data. Databases from newer schema versions are rejected. Scraped fields, analysis, ranking, user feedback, contacts, approvals, viewings and chat records are separate.
 
 | Method | Behavior |
 | --- | --- |
@@ -39,14 +39,17 @@ The shared Python interface is `ListingStore` in `profile/skills/gallery/scripts
 | `apply_criteria(judge)` | In one transaction, calls `judge(criteria, features)` for every stored listing with the stored criteria and the listing's current features or `None`, shows the listings judged `inside` and hides every other one. Returns the count of each verdict, or `None` without criteria. |
 | `set_matches_criteria(id, matches)` | Hides or restores a listing without deleting history. Search updates preserve this decision. |
 | `set_availability(id, status)` | Marks a listing available or unavailable without requiring the original source payload or changing analysis. |
-| `analyze(id, fingerprint, features)` | Saves a JSON object of features against the exact content fingerprint. Rejects stale work. |
+| `analyze(id, fingerprint, features)` | Merges the given top-level feature keys into the listing's current features, saved against the exact content fingerprint, so the search and the ranking each write their own keys. Features of earlier content are dropped. Rejects stale work. |
 | `features(id)` | Returns current stored features, or `None` when analysis is missing or stale. |
 | `rank(id, fingerprint, rank, reason)` | Updates ranking independently of scraped content. Rejects stale content fingerprints. |
+| `rerank(ranked, unranked)` | Replaces the whole ranking in one transaction: `ranked` maps listing ids to `(fingerprint, rank, reason)`, `unranked` maps listing ids to `(fingerprint, reason)` for listings left out. Every other listing loses its rank and reason. Unchanged rows are not written. Returns the count ranked and the ids skipped because their content changed. |
 | `listing(id, notes_page=1, correspondence_page=1, viewings_page=1)` | Full details for one listing. Each history has pages of 50 and a total count. |
 | `browse(view, page=1, page_size=24)` | Summaries for Rankings, Favorites, Contacted, Viewings or Dismissed. Page size is at most 100. Viewings sorts by UTC time and excludes canceled visits. |
 | `state()` | Explicit full export using bulk queries, including unavailable and dismissed listings. It is not the browser polling endpoint. |
 | `feedback(id, favorite=True/False, dismissed=True/False)` | Saves supplied flags. Dismissal clears the favorite. Restore with `dismissed=False`. |
 | `add_note(text, listing_id=id, role='user')` | Appends a listing note with author `user` or `agent`. |
+| `unread_notes()`, `read_note(note_id, reading)`, `note_readings()` | The user's notes without a reading, saving the ranking's reading of one, and every reading by note id. Agent notes are never read. |
+| `read_preference(phrase, reading)`, `preference_readings()` | Saves the ranking's reading of a stated preference by its phrase, replacing an earlier one, and returns every reading by phrase. |
 | `request_contact(id)` | Records one pending request and copies the source's agent details. Repeated pending requests are unchanged. Retrying a failed request resets it to pending and clears its error. |
 | `set_contact(id, status, channel=None, agent=None, error=None, subject=None)` | Updates pending, in_progress, contacted, failed or closed state. Channels are email, imessage or contact_form. Failed state requires an error. `subject` keeps the first email's subject, which reply polling searches for. |
 | `correspond(id, direction, channel, text, external_message_id=..., external_thread_id=...)` | Records a message only for an existing requested contact. Deduplicates by listing, channel and external message id. It preserves contact state, including failed or closed. An outgoing message marks every earlier incoming message and every answered question of the listing handled. |
