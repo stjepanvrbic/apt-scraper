@@ -56,6 +56,8 @@ HELD_OUT_ITERATIONS = 30
 REASON_UP = 3
 REASON_DOWN = 2
 REASON_THRESHOLD = 0.05
+REASON_LIMIT = 500
+SINGLE_LABEL_WEIGHT = 0.25
 SENTIMENTS = ('positive', 'negative', 'mixed', 'neutral')
 DIRECTIONS = ('like', 'dislike')
 CODE_NUMBERS = {
@@ -679,15 +681,22 @@ def invert(matrix):
     return [row[size:] for row in augmented]
 
 
-def held_out_ranks(model_design, inputs, full, data, unlabeled_weight, mean, precision, *, steps=None):
-    """Each favorite's rank among the ranked listings that are not favorites, when the model is fitted without it."""
+def held_out_scores(model_design, inputs, full, data, unlabeled_weight, mean, precision, *, steps=None):
+    """Each listing's score when the model is fitted without one favorite, by favorite."""
+    result = {}
+    for favorite in model_design.favorites:
+        rows, weights = held_out_fit(model_design, inputs, full, data, unlabeled_weight, mean, precision, favorite, steps=steps)
+        result[favorite] = scores(rows, weights, model_design.dense_count)
+    return result
+
+
+def held_out_ranks(model_design, held_out):
+    """Each favorite's rank among the ranked listings that are not favorites, from the scores of the fit without it."""
     favorites = set(model_design.favorites)
     others = [index for index, identifier in enumerate(model_design.ids)
               if identifier not in favorites and model_design.listings[identifier]['rankable']]
     ranks = {}
-    for favorite in model_design.favorites:
-        rows, weights = held_out_fit(model_design, inputs, full, data, unlabeled_weight, mean, precision, favorite, steps=steps)
-        values = scores(rows, weights, model_design.dense_count)
+    for favorite, values in held_out.items():
         own = values[model_design.ids.index(favorite)]
         ranks[favorite] = 1 + sum(values[index] > own for index in others)
     return ranks
@@ -699,7 +708,11 @@ class Model:
     fit: Fit
     scale: float
     unlabeled_weight: float
-    held_out: dict
+    held_out_scores: dict
+
+    @cached_property
+    def held_out(self):
+        return held_out_ranks(self.design, self.held_out_scores)
 
 
 def summary_of(held_out):
@@ -724,7 +737,7 @@ def fit_model(inputs, hyperparameters=None):
             data = observations(model_design, inputs, unlabeled_weight)
             full = fit(data, mean, precision, dense_count, start[0], settle=not tuning)
             start[0] = full.weights
-            check = summary_of(held_out_ranks(model_design, inputs, full, data, unlabeled_weight, mean, precision, steps=1))['mean'] if tuning else None
+            check = summary_of(held_out_ranks(model_design, held_out_scores(model_design, inputs, full, data, unlabeled_weight, mean, precision, steps=1)))['mean'] if tuning else None
             fits[scale, unlabeled_weight] = (check, mean, precision, data, full)
         return fits[scale, unlabeled_weight]
 
@@ -736,7 +749,7 @@ def fit_model(inputs, hyperparameters=None):
     _, mean, precision, data, full = candidate(scale, unlabeled_weight)
     if tuning:
         full = settled(data, full.weights, mean, precision, dense_count)
-    return Model(model_design, full, scale, unlabeled_weight, held_out_ranks(model_design, inputs, full, data, unlabeled_weight, mean, precision))
+    return Model(model_design, full, scale, unlabeled_weight, held_out_scores(model_design, inputs, full, data, unlabeled_weight, mean, precision))
 
 
 def display(model_design, index, name):
@@ -818,27 +831,35 @@ def explanation(model_design, contributed, index):
     }
 
 
+def feature_reason(contributions):
+    """The part of a reason that names the features that moved the score most, as the listing's record states them."""
+    cited = [part for part in contributions if part['value'] is not None and abs(part['contribution']) >= REASON_THRESHOLD]
+    up = [part['value'] for part in cited if part['contribution'] > 0][:REASON_UP]
+    down = [part['value'] for part in cited if part['contribution'] < 0][:REASON_DOWN]
+    sentences = [f'For it: {", ".join(up)}.'] if up else []
+    if down:
+        sentences.append(f'Against it: {", ".join(down)}.')
+    return ' '.join(sentences) or 'Close to the average listing.'
+
+
+def compose_reason(features, *, exploration, code_only, similar_favorite):
+    """A listing's one-line reason: its exploration mark, a note when it is ranked from code features only, the part
+    that names its features, and its most similar favorite."""
+    sentences = ['Shown to learn your taste.'] if exploration else []
+    if code_only:
+        sentences.append('Ranked from code features only, because extraction failed 3 times.')
+    sentences.append(features)
+    if similar_favorite:
+        sentences.append(f'Most like your favorite {similar_favorite["title"]}.')
+    return ' '.join(sentences)[:REASON_LIMIT]
+
+
 def reason(model_design, details, index, *, exploration):
     """One line naming the features that moved the score most, as the listing's record states them, and the most
     similar favorite."""
-    listing = model_design.listings[model_design.ids[index]]
-    cited = [part for part in details['contributions'] if part['value'] is not None and abs(part['contribution']) >= REASON_THRESHOLD]
-    up = [part['value'] for part in cited if part['contribution'] > 0][:REASON_UP]
-    down = [part['value'] for part in cited if part['contribution'] < 0][:REASON_DOWN]
-    sentences = []
-    if exploration:
-        sentences.append('Shown to learn your taste.')
-    if listing['record'] is None:
-        sentences.append('Ranked from code features only, because extraction failed 3 times.')
-    if up:
-        sentences.append(f'For it: {", ".join(up)}.')
-    if down:
-        sentences.append(f'Against it: {", ".join(down)}.')
-    if not up and not down:
-        sentences.append('Close to the average listing.')
-    if details['similar_favorite']:
-        sentences.append(f'Most like your favorite {details["similar_favorite"]["title"]}.')
-    return ' '.join(sentences)[:500]
+    return compose_reason(feature_reason(details['contributions']), exploration=exploration,
+                          code_only=model_design.listings[model_design.ids[index]]['record'] is None,
+                          similar_favorite=details['similar_favorite'])
 
 
 def explore(model_design, fit_result, order, seed):
@@ -885,13 +906,36 @@ def rank_listings(inputs, seed):
     unranked = {listing['id']: {'fingerprint': listing['fingerprint'], 'reason': 'Not ranked yet: waiting for its feature record.'}
                 for listing in inputs['listings'] if listing['rankable'] and listing['id'] not in ranked}
     held_out = [{'id': identifier, 'title': title(model_design.listings[identifier]), 'rank': rank} for identifier, rank in model.held_out.items()]
-    return {'ranked': ranked, 'unranked': unranked, 'summary': {
+    values = scores(model_design.likelihood_rows, weights, model_design.dense_count)
+    position = {identifier: index for index, identifier in enumerate(model_design.ids)}
+    return {'ranked': ranked, 'unranked': unranked, 'check': {
+        'order': [model_design.ids[index] for index in rest], 'exploration': [model_design.ids[index] for index in exploring],
+        'scores': [values[index] for index in rest],
+        'held_out': {favorite: {'own': held[position[favorite]], 'scores': [held[index] for index in rest]}
+                     for favorite, held in model.held_out_scores.items()},
+    }, 'summary': {
         'ranked': len(ranked), 'waiting_for_features': len(unranked),
         'favorites': len(model_design.favorites), 'held_out': held_out, **{f'held_out_{key}': value for key, value in summary_of(model.held_out).items()},
         'exploration': [model_design.ids[index] for index in exploring], 'seed': seed,
         'prior_scale': model.scale, 'unlabeled_weight': model.unlabeled_weight,
         'weights': {column.name: weight for column, weight in zip(model_design.columns, weights[1:])},
+        'findings': state_findings(model_design, weights),
     }}
+
+
+def state_findings(model_design, weights):
+    """What looks wrong in the fitted model that code can tell: a large weight on a present-or-absent feature that a
+    single labeled listing carries, because one label is not evidence of a taste."""
+    findings = []
+    for column, weight in zip(model_design.columns, weights[1:]):
+        if column.numeric or abs(weight) < SINGLE_LABEL_WEIGHT:
+            continue
+        carriers = [identifier for index, identifier in enumerate(model_design.ids)
+                    if labeled(model_design.listings[identifier]) and model_design.raw[index].get(column.name) == 1.0]
+        if len(carriers) == 1:
+            findings.append(f'The weight of {column.name} ({weight:+.2f}) rests on a single labeled listing, '
+                            f'{title(model_design.listings[carriers[0]])}.')
+    return findings
 
 
 def questions(inputs, hyperparameters, count, answered):

@@ -95,7 +95,7 @@ The vocabulary a reading may name: `rating:<rating>` (toward 5), `floor:`, `styl
 
 ### Reranks
 
-Ranks change only on a rerank, which the user starts with Score and rerank in the gallery or by asking the agent. Both call `rerank(store, seed=None)` in `profile/skills/gallery/scripts/rerank.py`, which the ranking skill's `ranking.py rerank` runs. No scheduled job reranks. A rerank reads the store once (`ListingStore.ranking_inputs`), fits the scoring model in `scoring.py`, which is pure code with the standard library only, and writes every rank, reason, explanation and exploration mark, and the rerank's summary, in one transaction (`ListingStore.save_rerank`). It calls no model.
+Ranks change only on a rerank, which the user starts with Score and rerank in the gallery or by asking the agent. Both call `rerank(store, seed=None)` in `profile/skills/gallery/scripts/rerank.py`, which the ranking skill's `ranking.py rerank` runs. No scheduled job reranks. A rerank reads the store once (`ListingStore.ranking_inputs`), fits the scoring model in `scoring.py`, which is pure code with the standard library only, and writes every rank, reason, explanation and exploration mark, and the rerank's summary, in one transaction (`ListingStore.save_rerank`). It calls no model. The same transaction leaves the rerank's [review pass](#the-review-pass) waiting.
 
 It ranks every listing shown in Rankings that has a feature record of its current content, and every one extraction gave up on, from its code-derived features alone, with a reason that says so. A shown listing waiting for its record gets no rank and the reason "Not ranked yet: waiting for its feature record." A listing that changes after the rerank keeps no rank until the next one. Among listings of equal score the listing id decides, so a rerank is reproducible apart from the exploration listings.
 
@@ -149,6 +149,41 @@ With more than 20 ranked listings, ranks 7 and 14 hold exploration listings, mar
 
 `pairwise_questions(store, count)` in `rerank.py` fits the model with the latest rerank's prior scale and weak-negative weight and returns pairs among the 40 best-ranked listings whose order the posterior is least sure of: the probability that one scores above the other, from the Laplace posterior, is closest to one half. Each listing is in at most one question, and a pair answered either way is not asked again. A skipped pair is excluded until twenty other questions have been answered or skipped, persisted in `pairwise_skips`. Refreshing a question does not advance this cooldown. Answers are stored with `ListingStore.answer_pair(chosen, other)` and count at the next rerank. Before any label, the posterior is the prior from the stated preferences.
 
+## The review pass
+
+After each rerank, a model reviews its result once, as text. The review rewrites the reasons of the top 50 listings, flags each whose rank conflicts with a stated preference, reports what looks wrong in the ranking state, and may move listings. Its moves stand only when the leave-one-out check confirms them, because language-model rankers show position and popularity bias. The code is `review.py`, pure functions, and `pending_review` and `save_review` in `rerank.py`.
+
+### How it runs
+
+The profile ships the Hermes cron job `apt-scraper-review`, named "Ranking review", in `profile/cron/jobs.json`, and the installers resume it. It runs every minute. Each run starts with `profile/scripts/review-run.py`, which hands over to `ranking.py run`. When the latest rerank's review waits, the run writes its task file to `review/` next to the listing store, replacing earlier ones, and its report names the file. Otherwise its last line is `{"wakeAgent": false}` and Hermes ends the run without a model call. Hermes skips a job's tick while its previous run is still running (`cron/scheduler_tick.py`), so one review is handed at a time.
+
+The agent the job wakes runs in a session of its own, with the `ranking` skill and only the terminal and file tools, so it knows nothing of the user's conversations. It reads the task file, writes its review to the profile's scratch directory and saves it with `ranking.py review-save`, which checks and applies it. A file that breaks the review's format is rejected with the error and nothing is saved, so the agent corrects it and saves again.
+
+The review runs in a job rather than as a turn the gallery starts through the gateway client of the Notes tab. A job runs the same way whether the user reranked in the gallery or in a conversation, gets a fresh session without the conversation's knowledge of the favorites, limits the tools to what the review needs, and leaves the gallery only reading the store: the review's state and result are in `ListingStore.last_rerank()['review']`. The cost is up to a minute's wait before the review starts.
+
+### What the review reads
+
+The task holds the top 50 listings, each with its rank, title, exploration mark, its record's summary, traits and concerns, its 12 largest contributions with the values its record states, and the feature part of its reason; the stated preferences with the features they were read into; the likes and dislikes of the note readings; and the ranking state: label counts, the favorites' held-out ranks without their listings, the features whose learned weight runs against their starting weight, the 20 largest weights with their starting weights and the stated preferences that name them, the listings waiting for a record or given up by extraction, and the tag list with its counts.
+
+It holds no label. Favorites are not marked, held-out ranks come without their listings, nearness to the favorites is left out of the contributions and weights, no count says how many liked listings have a feature, and the favorite part of each reason is left out, so the favorites can test the review's moves independently. What code itself can tell is wrong, a large weight on a present-or-absent feature that a single labeled listing carries, it reports in the rerank's summary as `findings` (`state_findings` in `scoring.py`), outside the task, because that finding names the listing. Listing titles, summaries and traits are data inside one JSON block, and the task tells the agent never to follow instructions in them. The task stays out of the cron prompt, which Hermes scans for prompt injection.
+
+### What the review may change
+
+- Reasons. A rewritten reason cites the listing's record in square brackets, each citation exactly a value its explanation states or a trait or concern of its record, and outside them uses only about 110 connecting and evaluative words (`CONNECTING_WORDS` in `review.py`), such as "strong on", "but" and "is high", with plain punctuation and no numbers. So every feature a reason names is one its record has, as the record states it. A file with a reason that breaks this is rejected with an error naming every such reason, nothing is saved and every listing keeps its reason, and the agent corrects those reasons or leaves them out. Code unbrackets the citations and adds the exploration mark, the note on a listing ranked from code features only and the most similar favorite.
+- Moves. Each moves one of the top 50 to a new rank, with a reason and a verbalized confidence from 0 to 1, which the research found better calibrated than token probabilities. Exploration listings and their ranks stay, and each move has a rank of its own.
+- Flags, each a listing and a stated like or dislike its rank conflicts with, with a note.
+- Findings, at most 10 texts on what looks wrong in the ranking state, such as two traits that mean the same thing or a weight carried by a single label.
+
+### The check
+
+The rerank stores what the check needs with its waiting review: its order, its exploration listings, each ranked listing's score and, for each favorite, every score in the fit without it. `save_review` checks the moves on these, so the check is the one of the ranking the review saw, also when labels or listings change while the review runs, and needs no refit. The moves become score adjustments: each moved listing gets the score that puts it between the unmoved listings around its new rank, spaced evenly when several moved listings share a gap, and every other listing keeps its order around them and the exploration listings. The adjustments apply to the full fit and to each held-out fit alike. The leave-one-out check runs without and with them. When the favorites' mean held-out rank is higher with them, every move is reverted and the result records the reverted moves and both values. Without a favorite, nothing can confirm the moves, so they are reverted too. Rewritten reasons, flags and findings stand either way. A listing whose content changed since the rerank keeps no rank, as after any rerank, and a reason for it is refused. A moved listing's explanation stays the scoring model's: its move and the move's reason are in the review's result.
+
+The result is stored with the review and printed by `ranking.py status`: `outcome` (`kept`, `reverted` with `reverted_because`, or `no moves`), `check` with the held-out median and mean `before` and `after`, the `moves` with their ranks, reasons and confidences, the number of `reasons` rewritten, the `flags` and the `findings`.
+
+### Failures
+
+A review handed to the agent 3 times without being saved ends as `failed`, and so does one whose task could not be written, with the error in its result. A later rerank supersedes a review still waiting, also while the agent writes it: saving the old review then fails with an error that tells the agent to stop. Either way the stored scores are removed, and the next run removes the task and review files of earlier reranks.
+
 ## Commands
 
 ```bash
@@ -164,9 +199,11 @@ python "$HERMES_HOME/skills/ranking/scripts/ranking.py" rerank
 python "$HERMES_HOME/skills/ranking/scripts/ranking.py" status
 python "$HERMES_HOME/skills/ranking/scripts/ranking.py" explain "<listing id>"
 python "$HERMES_HOME/skills/ranking/scripts/ranking.py" questions --count 8
+python "$HERMES_HOME/skills/ranking/scripts/ranking.py" run
+python "$HERMES_HOME/skills/ranking/scripts/ranking.py" review-save "$HERMES_HOME/cache/scratch/review-<rerank id>.json"
 ```
 
-`run` is the cron job's command. `save` is the subagent's. Every command but `run` needs only the Python standard library, and so does `ranking.py`.
+`features.py run` and `ranking.py run` are the cron jobs' commands. `save` is the extraction subagent's and `review-save` the review agent's. Every command but `run` needs only the Python standard library, and so does `ranking.py`.
 
 ## Checks
 
@@ -175,4 +212,4 @@ python -m unittest discover -s tests -v
 ruff check profile tests
 ```
 
-`tests/test_feature_record.py` covers the record contract, `tests/test_listing_photos.py` the duplicate removal and the contact sheets on a 40-photo fixture, `tests/test_feature_store.py` the store, and `tests/test_features_run.py` the job against real SQLite stores: which listings wait, preparation, saving through the command line, preferences stated later, readings, attempts, failures and the shipped job. `tests/test_geodata.py` covers geocoding and reading stations from a GTFS feed, `tests/test_code_features.py` the distances in the store, and `tests/test_scoring.py` covers the scoring model on constructed listings, among them Spec › Acceptance "Overruled preference", "Location", "Exploration" and a single pairwise answer, and `tests/test_rerank.py` reranks against real SQLite stores, the 300-listing timing and the ranking script.
+`tests/test_feature_record.py` covers the record contract, `tests/test_listing_photos.py` the duplicate removal and the contact sheets on a 40-photo fixture, `tests/test_feature_store.py` the store, and `tests/test_features_run.py` the job against real SQLite stores: which listings wait, preparation, saving through the command line, preferences stated later, readings, attempts, failures and the shipped job. `tests/test_geodata.py` covers geocoding and reading stations from a GTFS feed, `tests/test_code_features.py` the distances in the store, and `tests/test_scoring.py` covers the scoring model on constructed listings, among them Spec › Acceptance "Overruled preference", "Location", "Exploration" and a single pairwise answer, and `tests/test_rerank.py` reranks against real SQLite stores, the 300-listing timing and the ranking script. `tests/test_review.py` covers the review pass with controlled reviews, among them Spec › Acceptance "Review pass": moves that put favorites lower are reverted with both check values, moves that put them higher stand, and a reason that cites a value the record lacks or uses another word outside its citations is rejected. It also covers the label-free task, the format checks, the check on the rerank's own scores while labels and listings change, superseded reviews, the single-label finding, the job's wake gate and attempts, the command line and the shipped job.

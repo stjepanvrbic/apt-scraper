@@ -74,4 +74,4 @@ The ranking script is:
 python "$HERMES_HOME/skills/ranking/scripts/ranking.py"
 ```
 
-Ranks change only when the user asks for a rerank, with Score and rerank in the gallery or by asking you, and no scheduled job reranks. When the user asks to rerank, to update the ranking or why a listing ranks where it does, load the `ranking` skill. A rerank fits the scoring model in code and costs no model call.
+Ranks change only when the user asks for a rerank, with Score and rerank in the gallery or by asking you, and no scheduled job reranks. When the user asks to rerank, to update the ranking or why a listing ranks where it does, load the `ranking` skill. A rerank fits the scoring model in code and costs no model call. Its review pass then runs in the scheduled job `apt-scraper-review`, never in your conversation.
