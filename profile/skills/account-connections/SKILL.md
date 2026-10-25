@@ -1,7 +1,7 @@
 ---
 name: account-connections
 description: "Connect and check Gmail, Calendar, gateway and iMessage."
-version: 1.2.0
+version: 1.3.0
 author: Stjepan Vrbic
 license: Proprietary
 platforms: [windows, macos]
@@ -35,9 +35,13 @@ You do the work. Run every command, open every page, and do the clicking and typ
 - signing in to Google and Telegram,
 - approving Google's consent screen,
 - answering macOS permission dialogs and switching on macOS privacy settings,
-- typing their Mac password and pasting secrets into the program that asks for them.
+- typing their Mac password, and pasting the Telegram bot token into the dashboard's Telegram form.
 
 Never type a password, never click a permission dialog or consent button, and never ask for a password, bot token or client secret in the chat. Hermes asks the user to approve computer-use actions. Before you start, ask them to allow them for this session, so the setup does not stop at every click. Take a screenshot before each click and tell the user in one line what you are doing. The one exception is BotFather's reply with the bot token: the gateway section says how to get past it without capturing it.
+
+The user talks to you in the chat of the Hermes web dashboard, in their browser, or in Telegram. Your commands run inside the Hermes gateway with no terminal the user can see, so every command you run must finish without asking for input. A program that needs a terminal, such as the Homebrew installer, gets a terminal window of its own that you open and drive with computer use.
+
+Never restart the gateway while you work. Your own turn runs in it: `hermes gateway restart` refuses while the turn runs, and with `--yes` it ends your turn and the dashboard chat stops answering until the user reloads the page.
 
 Work in the user's own browser, where they can see the page and sign in. Open each page with the command below, then act in that browser window with `computer_use`. Do not use the browser tools (`browser_navigate`, `browser_exec` and the rest): they drive Hermes's own headless Chromium, which the user cannot see or sign in to.
 
@@ -127,43 +131,44 @@ Your questions reach the user here while the gallery is closed, and their replie
 3. BotFather's answer to the username is either the bot's token or a note that the username is taken. Take no screenshot of Telegram from the moment you send the username until step 4 has moved the window to another chat. Ask the user which answer they see. If the username is taken, send another one into the same message field and ask again. Once BotFather shows the token, the user copies it from the reply and keeps it for step 6.
 4. Open `https://t.me/<the username>`. That replaces the BotFather chat on screen, so screenshots are safe again. Press **Start** and send any message. This chat is where your questions will arrive.
 5. Find the user's Telegram ID. Open https://t.me/userinfobot, press **Start**, and read the number it replies with. It is an ID, not a secret.
-6. Open the wizard in a terminal window and drive it with computer use:
+6. Allow only that ID to use the bot, and make its chat the home channel your questions go to:
 
    ```bash
-   cmd /c start "Hermes gateway setup" powershell -NoExit -Command "hermes -p apt-scraper gateway setup"   # Windows
-   osascript -e 'tell application "Terminal" to do script "hermes -p apt-scraper gateway setup"'         # macOS
+   hermes -p apt-scraper config set TELEGRAM_ALLOWED_USERS "<the ID>"
+   hermes -p apt-scraper config set TELEGRAM_HOME_CHANNEL "<the ID>"
    ```
 
-   The menus move with the arrow keys and Enter. Answer:
+7. Open the dashboard's Channels page in the user's browser. `hermes dashboard --status` lists the running dashboard, and its port follows `--port` in that line:
 
-   | Wizard prompt | Answer |
-   |---|---|
-   | Select a platform to configure | **Telegram** |
-   | Reconfigure Telegram? (only if one is set up) | `y` |
-   | How would you like to create your Telegram bot? `Choice [1/2]` | `2`, Manual. Never accept the default `1` |
-   | Telegram bot token | The user pastes the token from step 3 and presses Enter. The field stays blank while they paste. Do not type into this prompt |
-   | Allowed user IDs (comma-separated, leave empty for open access) | The ID from step 5 |
-   | Use your user ID (…) as the home channel? | `y` |
-   | Select a platform to configure | **Done** |
-   | Restart the gateway, Start the gateway service, Start it now, Start the gateway now, Start the gateway automatically on login | `y` to whichever appears |
+   ```bash
+   cmd /c start "" "http://127.0.0.1:<port>/channels?profile=apt-scraper"   # Windows
+   open "http://127.0.0.1:<port>/channels?profile=apt-scraper"               # macOS
+   ```
 
-   On Windows, installing the gateway to start at login may ask for administrator approval. The user approves it.
-7. Close the wizard window and run `check gateway`. Ask the user to confirm the test message arrived in the bot chat.
+   If it lists no dashboard, start one in a window of its own, then read the status again:
+
+   ```bash
+   cmd /c start "Hermes dashboard" hermes -p apt-scraper dashboard --no-open                               # Windows
+   osascript -e 'tell application "Terminal" to do script "hermes -p apt-scraper dashboard --no-open"'   # macOS
+   ```
+
+   On the Telegram card press **Manual setup**. Never press **Create with QR**: it creates the bot through a Nous-hosted service. The form shows the ID from step 6 under **Allowed Telegram user IDs**. Ask the user to click the **Telegram bot token** field and paste the token from step 3. The field shows dots, and you never type into it. Leave **Webhook secret** empty and press **Save & enable**. The running gateway connects the bot within seconds, without a restart, and the Telegram card shows its state.
+8. Run `check gateway`. Ask the user to confirm the test message arrived in the bot chat.
 
 Failures:
 
 | Reason in the check | Fix |
 |---|---|
-| No messaging platform is set up | Steps 1 to 6 |
+| No messaging platform is set up | Steps 1 to 7 |
 | No test message has gone through yet | `check gateway`, then fix whatever it reports |
-| `No home channel set for telegram` | Send `/sethome` in the bot chat, or run the wizard again and answer `y` to the home channel |
-| the gateway is not running | `hermes -p apt-scraper gateway start`. If it reports no installed service, run `hermes -p apt-scraper gateway install`, then start it |
+| `No home channel set for telegram` | The `TELEGRAM_HOME_CHANNEL` command in step 6, then check again |
+| the gateway is not running | `hermes -p default gateway start`. If it reports no installed service, run `hermes -p default gateway install --start-now --start-on-login`. One gateway serves every profile, and Hermes refuses these commands with `-p apt-scraper` |
 | Listing messaging platforms failed or returned unreadable output | Run `hermes -p apt-scraper send --list` and fix what it reports, or ask the user to run the apt-scraper installer again |
-| Any other test message failure | Step 4 if the bot chat was never started. If the token was mistyped or revoked, the user gets a new one from BotFather with `/token`, then step 6 with Reconfigure Telegram |
+| Any other test message failure | Read the error on the Telegram card of the Channels page. Step 4 if the bot chat was never started. If the token was mistyped or revoked, the user gets a new one from BotFather with `/token`, then step 7 with the new token |
 
 ## iMessage on macOS
 
-iMessage exists only on macOS, and texting is off elsewhere. `imsg` needs macOS 14 or later. macOS asks the user for two permissions, and they grant them by hand: Full Disk Access, so `imsg` can read the Messages history, and Automation, so it can send through Messages. Both grants belong to the program that starts `imsg`. That is the terminal app when the user talks to you in a terminal, and `/usr/bin/osascript` when you run from the messaging gateway, because Hermes's launchd service runs the gateway through `osascript` (`hermes_cli/gateway_launchd.py`). The script tells the two apart by whether `osascript` started it, and keeps one result for each. Texts to listing agents can go out from either, so both need their grants and their own passing check.
+iMessage exists only on macOS, and texting is off elsewhere. `imsg` needs macOS 14 or later. macOS asks the user for two permissions, and they grant them by hand: Full Disk Access, so `imsg` can read the Messages history, and Automation, so it can send through Messages. Both grants belong to the program that starts `imsg`. Your commands run inside the gateway whether the user writes in the dashboard, in Telegram or in a terminal, and Hermes's launchd service runs the gateway through `/usr/bin/osascript` (`hermes_cli/gateway_launchd.py`), so `osascript` needs both grants. When the gateway service is not running, Hermes starts a gateway from the program the user opened Hermes from, usually a terminal app, and that app needs them instead. The script tells the two apart by whether `osascript` started it, and keeps one result for each, shown as "iMessage from the gateway" and "iMessage from the terminal". `require imessage` uses the result of the context it runs in.
 
 1. Install `imsg`. If `command -v brew` finds nothing, run `open -a Terminal`, then type this into the new Terminal window with computer use and press Enter:
 
@@ -173,7 +178,7 @@ iMessage exists only on macOS, and texting is off elsewhere. `imsg` needs macOS 
 
    When it asks for the Mac password, the user types it. When it asks to press RETURN, press Enter. At the end, type the commands it prints under "Next steps". Then run `brew install steipete/tap/imsg` and `imsg --version`.
 2. Run `open -a Messages`. The user signs in with their Apple ID if Messages asks. For texts to phones without iMessage, they turn on **Settings → Apps → Messages → Text Message Forwarding** for this Mac on their iPhone.
-3. Full Disk Access. Run `echo "$TERM_PROGRAM"` to learn which terminal app the user runs Hermes in (`Apple_Terminal` is Terminal, `iTerm.app` is iTerm, and so on). Open the pane:
+3. Full Disk Access. Ask the user which terminal app they run the installer and `hermes` commands in (Terminal, iTerm and so on). Open the pane:
 
    ```bash
    open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
@@ -183,10 +188,15 @@ iMessage exists only on macOS, and texting is off elsewhere. `imsg` needs macOS 
    - that terminal app,
    - `/usr/bin/osascript`. In the file chooser, they press Command-Shift-G, type `/usr/bin/osascript` and press Enter, then **Open**.
 
-   macOS reads this grant only when a program starts. Run `hermes -p apt-scraper gateway restart` for the gateway. Then the user quits the terminal app completely, opens it again, runs `hermes -p apt-scraper`, and says "continue the connection setup". The stored results carry over.
+   macOS reads this grant only when a program starts, so the gateway must start again after your turn has ended. Tell the user that the chat pauses for about a minute, and that they then reload the dashboard page and say "continue the connection setup". Then run this as the last command of your reply. It waits until your turn is over, because a restart during the turn would end it:
+
+   ```bash
+   nohup sh -c 'sleep 20; hermes -p default gateway restart' >/dev/null 2>&1 &
+   ```
+
+   The stored results carry over.
 4. Ask for the user's own phone number, with country code, or Apple ID email. The check texts it.
-5. Run `check imessage --handle "<number or Apple ID>"` on its own. The first send makes macOS ask whether the terminal app may control Messages, and the user presses **OK**. Ask them to confirm the test text appeared in Messages.
-6. Check from the gateway. Ask the user to send "check iMessage" in the bot chat. In that conversation you run `check imessage`, which reuses the stored handle. macOS asks whether `osascript` may control Messages, and the user presses **OK**. Ask them to confirm the second test text arrived.
+5. Run `check imessage --handle "<number or Apple ID>"` on its own. The first send makes macOS ask whether `osascript`, or the terminal app when the result names the terminal, may control Messages, and the user presses **OK**. Ask them to confirm the test text appeared in Messages. A later `check imessage` reuses the stored handle.
 
 Failures:
 
@@ -196,6 +206,6 @@ Failures:
 | `unable to open database file`, or empty results | Step 3 for the context that failed. If the entries are already on, switch them off and on again, because they go stale after macOS, Homebrew or terminal updates. If the terminal still fails, also add `/System/Applications/Utilities/Terminal.app`, which the imsg documentation says macOS sometimes consults |
 | `not authorized to send Apple events` | Open `x-apple.systempreferences:com.apple.preference.security?Privacy_Automation`, or **System Settings → Privacy & Security → Automation**. The user switches on **Messages** under the terminal app or `osascript`, then check again |
 | `not checked`, did not finish within 90 seconds | A permission dialog was waiting. The user answers it, then check again |
-| No test text has been sent from the terminal or the gateway yet | Step 5 or step 6 for that context |
+| No test text has been sent from the terminal or the gateway yet | Step 5 in that context. For the terminal, first try `hermes -p default gateway start`: with the gateway service running, your commands run in the gateway |
 | The test text needs your own phone number or Apple ID | Step 4 |
 | The test text failed, any other reason | Step 2: Messages must be signed in, and Text Message Forwarding is needed for a number without iMessage |

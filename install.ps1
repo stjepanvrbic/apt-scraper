@@ -1,6 +1,7 @@
 #Requires -Version 5.1
 # Installs Claude Code, Hermes Agent with its computer-use driver, the Claude
-# subscription provider plugin and this repository's Hermes profile on Windows.
+# subscription provider plugin and this repository's Hermes profile on Windows,
+# then opens the profile's chat in the Hermes web dashboard.
 # Safe to re-run: every step updates what is already there.
 $ErrorActionPreference = 'Stop'
 
@@ -82,6 +83,11 @@ try {
     Remove-Item $savedConfig
 }
 
+# The account connections use Hermes's bundled google-workspace skill, which installing a profile
+# from a directory does not seed.
+Write-Step 'Hermes bundled skills'
+Invoke-Checked $hermes @('-p', $ProfileName, 'skills', 'opt-in', '--sync')
+
 # The search runs curl_cffi in an environment of its own, built from hash-pinned wheels with the Python
 # Hermes runs cron scripts with, which `hermes pm env` puts on PATH.
 Write-Step 'Search environment'
@@ -119,9 +125,37 @@ Write-Step 'Computer-use driver'
 Invoke-Checked $hermes @('-p', $ProfileName, 'computer-use', 'install', '--upgrade')
 Invoke-Checked $hermes @('-p', $ProfileName, 'computer-use', 'status')
 
+# One gateway on the machine serves every profile. It runs the scheduled jobs, the messaging gateway
+# and every chat turn, including the dashboard's, so it starts at login and the search keeps running
+# while no chat is open. Hermes refuses gateway services for named profiles.
+Write-Step 'Hermes gateway service'
+Invoke-Checked $hermes @('-p', 'default', 'gateway', 'install', '--if-missing', '--start-now', '--start-on-login')
+Invoke-Checked $hermes @('-p', 'default', 'gateway', 'start')
+
 Write-Step 'Test message through the Claude subscription'
 $reply = Invoke-Native $hermes @('-p', $ProfileName, 'chat', '-q', 'Reply with exactly: ready', '--oneshot', '-Q') | Out-String
 if ($reply -notmatch '\bready\b') { throw "Test message failed. Reply: $reply" }
 
+# The first start builds the dashboard's web UI, so later starts need no npm. The dashboard keeps
+# running after this window closes. A dashboard that is already running prints its address and exits.
+Write-Step 'Hermes web dashboard'
+$dashboardLog = Join-Path ([IO.Path]::GetTempPath()) "hermes-dashboard-$([IO.Path]::GetRandomFileName()).log"
+$dashboard = Start-Process -FilePath $hermes -ArgumentList @('-p', $ProfileName, 'dashboard', '--no-open') -WindowStyle Hidden `
+    -RedirectStandardOutput $dashboardLog -RedirectStandardError "$dashboardLog.err" -PassThru
+$deadline = (Get-Date).AddMinutes(15)
+$dashboardUrl = $null
+while (-not $dashboardUrl) {
+    $exited = $dashboard.HasExited
+    $output = "$(Get-Content $dashboardLog -Raw -ErrorAction SilentlyContinue)"
+    if ($output -match 'HERMES_DASHBOARD_READY port=(\d+)') { $dashboardUrl = "http://127.0.0.1:$($Matches[1])" }
+    elseif ($output -match "Managing profile '[^']*': (https?://[^/\s]+)") { $dashboardUrl = $Matches[1] }
+    elseif ($exited -or (Get-Date) -gt $deadline) {
+        throw "The Hermes dashboard did not start. Its output:`n$output$(Get-Content "$dashboardLog.err" -Raw -ErrorAction SilentlyContinue)"
+    } else { Start-Sleep -Seconds 1 }
+}
+$chatUrl = "$dashboardUrl/chat?profile=$ProfileName"
+Start-Process $chatUrl
+
 Write-Host ''
-Write-Host "Installed. Run: hermes -p $ProfileName" -ForegroundColor Green
+Write-Host "Installed. The Hermes dashboard is open at $chatUrl" -ForegroundColor Green
+Write-Host "Say hello in its chat to start. To open it again later, run: hermes -p $ProfileName dashboard" -ForegroundColor Green

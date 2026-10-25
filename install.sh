@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs Claude Code, Hermes Agent with its computer-use driver, the Claude
 # subscription provider plugin and this repository's Hermes profile on macOS
-# and Linux.
+# and Linux, then opens the profile's chat in the Hermes web dashboard.
 # Safe to re-run: every step updates what is already there.
 set -euo pipefail
 
@@ -59,6 +59,11 @@ if $had_config; then cp "$saved_config" "$config"; fi
 rm -f "$saved_config"
 [ "$install_status" -eq 0 ] || exit "$install_status"
 
+# The account connections use Hermes's bundled google-workspace skill, which installing a profile
+# from a directory does not seed.
+step 'Hermes bundled skills'
+hermes -p "$PROFILE_NAME" skills opt-in --sync
+
 # The search runs curl_cffi in an environment of its own, built from hash-pinned wheels with the Python
 # Hermes runs cron scripts with, which `hermes pm env` puts on PATH.
 step 'Search environment'
@@ -101,6 +106,13 @@ if [ "$(uname -s)" = Darwin ]; then
 fi
 hermes -p "$PROFILE_NAME" computer-use status
 
+# One gateway on the machine serves every profile. It runs the scheduled jobs, the messaging gateway
+# and every chat turn, including the dashboard's, so it starts at login and the search keeps running
+# while no chat is open. Hermes refuses gateway services for named profiles.
+step 'Hermes gateway service'
+hermes -p default gateway install --if-missing --start-now --start-on-login
+hermes -p default gateway start
+
 step 'Test message through the Claude subscription'
 reply=$(hermes -p "$PROFILE_NAME" chat -q 'Reply with exactly: ready' --oneshot -Q) || {
     echo "Test message failed (exit code $?)" >&2
@@ -112,4 +124,34 @@ if ! [[ $reply_lower =~ (^|[^a-z])ready([^a-z]|$) ]]; then
     exit 1
 fi
 
-printf '\n\033[32mInstalled. Run: hermes -p %s\033[0m\n' "$PROFILE_NAME"
+# The first start builds the dashboard's web UI, so later starts need no npm. The dashboard keeps
+# running after this terminal closes. A dashboard that is already running prints its address and exits.
+step 'Hermes web dashboard'
+dashboard_log=$(mktemp)
+nohup hermes -p "$PROFILE_NAME" dashboard --no-open </dev/null >"$dashboard_log" 2>&1 &
+dashboard_pid=$!
+deadline=$((SECONDS + 900))
+dashboard_url=""
+while [ -z "$dashboard_url" ]; do
+    exited=false
+    kill -0 "$dashboard_pid" 2>/dev/null || exited=true
+    port=$(sed -n 's/.*HERMES_DASHBOARD_READY port=\([0-9][0-9]*\).*/\1/p' "$dashboard_log" | head -n 1)
+    if [ -n "$port" ]; then
+        dashboard_url="http://127.0.0.1:$port"
+    else
+        dashboard_url=$(sed -n "s|.*Managing profile '[^']*': \(https\{0,1\}://[^/ ]*\).*|\1|p" "$dashboard_log" | head -n 1)
+    fi
+    if [ -z "$dashboard_url" ]; then
+        if $exited || [ "$SECONDS" -ge "$deadline" ]; then
+            echo 'The Hermes dashboard did not start. Its output:' >&2
+            cat "$dashboard_log" >&2
+            exit 1
+        fi
+        sleep 1
+    fi
+done
+chat_url="$dashboard_url/chat?profile=$PROFILE_NAME"
+if [ "$(uname -s)" = Darwin ]; then open "$chat_url"; else xdg-open "$chat_url"; fi
+
+printf '\n\033[32mInstalled. The Hermes dashboard is open at %s\033[0m\n' "$chat_url"
+printf '\033[32mSay hello in its chat to start. To open it again later, run: hermes -p %s dashboard\033[0m\n' "$PROFILE_NAME"
