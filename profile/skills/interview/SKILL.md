@@ -30,13 +30,13 @@ python "${HERMES_SKILL_DIR}/scripts/settings.py" save "<scratch directory>/setti
 
 `status` prints the saved `settings` and `missing`, the list of what the interview still needs. It exits 0 when nothing is missing and 3 otherwise.
 
-To save, write a JSON object with any of `criteria`, `preferences`, `places`, `location_priorities`, `listing_sites` and `viewing_availability` to a file in your scratch directory with `write_file`, then run `save` with that file. `save` accepts only files in the scratch directory, `cache/scratch` under the profile, and deletes the file once the settings are saved. Write a new file for every save. A file keeps the user's quotes and apostrophes intact without shell escaping. Do not feed the JSON to the script through a heredoc, because Hermes asks the user to approve every heredoc into Python.
+To save, write a JSON object with any of `criteria`, `preferences`, `places`, `location_priorities`, `listing_sites`, `viewing_availability` and `transit_feed` to a file in your scratch directory with `write_file`, then run `save` with that file. `save` accepts only files in the scratch directory, `cache/scratch` under the profile, and deletes the file once the settings are saved. Write a new file for every save. A file keeps the user's quotes and apostrophes intact without shell escaping. Do not feed the JSON to the script through a heredoc, because Hermes asks the user to approve every heredoc into Python.
 
 ```json
 {"preferences": {"likes": ["Lots of daylight", "Children's playground nearby"], "dislikes": ["Ground floor"]}}
 ```
 
-Each setting in the object replaces the stored one whole. Settings left out stay as they are. To change one part of a setting, read the setting with `status`, change that part and save the whole setting. `save` prints `missing` after saving. Exit code 1 means the input was rejected and nothing was saved. The error says why. The file stays, so fix it and save again. Exit code 4 means the Python running the script has no time zone database, so it cannot check the viewing time zone and saved nothing. That is not the user's mistake. Tell the user, show them the output, and do not ask them for another time zone.
+Each setting in the object replaces the stored one whole. Settings left out stay as they are. To change one part of a setting, read the setting with `status`, change that part and save the whole setting. `save` prints `missing` after saving. Exit code 1 means the input was rejected and nothing was saved. The error says why. The file stays, so fix it and save again. Exit code 4 means the Python running the script has no time zone database, so it cannot check the viewing time zone and saved nothing. That is not the user's mistake. Tell the user, show them the output, and do not ask them for another time zone. Exit codes 5 and 6 are about places, below.
 
 The script always uses the profile's real listing store, also when the gallery shows sample listings.
 
@@ -69,18 +69,17 @@ Preferences are soft likes and dislikes, used only for ranking: `{"likes": [...]
 | --- | --- | --- |
 | `name` | What the user calls the place, unique among their places | `"Work"` |
 | `address` | A street address, or a landmark with its city, precise enough to find on a map | `"233 S Wacker Dr, Chicago, IL 60606"` |
-| `travel_mode` | How the user gets there: walk, bike, transit or car | `"transit"` |
-| `longest_trip_minutes` | The longest one-way trip there the user accepts, in minutes | `40` |
-| `visits_per_week` | How often the user goes there, per week. Twice a month is 0.5 | `5` |
 
-`places` is `[]` when the user has no place to consider, and that counts as answered. "Downtown" or "near the lake" cannot be found on a map: ask for the street, the building or a landmark. Places only rank listings. Never tell a listing agent about them.
+`places` is `[]` when the user has no place to consider, and that counts as answered. "Downtown" or "near the lake" cannot be found on a map: ask for the street, the building or a landmark. Places only rank listings, by the straight-line distance from each listing to each place. Never tell a listing agent about them.
+
+Saving places looks up each new address on OpenStreetMap's public geocoder, Nominatim, one request a second, and keeps the coordinates, so an address is looked up once. `save` then prints `places`, each with `found`, the location Nominatim found, and `attribution`. Say back where each place was found, such as "Work: Willis Tower, 233 South Wacker Drive", followed by the attribution, and ask the user to correct a place that is wrong. Exit code 5 means Nominatim found nothing for the places the error names, and nothing was saved: ask the user to describe those places again, by street address or by a landmark with its city, and save again. Exit code 6 means Nominatim could not be reached, and nothing was saved: tell the user, show them the output, and save the places again later in the conversation or in the next one. `missing` lists `places.coordinates` when a saved place has no coordinates, such as one saved by an earlier version: save `places` again as they are, which looks them up.
 
 ### Location priorities
 
 `location_priorities` says how much each part of location matters to the user, each as `low`, `medium` or `high`:
 
-- `places`: how much being within each place's longest trip matters. Needed when `places` is not empty.
-- `rapid_transit`: how much being near a train, subway or rapid bus stop matters.
+- `places`: how much being close to the places matters. Needed when `places` is not empty.
+- `rapid_transit`: how much being close to a train, subway or light rail station matters.
 - `areas`: an object from each area in `criteria.location`, written exactly as it is there, to how much the user wants that area. Every area needs one.
 
 ```json
@@ -88,6 +87,10 @@ Preferences are soft likes and dislikes, used only for ranking: `{"likes": [...]
 ```
 
 Ask in words and map the answer: "a lot" is high, "somewhat" is medium, "not much" or "not at all" is low. For the areas, ask whether the user prefers some of them. When all are equally good, save each as medium.
+
+### Transit feed
+
+`transit_feed` is the URL of the GTFS schedule feed of the rapid transit in the user's city, the zip file its transit agency publishes for developers. The stations of its rail, metro and light rail lines give each listing its distance to the nearest station. Without the setting, the feed is Chicago's CTA, `https://www.transitchicago.com/downloads/sch_data/google_transit.zip`. It is not part of the interview. When the user's areas are in another city, find its agency's GTFS feed URL on the agency's developer page, confirm it with the user and save it: `{"transit_feed": "https://..."}`. The listing features job downloads the stations once per feed.
 
 ### Listing sites
 

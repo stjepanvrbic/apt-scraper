@@ -7,8 +7,8 @@ from datetime import date
 from pathlib import Path
 
 from test_gallery_store import ListingStore, listing
-from code_features import code_features, unit_level
-from schema import MIGRATIONS, code_derived_features, content_fingerprint
+from code_features import DEFAULT_TRANSIT_FEED, Surroundings, code_features, distance_km, unit_level
+from schema import MIGRATIONS, code_derived_features, content_fingerprint, distances
 from store import validate_listing
 
 
@@ -24,6 +24,15 @@ def facts(*units, **changes):
 
 def home(address, **changes):
     return listing(id='zillow:1', address=address, title=address.split(',')[0], **changes)
+
+
+LOGAN_SQUARE = ('Logan Square', 41.929728, -87.708541)
+CALIFORNIA = ('California', 41.921939, -87.69689)
+STATIONS = [{'id': '41020', 'name': 'Logan Square', 'latitude': 41.929728, 'longitude': -87.708541},
+            {'id': '40570', 'name': 'California', 'latitude': 41.921939, 'longitude': -87.69689}]
+WORK = {'name': 'Work', 'address': '233 S Wacker Dr, Chicago, IL 60606'}
+WILLIS_TOWER = {'latitude': 41.8788764, 'longitude': -87.6359149, 'found': 'Willis Tower, 233 South Wacker Drive, Chicago'}
+HERE = (41.927895, -87.723366)
 
 
 class UnitLevelTests(unittest.TestCase):
@@ -101,6 +110,30 @@ class CodeFeatureTests(unittest.TestCase):
         self.assertIsNone(code_features(listing(price='Price on request', rental_period=None), None)['monthly_price'])
 
 
+class DistanceTests(unittest.TestCase):
+    def test_distance_is_the_great_circle_distance(self):
+        self.assertAlmostEqual(distance_km((41.0, -87.0), (42.0, -87.0)), 111.195, places=3)
+        self.assertAlmostEqual(distance_km((0.0, 0.0), (0.0, 1.0)), 111.195, places=3)
+        self.assertAlmostEqual(distance_km((0.0, 0.0), (0.0, 180.0)), 20015.114, places=3)
+        self.assertAlmostEqual(distance_km(HERE, (41.8788764, -87.6359149)), distance_km((41.8788764, -87.6359149), HERE))
+
+    def test_a_listing_gets_its_nearest_station_and_its_distance_to_each_place(self):
+        surroundings = Surroundings((CALIFORNIA, LOGAN_SQUARE), (('Work', 41.8788764, -87.6359149), ('Gym', 41.9443, -87.7093)))
+        features = code_features(home('1 Example St, Chicago'), facts(), surroundings)
+        self.assertEqual(features['nearest_station'], 'Logan Square')
+        self.assertAlmostEqual(features['station_distance_km'], distance_km(HERE, LOGAN_SQUARE[1:]))
+        self.assertAlmostEqual(features['station_distance_km'], 1.243, places=3)
+        self.assertEqual(sorted(features['place_distances_km']), ['Gym', 'Work'])
+        self.assertAlmostEqual(features['place_distances_km']['Work'], distance_km(HERE, (41.8788764, -87.6359149)))
+
+    def test_without_coordinates_stations_or_places_the_distances_are_unknown(self):
+        surroundings = Surroundings((CALIFORNIA,), (('Work', 41.8788764, -87.6359149),))
+        for features in (code_features(home('1 Example St, Chicago'), facts(latitude=None, longitude=None), surroundings),
+                         code_features(home('1 Example St, Chicago'), None, surroundings),
+                         code_features(home('1 Example St, Chicago'), facts())):
+            self.assertEqual((features['nearest_station'], features['station_distance_km'], features['place_distances_km']), (None, None, {}))
+
+
 class StoredCodeFeatureTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
@@ -147,6 +180,83 @@ class StoredCodeFeatureTests(unittest.TestCase):
         self.assertEqual(store.schema_version, len(MIGRATIONS))
         features = store.code_features(today=date(2026, 10, 25))['zillow:1']
         self.assertEqual((features['fingerprint'], features['monthly_price'], features['unit_level']), (fingerprint, 1700, 'garden'))
+
+
+class StoredDistanceTests(StoredCodeFeatureTests):
+    def setUp(self):
+        super().setUp()
+        self.save(home('3835 W Wrightwood Ave, Chicago, IL 60647'), facts())
+        self.store.upsert_listing(listing(id='zillow:2', address='12 Example St, Chicago'))
+
+    def distances(self, listing_id='zillow:1'):
+        features = self.store.code_features()[listing_id]
+        return features['nearest_station'], features['station_distance_km'], features['place_distances_km']
+
+    def test_saved_stations_and_geocoded_places_give_every_listing_its_distances(self):
+        self.assertEqual(self.distances(), (None, None, {}))
+        self.store.save_stations(DEFAULT_TRANSIT_FEED, STATIONS)
+        self.assertEqual(self.distances()[:2], ('Logan Square', distance_km(HERE, LOGAN_SQUARE[1:])))
+        self.store.save_geocodes({WORK['address']: WILLIS_TOWER})
+        self.store.update_settings(places=[WORK])
+        self.assertEqual(self.distances()[2], {'Work': distance_km(HERE, (WILLIS_TOWER['latitude'], WILLIS_TOWER['longitude']))})
+        self.assertEqual(self.distances('zillow:2'), (None, None, {}))
+        self.store.update_settings(places=[])
+        self.assertEqual(self.distances()[2], {})
+        self.assertEqual(self.store.ranking_inputs()['listings'][0]['code']['place_distances_km'], {})
+
+    def test_a_listing_saved_later_gets_its_distances_when_it_is_saved(self):
+        self.store.save_stations(DEFAULT_TRANSIT_FEED, STATIONS)
+        self.store.save_geocodes({WORK['address']: WILLIS_TOWER})
+        self.store.update_settings(places=[WORK])
+        self.save(home('2326 N Sacramento Ave, Chicago, IL 60647'), facts(latitude=41.9235, longitude=-87.7027))
+        nearest, distance, places = self.distances()
+        self.assertEqual(nearest, 'California')
+        self.assertAlmostEqual(distance, distance_km((41.9235, -87.7027), CALIFORNIA[1:]))
+        self.assertEqual(list(places), ['Work'])
+
+    def test_stations_count_only_for_the_transit_feed_they_were_fetched_from(self):
+        self.store.save_stations(DEFAULT_TRANSIT_FEED, STATIONS)
+        self.assertEqual(len(self.store.transit_feed()['stations']), 2)
+        self.store.update_settings(transit_feed='https://transit.example/gtfs.zip')
+        self.assertEqual(self.store.transit_feed(), {'url': 'https://transit.example/gtfs.zip', 'fetched_at': None, 'stations': []})
+        self.assertEqual(self.distances()[:2], (None, None))
+        self.store.save_stations('https://transit.example/gtfs.zip', STATIONS[1:])
+        self.assertEqual(self.distances()[0], 'California')
+
+    def test_a_place_without_coordinates_is_missing_and_has_no_distance(self):
+        self.store.update_settings(places=[WORK, {'name': 'Gym', 'address': 'First Ascent Avondale, Chicago'}])
+        self.store.save_geocodes({WORK['address']: WILLIS_TOWER})
+        self.assertIn('places.coordinates', self.store.missing_settings())
+        self.store.update_settings(places=[WORK])
+        self.assertNotIn('places.coordinates', self.store.missing_settings())
+        self.assertEqual(list(self.distances()[2]), ['Work'])
+
+    def test_a_store_from_before_distances_keeps_each_place_as_its_name_and_address(self):
+        older = Path(self.path.parent) / 'older.sqlite3'
+        data = validate_listing(home('3835 W Wrightwood Ave, Chicago, IL 60647'))
+        fingerprint = content_fingerprint(data)
+        with closing(sqlite3.connect(older)) as connection, connection:
+            for index, migration in enumerate(MIGRATIONS[:MIGRATIONS.index(distances)]):
+                migration(connection)
+                connection.execute(f'PRAGMA user_version = {index + 1}')
+            connection.execute('INSERT INTO listings (id, data, status, first_seen, fingerprint) VALUES (?, ?, ?, ?, ?)',
+                               (data['id'], json.dumps(data), 'available', data['first_seen'], fingerprint))
+            connection.execute('INSERT INTO ranking (listing_id, fingerprint, features) VALUES (?, ?, ?)',
+                               (data['id'], fingerprint, json.dumps({'facts': facts()})))
+            connection.execute('''INSERT INTO code_features (listing_id, fingerprint, monthly_price, photo_count, latitude, longitude)
+                VALUES (?, ?, 2100, 3, ?, ?)''', (data['id'], fingerprint, *HERE))
+            connection.execute("INSERT INTO settings VALUES ('places', ?)", (json.dumps([
+                {**WORK, 'travel_mode': 'transit', 'longest_trip_minutes': 40, 'visits_per_week': 5}]),))
+        store = ListingStore(older)
+        self.assertEqual(store.schema_version, len(MIGRATIONS))
+        self.assertEqual(store.settings()['places'], [WORK])
+        self.assertIn('places.coordinates', store.missing_settings())
+        features = store.code_features()['zillow:1']
+        self.assertEqual((features['monthly_price'], features['nearest_station'], features['place_distances_km']), (2100, None, {}))
+        store.save_geocodes({WORK['address']: WILLIS_TOWER})
+        store.update_settings(places=[WORK])
+        self.assertEqual(list(store.code_features()['zillow:1']['place_distances_km']), ['Work'])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,8 +1,9 @@
 """The scoring model: a Bayesian logistic regression over the listings' feature records, fitted in code.
 
 The features are the columns `design` builds from each listing's feature record (record.py), its code-derived
-features (code_features.py), the criteria areas whose search found it, its nearness to the favorites and its
-judgments of the stated preferences no other feature expresses. Numeric columns are centered and scaled to standard
+features (code_features.py) with its distances to the nearest rapid-transit station and to each place, the criteria
+areas whose search found it, its nearness to the favorites and its judgments of the stated preferences no other
+feature expresses. Numeric columns are centered and scaled to standard
 deviation 0.5 and binary columns centered (Gelman et al. 2008, "A weakly informative default prior distribution for
 logistic and other regression models"). A value the listing does not state is the column mean, so it counts neither
 way.
@@ -30,6 +31,7 @@ from functools import cached_property
 from operator import mul
 from statistics import fmean, median, pstdev
 
+from code_features import distance_km
 from record import CATEGORIES, RATINGS
 
 STATED_WEIGHT = 1.0
@@ -43,7 +45,6 @@ DEFAULT_HYPERPARAMETERS = (PRIOR_SCALES[0], UNLABELED_WEIGHTS[0])
 TUNING_FAVORITES = 3
 IMPORTANCE = {'low': 0.25, 'medium': 0.5, 'high': 1.0}
 LOCATION_BANDWIDTH_KM = 1.0
-EARTH_RADIUS_KM = 6371.0
 TOP = 20
 EXPLORATION_RANKS = (7, 14)
 QUESTION_CANDIDATES = 40
@@ -246,7 +247,7 @@ def expressed(readings, kind, phrase):
     return bool(readings.get((kind, phrase)))
 
 
-def reading_vocabulary(tags, areas):
+def reading_vocabulary(tags, areas, places=()):
     """Every feature a reading of a note or a stated preference may name, with what a like of it means."""
     vocabulary = {f'rating:{name}': f'toward {high} (5), away from {low} (1)' for name, (low, high) in RATINGS.items()}
     vocabulary.update({f'{name}:{value}': f'{name.replace("_", " ")} is {value}' for name, values in CATEGORIES.items() for value in values})
@@ -255,6 +256,8 @@ def reading_vocabulary(tags, areas):
     vocabulary.update({'price': 'a higher monthly price', 'size': 'a larger size', 'price_per_sqft': 'a higher price per square foot',
                        'bedrooms': 'more bedrooms', 'bathrooms': 'more bathrooms'})
     vocabulary.update({f'area:{area}': f'in {area}' for area in areas})
+    vocabulary['station_distance'] = 'a longer distance to the nearest rapid-transit station'
+    vocabulary.update({f'place:{place}': f'a longer distance to {place}' for place in places})
     vocabulary.update({f'tag:{tag}': f'has the trait or concern "{tag}"' for tag in tags})
     return vocabulary
 
@@ -292,13 +295,6 @@ def validate_note_reading(reading, vocabulary):
     if set(reading['likes']) & set(reading['dislikes']):
         raise ValueError('A feature is either liked or disliked in one note.')
     return {'sentiment': reading['sentiment'], 'likes': list(dict.fromkeys(reading['likes'])), 'dislikes': list(dict.fromkeys(reading['dislikes']))}
-
-
-def distance_km(first, second):
-    latitude = math.radians((first[0] + second[0]) / 2)
-    north = math.radians(second[0] - first[0])
-    east = math.radians(second[1] - first[1]) * math.cos(latitude)
-    return EARTH_RADIUS_KM * math.hypot(north, east)
 
 
 def kernel(first, second):
@@ -346,6 +342,10 @@ def raw_values(listing, phrases, areas, density):
         values.update({f'area:{area}': float(area in listing['areas']) for area in areas})
     if density is not None:
         values['near_favorites'] = density
+    if listing['code'].get('station_distance_km') is not None:
+        values['station_distance'] = listing['code']['station_distance_km']
+    for place, distance in (listing['code'].get('place_distances_km') or {}).items():
+        values[f'place:{place}'] = distance
     for _, phrase in phrases:
         verdict = (listing['judgments'].get(phrase) or {}).get('verdict')
         if verdict in ('has', 'rules out'):
@@ -372,11 +372,17 @@ def prior_means(inputs, phrases):
             add(name, NOTE_WEIGHT)
         for name in reading['dislikes']:
             add(name, -NOTE_WEIGHT)
-    areas = inputs['settings'].get('location_priorities', {}).get('areas', {})
+    priorities = inputs['settings'].get('location_priorities', {})
+    areas = priorities.get('areas', {})
     for area, importance in areas.items():
         add(f'area:{area}', IMPORTANCE[importance] * STATED_WEIGHT)
     if areas:
         add('near_favorites', max(IMPORTANCE[importance] for importance in areas.values()) * STATED_WEIGHT)
+    if 'rapid_transit' in priorities:
+        add('station_distance', -IMPORTANCE[priorities['rapid_transit']] * STATED_WEIGHT)
+    if 'places' in priorities:
+        for place in inputs['settings'].get('places', []):
+            add(f'place:{place["name"]}', -IMPORTANCE[priorities['places']] * STATED_WEIGHT)
     return means
 
 
@@ -429,7 +435,7 @@ def design(inputs):
     columns, matrix = [], []
     for name in sorted(names, key=lambda name: (sparse_column(name), name)):
         known = [values[name] for values in raw if name in values]
-        numeric = name.startswith('rating:') or name in CODE_NUMBERS or name == 'near_favorites'
+        numeric = name.startswith(('rating:', 'place:')) or name in (*CODE_NUMBERS, 'near_favorites', 'station_distance')
         spread = pstdev(known)
         if spread == 0:
             continue
@@ -764,6 +770,10 @@ def display(model_design, index, name):
         distances = [distance_km(here, model_design.coordinates[favorite]) for favorite in model_design.favorites
                      if favorite in model_design.coordinates and favorite != model_design.ids[index]]
         return f'{min(distances):.1f} km from the nearest favorite' if distances else None
+    if name == 'station_distance':
+        return f'{raw[name]:.1f} km to the nearest station, {code["nearest_station"]}'
+    if kind == 'place':
+        return f'{raw[name]:.1f} km from {key}'
     currency = f' {code["currency"]}' if code.get('currency') else ''
     return {
         'price': lambda: f'{code["monthly_price"]:,.0f}{currency} a month',

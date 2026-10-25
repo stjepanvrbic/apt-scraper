@@ -76,13 +76,20 @@ Saving normalizes each trait and concern: lowercase with single spaces, the last
 
 Code computes what it reads reliably from the listing, such as the monthly price, size, unit level from unit labels and coordinates, whenever its content is saved, without a model call. They are in the store's `code_features` table, apart from the extraction, so neither overwrites the other. See `code_features` in [the gallery guide](gallery.md).
 
+### Distances
+
+A listing with coordinates also has the great-circle distance to the nearest rapid-transit station, with that station's name, and to each of the user's places, computed by `distances` in `code_features.py` from coordinates the store already holds. They are computed again for every listing when the places, the transit feed setting or the stations change. A listing without coordinates has them as unknown.
+
+- **Places.** A place is a name and an address. When the interview saves places, `settings.py` geocodes each address the store has no coordinates for through the public Nominatim server, as `geodata.py` describes: one request a second, a User-Agent naming apt-scraper, and the result kept in the store's `geocodes` table by address, so an address is looked up once ([Nominatim usage policy](https://operations.osmfoundation.org/policies/nominatim/)). An address Nominatim finds nothing for, or Nominatim not answering, saves nothing, and the interview asks the user to describe the place again or tries later. The interview says back where each place was found, with "© OpenStreetMap contributors".
+- **Stations.** The `transit_feed` setting names the city's GTFS schedule feed, Chicago's CTA feed by default. The `apt-scraper-features` job downloads it once per feed URL and keeps only its stations, in the store's `stations` table: every stop a rail, metro, light rail or monorail route serves (GTFS `route_type` 0, 1, 2 and 12, and the extended types 100 to 199, 400 to 499 and 900 to 999), counted at its parent station when it has one. CTA's feed gives its 143 L stations. GTFS has no route type for bus rapid transit, so no bus stop counts. A failed download is reported by `features.py status` and tried again after 6 hours, because the CTA feed is about 69 MB.
+
 ## Readings of notes and preferences
 
 The scoring model learns through the features of the record, so each note the user writes on a listing and each stated like and dislike is read once by the model into the features it names. A stated preference is read into the record features that express it, each with a direction: the dislike "Carpet" is `floor:carpet` disliked. A preference no feature expresses, such as "Near a park", is read as naming none and is then judged per listing, as [Preferences](#preferences) says. A note is read into its sentiment about the listing, positive, negative, mixed or neutral, and the features it praises and criticizes.
 
 The readings run in the wakes of the `apt-scraper-features` job: its run counts the notes and preferences without a reading and wakes the agent for them, and the agent reads them with `features.py readings` and saves them with `features.py read`, as the [listing-features skill](../profile/skills/listing-features/SKILL.md) says. A preference is identified by its kind and wording, so a reworded preference is read again and an unchanged one never. A note is read once. A reading that fails three times is given up, as extractions are, and `status` reports it. Readings are in the store's `preference_readings` and `note_readings` tables, checked against the vocabulary below by `validate_preference_reading` and `validate_note_reading` in `scoring.py`.
 
-The vocabulary a reading may name: `rating:<rating>` (toward 5), `floor:`, `style:`, `outdoor_space:` and `building_type:` with a value, `unit_level:` with garden, ground, middle or top, `flag:<flag>`, `tag:<tag>` for any tag of the tag list, `price`, `size`, `price_per_sqft`, `bedrooms`, `bathrooms` (toward more), and `area:<area>` for each area of the criteria.
+The vocabulary a reading may name: `rating:<rating>` (toward 5), `floor:`, `style:`, `outdoor_space:` and `building_type:` with a value, `unit_level:` with garden, ground, middle or top, `flag:<flag>`, `tag:<tag>` for any tag of the tag list, `price`, `size`, `price_per_sqft`, `bedrooms`, `bathrooms`, `station_distance` and `place:<place>` for each place (toward more), and `area:<area>` for each area of the criteria. The like "Close to the L" is `station_distance` disliked.
 
 ## Scoring
 
@@ -108,6 +115,7 @@ On this Windows machine, 300 listings with 50 favorites and about 180 features r
 | `tag:<tag>` | the record's traits and concerns | 1 when the listing has it, for tags at least 2 listings have or a reading names |
 | `price`, `size`, `price_per_sqft`, `bedrooms`, `bathrooms`, `photos` | the code features | log monthly price, log size, the others as they are |
 | `area:<area>` | the criteria areas whose search found the listing | 1 for each |
+| `station_distance`, `place:<place>` | the code features' distances | kilometers to the nearest station and to each place |
 | `near_favorites` | the coordinates | the mean Gaussian kernel, 1 km wide, of the favorites other than the listing itself. A mean, because a favorite has one favorite fewer to be near than any other listing, and a sum would count that against favorites |
 | `preference:<phrase>` | the judgments of each stated preference read as naming no feature, or not read yet | 1 has, 0 rules out |
 
@@ -119,7 +127,7 @@ Numeric columns are centered and scaled to standard deviation 0.5, binary column
 
 A Bayesian logistic regression. Each listing in the fit is a row: a favorite is positive with weight 1, a contact request positive with weight 2, a dismissal negative with weight 1, and a listing whose latest note reading is positive or negative is labeled so, unless an action labels it. Every other ranked listing is a weak negative with a small weight. Each pairwise answer is a row on the two listings' difference, the chosen one above. Labeled listings that are no longer shown, such as an unavailable favorite, stay in the fit.
 
-The prior on each weight is Gaussian with the same scale for all. Its mean is zero except where a reading names the feature: a stated like or dislike adds 1 or −1 to the features its reading names (or to its `preference:` column), a note's like or dislike adds 0.5 or −0.5, capped at ±2. Each area of the criteria starts at 1, 0.5 or 0.25 for high, medium or low priority, and `near_favorites` at the highest area priority. Labels can outweigh any of them: with the dislike "Carpet" and five carpeted favorites, the carpet weight becomes positive (`OverruledPreferenceTests` in `tests/test_scoring.py`).
+The prior on each weight is Gaussian with the same scale for all. Its mean is zero except where a reading names the feature: a stated like or dislike adds 1 or −1 to the features its reading names (or to its `preference:` column), a note's like or dislike adds 0.5 or −0.5, capped at ±2. Each area of the criteria starts at 1, 0.5 or 0.25 for high, medium or low priority, and `near_favorites` at the highest area priority. `station_distance` starts at −1, −0.5 or −0.25 by the priority of rapid transit, and each place's distance by the priority of places, so of two listings alike but for the distance to a place, the closer ranks higher until labels say otherwise (`DistanceTests` in `tests/test_scoring.py`). Labels can outweigh any of them: with the dislike "Carpet" and five carpeted favorites, the carpet weight becomes positive (`OverruledPreferenceTests` in `tests/test_scoring.py`).
 
 Newton iterations with step halving find the posterior mode, and the Hessian there gives the Laplace posterior. The weak-negative weight is chosen among 0.05 and 0.1, then the prior scale among 1, 0.5 and 2, by the leave-one-out check below, each time the value with the best mean held-out rank of the favorites, the first on a tie. The choice uses one Newton step from each full fit, the usual approximate leave-one-out. With fewer than 3 favorites, the scale is 1 and the weight 0.05.
 
@@ -140,10 +148,6 @@ With more than 20 ranked listings, ranks 7 and 14 hold exploration listings, mar
 ### Pairwise questions
 
 `pairwise_questions(store, count)` in `rerank.py` fits the model with the latest rerank's prior scale and weak-negative weight and returns pairs among the 40 best-ranked listings whose order the posterior is least sure of: the probability that one scores above the other, from the Laplace posterior, is closest to one half. Each listing is in at most one question, and a pair answered either way is not asked again. Answers are stored with `ListingStore.answer_pair(chosen, other)` and count at the next rerank. Before any label, the posterior is the prior from the stated preferences.
-
-### Location features still to come
-
-Distance to rapid transit and travel time to each place join as columns like `near_favorites`, with prior means from the location priorities: the code features gain the values, `raw_values` in `scoring.py` maps them to columns, and `prior_means` gives a place beyond its longest accepted trip a negative starting weight by the place's priority.
 
 ## Commands
 
@@ -171,4 +175,4 @@ python -m unittest discover -s tests -v
 ruff check profile tests
 ```
 
-`tests/test_feature_record.py` covers the record contract, `tests/test_listing_photos.py` the duplicate removal and the contact sheets on a 40-photo fixture, `tests/test_feature_store.py` the store, and `tests/test_features_run.py` the job against real SQLite stores: which listings wait, preparation, saving through the command line, preferences stated later, readings, attempts, failures and the shipped job. `tests/test_scoring.py` covers the scoring model on constructed listings, among them Spec › Acceptance "Overruled preference", "Exploration" and a single pairwise answer, and `tests/test_rerank.py` reranks against real SQLite stores, the 300-listing timing and the ranking script.
+`tests/test_feature_record.py` covers the record contract, `tests/test_listing_photos.py` the duplicate removal and the contact sheets on a 40-photo fixture, `tests/test_feature_store.py` the store, and `tests/test_features_run.py` the job against real SQLite stores: which listings wait, preparation, saving through the command line, preferences stated later, readings, attempts, failures and the shipped job. `tests/test_geodata.py` covers geocoding and reading stations from a GTFS feed, `tests/test_code_features.py` the distances in the store, and `tests/test_scoring.py` covers the scoring model on constructed listings, among them Spec › Acceptance "Overruled preference", "Location", "Exploration" and a single pairwise answer, and `tests/test_rerank.py` reranks against real SQLite stores, the 300-listing timing and the ranking script.

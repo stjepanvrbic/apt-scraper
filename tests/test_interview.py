@@ -1,4 +1,7 @@
 import copy
+import contextlib
+import functools
+import io
 import json
 import os
 import subprocess
@@ -13,6 +16,11 @@ from test_gallery_store import ListingStore, listing
 from store import TimeZoneDataMissing
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'profile/skills/interview/scripts/settings.py'
+sys.path.insert(0, str(SCRIPT.parent))
+
+import geodata  # noqa: E402
+import settings as settings_script  # noqa: E402
+from geodata import ATTRIBUTION, SourceUnavailable  # noqa: E402
 
 COMPLETE = {
     'criteria': {
@@ -31,8 +39,8 @@ COMPLETE = {
         'unavailable': [{'from': '2026-12-20', 'to': '2027-01-03'}],
     },
     'places': [
-        {'name': 'Work', 'address': '233 S Wacker Dr, Chicago, IL 60606', 'travel_mode': 'transit', 'longest_trip_minutes': 40, 'visits_per_week': 5},
-        {'name': 'Climbing gym', 'address': 'First Ascent Avondale, Chicago', 'travel_mode': 'bike', 'longest_trip_minutes': 20, 'visits_per_week': 2},
+        {'name': 'Work', 'address': '233 S Wacker Dr, Chicago, IL 60606'},
+        {'name': 'Climbing gym', 'address': 'First Ascent Avondale, Chicago'},
     ],
     'location_priorities': {
         'places': 'high',
@@ -41,7 +49,12 @@ COMPLETE = {
     },
 }
 
-PLACE = {'name': 'Work', 'address': 'Loop, Chicago', 'travel_mode': 'transit', 'longest_trip_minutes': 30, 'visits_per_week': 5}
+PLACE = {'name': 'Work', 'address': 'Loop, Chicago'}
+LOCATIONS = {
+    '233 S Wacker Dr, Chicago, IL 60606': {'latitude': 41.8788764, 'longitude': -87.6359149, 'found': 'Willis Tower, 233 South Wacker Drive, Chicago'},
+    'First Ascent Avondale, Chicago': {'latitude': 41.9443, 'longitude': -87.7093, 'found': 'First Ascent Avondale, 3516 North Spaulding Avenue, Chicago'},
+    '1 N State St, Chicago, IL 60602': {'latitude': 41.8822, 'longitude': -87.6278, 'found': '1 North State Street, Chicago'},
+}
 
 
 WITHOUT_TIME_ZONE_DATA = '''
@@ -67,6 +80,7 @@ class SettingsStoreTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.path = Path(directory.name) / 'listings.sqlite3'
         self.store = ListingStore(self.path)
+        self.store.save_geocodes(LOCATIONS)
 
     def test_new_store_is_missing_every_required_setting(self):
         self.assertEqual(self.store.missing_settings(), [
@@ -103,6 +117,12 @@ class SettingsStoreTests(unittest.TestCase):
     def test_no_places_is_an_answer_that_needs_no_priority_for_places(self):
         self.store.update_settings(**settings(places=[], location_priorities={'rapid_transit': 'high', 'areas': COMPLETE['location_priorities']['areas']}))
         self.assertEqual(self.store.settings()['places'], [])
+        self.assertEqual(self.store.missing_settings(), [])
+
+    def test_a_saved_place_without_coordinates_is_missing_until_it_is_saved_again(self):
+        self.store.update_settings(**settings(places=[*COMPLETE['places'], {**PLACE, 'name': 'Office'}]))
+        self.assertEqual(self.store.missing_settings(), ['places.coordinates'])
+        self.store.update_settings(places=COMPLETE['places'])
         self.assertEqual(self.store.missing_settings(), [])
 
     def test_places_need_a_priority_and_every_area_of_the_criteria_needs_one(self):
@@ -228,16 +248,12 @@ class SettingsStoreTests(unittest.TestCase):
             ('viewing_availability', {'unavailable': [{'from': '2027-01-03', 'to': '2026-12-20'}]}),
             ('viewing_availability', {'notes': 'Evenings'}),
             ('places', PLACE),
-            ('places', [{'name': 'Work', 'address': 'Loop, Chicago'}]),
             ('places', [{**PLACE, 'coordinates': [41.88, -87.63]}]),
             ('places', [{**PLACE, 'name': ' '}]),
             ('places', [{**PLACE, 'address': ''}]),
-            ('places', [{**PLACE, 'travel_mode': 'boat'}]),
-            ('places', [{**PLACE, 'longest_trip_minutes': 0}]),
-            ('places', [{**PLACE, 'longest_trip_minutes': '30'}]),
-            ('places', [{**PLACE, 'longest_trip_minutes': True}]),
-            ('places', [{**PLACE, 'visits_per_week': -1}]),
-            ('places', [{**PLACE, 'visits_per_week': float('inf')}]),
+            ('places', [{**PLACE, 'travel_mode': 'transit'}]),
+            ('places', [{**PLACE, 'longest_trip_minutes': 30}]),
+            ('places', [{**PLACE, 'visits_per_week': 5}]),
             ('places', [PLACE, {**PLACE, 'name': 'work '}]),
             ('location_priorities', {'rapid_transit': 'very'}),
             ('location_priorities', {'places': 3}),
@@ -267,6 +283,7 @@ class SettingsScriptTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.home = Path(directory.name)
         self.path = self.home / 'workspace' / 'gallery' / 'listings.sqlite3'
+        ListingStore(self.path).save_geocodes(LOCATIONS)
 
     def run_script(self, *arguments, interpreter=()):
         environment = {**os.environ, 'HERMES_HOME': str(self.home)}
@@ -391,6 +408,79 @@ class SettingsScriptTests(unittest.TestCase):
         for arguments in [('listings',), ('save', str(self.home / 'cache' / 'scratch' / 'settings.json'), '--outside', 'example:100')]:
             with self.subTest(arguments=arguments):
                 self.assertEqual(self.run_script(*arguments).returncode, 2)
+
+class PlaceGeocodingTests(unittest.TestCase):
+    """settings.py save in this process, with Nominatim answered by the test."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.home = Path(directory.name)
+        environment = patch.dict(os.environ, {'HERMES_HOME': str(self.home)})
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.store = ListingStore(self.home / 'workspace' / 'gallery' / 'listings.sqlite3')
+        self.store.update_settings(**{name: COMPLETE[name] for name in ('criteria', 'location_priorities')})
+        self.searches, self.unavailable = [], False
+        geocode = functools.partial(geodata.geocode, search=self.search, sleep=lambda seconds: None)
+        patcher = patch.object(settings_script, 'geocode', geocode)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def search(self, address):
+        self.searches.append(address)
+        if self.unavailable:
+            raise SourceUnavailable('Nominatim could not be reached: timed out')
+        return LOCATIONS.get(address)
+
+    def save(self, value):
+        file = self.home / 'cache' / 'scratch' / 'settings.json'
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(json.dumps(value), encoding='utf-8')
+        output, errors = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            code = settings_script.main(['save', str(file)])
+        self.assertEqual(file.exists(), code != 0)
+        return code, json.loads(output.getvalue()) if code == 0 else None, errors.getvalue()
+
+    def test_each_place_is_geocoded_once_when_saved_and_said_back_as_found(self):
+        code, result, errors = self.save({'places': COMPLETE['places']})
+        self.assertEqual(code, 0, errors)
+        self.assertEqual(self.searches, [place['address'] for place in COMPLETE['places']])
+        self.assertEqual(result['places'], [{**place, 'found': LOCATIONS[place['address']]['found']} for place in COMPLETE['places']])
+        self.assertEqual(result['attribution'], ATTRIBUTION)
+        self.assertEqual(self.store.geocodes([COMPLETE['places'][0]['address']]), {COMPLETE['places'][0]['address']: LOCATIONS[COMPLETE['places'][0]['address']]})
+        moved = [{'name': 'Work', 'address': '1 N State St, Chicago, IL 60602'}, COMPLETE['places'][1]]
+        self.assertEqual(self.save({'places': moved})[0], 0)
+        self.assertEqual(self.searches[2:], ['1 N State St, Chicago, IL 60602'])
+        self.assertEqual(self.store.settings()['places'], moved)
+
+    def test_a_place_nominatim_cannot_find_is_named_nothing_is_saved_and_the_places_found_are_kept(self):
+        code, _, errors = self.save({'places': [*COMPLETE['places'], {**PLACE, 'name': 'Office'}], 'preferences': COMPLETE['preferences']})
+        self.assertEqual(code, settings_script.PLACE_NOT_FOUND)
+        self.assertIn('Office ("Loop, Chicago")', errors)
+        self.assertNotIn('places', self.store.settings())
+        self.assertNotIn('preferences', self.store.settings())
+        self.assertEqual(len(self.store.geocodes(LOCATIONS)), 2)
+        self.searches.clear()
+        self.assertEqual(self.save({'places': COMPLETE['places']})[0], 0)
+        self.assertEqual(self.searches, [])
+
+    def test_an_unreachable_nominatim_saves_nothing_with_its_own_exit_code(self):
+        self.unavailable = True
+        code, _, errors = self.save({'places': COMPLETE['places']})
+        self.assertEqual(code, settings_script.GEOCODING_UNAVAILABLE)
+        self.assertIn('Nothing was saved', errors)
+        self.assertNotIn('places', self.store.settings())
+
+    def test_a_malformed_place_is_rejected_before_any_request(self):
+        self.assertEqual(self.save({'places': [{**PLACE, 'travel_mode': 'transit'}]})[0], 1)
+        self.assertEqual(self.searches, [])
+
+    def test_no_places_need_no_request(self):
+        code, result, _ = self.save({'places': []})
+        self.assertEqual((code, result['places'], self.searches), (0, [], []))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -27,14 +27,18 @@ def record(*, floor='hardwood', traits=(), concerns=(), ratings=None, unit_level
 
 
 def entry(identifier, *, price=2000, size=900, bedrooms=2, latitude=None, longitude=None, areas=('Logan Square',), unit_label=None,
-          code_level=None, rankable=True, favorite=False, dismissed=False, contact=False, user_notes=False, judgments=None,
-          given_up=False, **record_fields):
+          code_level=None, station=None, places=None, rankable=True, favorite=False, dismissed=False, contact=False, user_notes=False,
+          judgments=None, given_up=False, **record_fields):
+    """A listing as ranking_inputs gives it. station is (name, distance in km) to the nearest station, places the
+    distance to each place by name."""
     return {
         'id': identifier, 'fingerprint': f'fingerprint-{identifier}', 'title': f'Listing {identifier}', 'address': None,
         'rankable': rankable and not dismissed, 'record': None if given_up else record(**record_fields), 'judgments': judgments or {},
         'code': {'monthly_price': price, 'currency': 'USD', 'size_sqft': size, 'price_per_sqft': price / size if size else None,
                  'bedrooms': bedrooms, 'bathrooms': 1, 'unit_label': unit_label, 'unit_floor': None, 'unit_level': code_level,
-                 'photo_count': 10, 'latitude': latitude, 'longitude': longitude},
+                 'photo_count': 10, 'latitude': latitude, 'longitude': longitude,
+                 'nearest_station': station[0] if station else None, 'station_distance_km': station[1] if station else None,
+                 'place_distances_km': places or {}},
         'areas': list(areas), 'given_up': given_up, 'favorite': favorite, 'dismissed': dismissed, 'contact': contact,
         'user_notes': user_notes, 'paired': False,
     }
@@ -304,6 +308,57 @@ class LocationTests(unittest.TestCase):
         self.assertIn('km from the nearest favorite', result['ranked']['listing:near']['reason'])
 
 
+class DistanceTests(unittest.TestCase):
+    """Spec › Acceptance "Location": of two test listings alike except for the distance to a place, the closer one ranks
+    higher."""
+
+    SETTINGS = {**SETTINGS, 'places': [{'name': 'Work', 'address': '233 S Wacker Dr, Chicago, IL 60606'}],
+                'location_priorities': {**SETTINGS['location_priorities'], 'places': 'high'}}
+
+    def surroundings(self, count, seed=3, **changes):
+        generator = random.Random(seed)
+        return [{**listing, 'code': {**listing['code'], 'nearest_station': 'Logan Square', 'station_distance_km': generator.uniform(0.1, 2.5),
+                                     'place_distances_km': {'Work': generator.uniform(2, 12)}}}
+                for listing in neighborhood(count, seed, **changes)]
+
+    def test_the_listing_closer_to_a_place_ranks_higher_than_one_alike_but_farther(self):
+        closer = entry('listing:closer', station=('Logan Square', 0.8), places={'Work': 4.0}, latitude=41.92, longitude=-87.71)
+        farther = entry('listing:farther', station=('Logan Square', 0.8), places={'Work': 9.0}, latitude=41.92, longitude=-87.71)
+        for name, others in [('without labels', self.surroundings(30)),
+                             ('with favorites', [{**listing, 'favorite': index < 5} for index, listing in enumerate(self.surroundings(30))])]:
+            with self.subTest(name):
+                result = rank_listings(inputs([*others, closer, farther], settings=self.SETTINGS), seed=1)
+                self.assertLess(result['ranked']['listing:closer']['rank'], result['ranked']['listing:farther']['rank'])
+                self.assertLess(contribution(result, 'listing:farther', 'place:Work'), contribution(result, 'listing:closer', 'place:Work'))
+
+    def test_the_listing_closer_to_a_station_ranks_higher_than_one_alike_but_farther(self):
+        listings = [entry('listing:near', station=('Logan Square', 0.3)), entry('listing:far', station=('California', 1.9))]
+        self.assertEqual(ranks(rank_listings(inputs(listings), seed=1)), {'listing:near': 1, 'listing:far': 2})
+
+    def test_the_location_priorities_set_the_starting_weights_of_the_distances(self):
+        listings = [entry('listing:1', station=('A', 0.3), places={'Work': 3.0}), entry('listing:2', station=('B', 1.9), places={'Work': 7.0})]
+        for places, rapid_transit, expected in [('high', 'low', {'place:Work': -1.0, 'station_distance': -0.25}),
+                                                ('low', 'medium', {'place:Work': -0.25, 'station_distance': -0.5})]:
+            settings = {**self.SETTINGS, 'location_priorities': {**self.SETTINGS['location_priorities'], 'places': places, 'rapid_transit': rapid_transit}}
+            model_design = design(inputs(listings, settings=settings))
+            self.assertEqual({name: model_design.prior_mean[model_design.index(name)] for name in expected}, expected)
+
+    def test_a_listing_without_coordinates_has_unknown_distances_that_count_neither_way(self):
+        listings = [*self.surroundings(10), entry('listing:unknown', areas=('Logan Square',))]
+        result = rank_listings(inputs(listings, settings=self.SETTINGS), seed=1)
+        parts = {part['feature']: part for part in result['ranked']['listing:unknown']['explanation']['contributions']}
+        for name in ('station_distance', 'place:Work'):
+            self.assertEqual((parts[name]['contribution'], parts[name]['value']), (0, None))
+
+    def test_explanations_state_the_distances_in_kilometers(self):
+        listings = [entry('listing:1', station=('Logan Square', 0.34), places={'Work': 2.04}),
+                    entry('listing:2', station=('California', 1.9), places={'Work': 9.0})]
+        result = rank_listings(inputs(listings, settings=self.SETTINGS), seed=1)
+        parts = {part['feature']: part['value'] for part in result['ranked']['listing:1']['explanation']['contributions']}
+        self.assertEqual((parts['station_distance'], parts['place:Work']), ('0.3 km to the nearest station, Logan Square', '2.0 km from Work'))
+        self.assertIn('2.0 km from Work', result['ranked']['listing:1']['reason'])
+
+
 class ExplorationTests(unittest.TestCase):
     """Spec › Acceptance "Exploration": with more than 20 ranked listings, exactly two of the top 20 are marked as
     exploration listings, and neither has a label from the user."""
@@ -434,6 +489,13 @@ class LikelihoodTests(unittest.TestCase):
 class ReadingTests(unittest.TestCase):
     def setUp(self):
         self.vocabulary = reading_vocabulary(['exposed brick'], ['Logan Square'])
+
+    def test_readings_may_name_the_distances(self):
+        vocabulary = reading_vocabulary([], ['Logan Square'], ['Work'])
+        self.assertEqual((vocabulary['station_distance'], vocabulary['place:Work']),
+                         ('a longer distance to the nearest rapid-transit station', 'a longer distance to Work'))
+        self.assertEqual(validate_preference_reading([{'feature': 'station_distance', 'direction': 'dislike'}], vocabulary),
+                         [{'feature': 'station_distance', 'direction': 'dislike'}])
 
     def test_a_preference_reading_names_vocabulary_features_with_a_direction(self):
         self.assertEqual(validate_preference_reading([{'feature': 'floor:carpet', 'direction': 'dislike'}], self.vocabulary),
