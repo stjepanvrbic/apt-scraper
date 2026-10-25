@@ -1,9 +1,9 @@
 ---
 title: Distance to the nearest rapid-transit station and to the user's places
 type: Feature
-state: In Progress
+state: Done
 priority: 3
-assignee: agent
+assignee:
 milestone:
 parent: 0015
 blocked_by: []
@@ -18,11 +18,11 @@ Each listing's feature record has its straight-line distance to the nearest rapi
 
 - [x] Each place is geocoded once when saved, through Nominatim at its published rate of one request per second, with a User-Agent that names this project. A place that cannot be geocoded is reported to the user, who is asked to describe it again.
 - [x] A place is a name and an address. The interview no longer asks for the way of getting there, the longest trip or the visits per week, and the store no longer keeps them.
-- [ ] The rapid-transit stations of the user's city come from its GTFS stops once, filtered to rail, metro and bus rapid transit, and are kept in the store.
+- [x] The rapid-transit stations of the user's city come from its GTFS stops once, filtered to rail and metro, and are kept in the store. Bus rapid transit has no GTFS route type, so no bus stop counts; accepted, Chicago has none.
 - [x] Each listing with coordinates gets its distance to the nearest station and to each place computed in code from coordinates, with no network call, when its feature record is built or a place changes.
 - [x] A listing without coordinates has those features as unknown, and unknown does not count for or against it.
 - [x] Spec › Acceptance "Location" passes in a test against the scoring model.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
@@ -73,3 +73,5 @@ Found, not fixed: `tests/test_gallery_launcher.py` writes into the real `~/.secr
 
 - 2026-10-25: The owner chose plain distance over routing. The provider research's routing recommendation (r5py, departure times, Metra) is not used.
 - 2026-10-25: Questions for the owner. (1) Bus rapid transit has no GTFS route type, so no bus stop counts as a station. Accept that, or name bus rapid transit routes in a setting? Recommendation: accept, since Chicago has none and a route list per city is upkeep with no current user. (2) Nominatim's policy asks for OpenStreetMap attribution where its results are shown. The interview says it back; the gallery's reasons cite place distances without it. Recommendation: add "© OpenStreetMap contributors" to the listing details when the score UI is reworked.
+
+- 2026-10-25: Owner accepted the bus rapid transit gap and kept the User-Agent without a contact URL. The OpenStreetMap credit line goes with the rerank screen.
