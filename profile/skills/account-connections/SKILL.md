@@ -19,7 +19,7 @@ apt-scraper works through four of the user's own accounts. Each has a check, and
 |---|---|---|
 | `gmail` | Email to listing agents | Hermes `google-workspace` skill, the user's own Google OAuth client |
 | `calendar` | Viewings as calendar events | the same Google connection |
-| `gateway` | Questions to the user and their replies | `hermes gateway setup`, Telegram with the user's own bot |
+| `gateway` | Questions to the user and their replies | the dashboard's Channels page, Telegram with the user's own bot |
 | `imessage` | Texts to listing agents, macOS only | Hermes `imessage` skill and the `imsg` command |
 
 ## When to Use
@@ -30,7 +30,7 @@ apt-scraper works through four of the user's own accounts. Each has a check, and
 
 ## Who does what
 
-You do the work. Run every command, open every page, and do the clicking and typing in the browser, in Telegram and in the setup wizard with computer use. The user does only what needs their own hands:
+You do the work. Run every command, open every page, and do the clicking and typing in the browser and in Telegram with computer use. The user does only what needs their own hands:
 
 - signing in to Google and Telegram,
 - approving Google's consent screen,
@@ -41,7 +41,7 @@ Never type a password, never click a permission dialog or consent button, and ne
 
 The user talks to you in the chat of the Hermes web dashboard, in their browser, or in Telegram. Your commands run inside the Hermes gateway with no terminal the user can see, so every command you run must finish without asking for input. A program that needs a terminal, such as the Homebrew installer, gets a terminal window of its own that you open and drive with computer use.
 
-Never restart the gateway while you work. Your own turn runs in it: `hermes gateway restart` refuses while the turn runs, and with `--yes` it ends your turn and the dashboard chat stops answering until the user reloads the page.
+Never restart the gateway during your own turn, because the turn runs in it: `hermes gateway restart` refuses while the turn runs, and with `--yes` it ends your turn and the dashboard chat stops answering until the user reloads the page.
 
 Work in the user's own browser, where they can see the page and sign in. Open each page with the command below, then act in that browser window with `computer_use`. Do not use the browser tools (`browser_navigate`, `browser_exec` and the rest): they drive Hermes's own headless Chromium, which the user cannot see or sign in to.
 
@@ -124,11 +124,11 @@ Failures:
 
 ## Messaging gateway
 
-Your questions reach the user here while the gallery is closed, and their replies come back through the running gateway. Use Telegram with a bot the user creates through BotFather in their own Telegram account. The wizard's automatic option creates the bot through a Nous-hosted service instead, so always take the manual option.
+Your questions reach the user here while the gallery is closed, and their replies come back through the running gateway. Use Telegram with a bot the user creates through BotFather in their own Telegram account. Hermes can also create the bot through a Nous-hosted service, so always take the manual setup in step 7.
 
 1. Open Telegram where the user is signed in: the Telegram app, or https://web.telegram.org if they have no app. If they are not signed in, wait until they are.
 2. Create the bot. Open https://t.me/BotFather, press **Start** if shown, and send `/newbot`. When BotFather asks for a name, send `apt-scraper`. When it asks for a username, send one ending in `bot`, such as `<first name>_aptscraper_bot`.
-3. BotFather's answer to the username is either the bot's token or a note that the username is taken. Take no screenshot of Telegram from the moment you send the username until step 4 has moved the window to another chat. Ask the user which answer they see. If the username is taken, send another one into the same message field and ask again. Once BotFather shows the token, the user copies it from the reply and keeps it for step 6.
+3. BotFather's answer to the username is either the bot's token or a note that the username is taken. Take no screenshot of Telegram from the moment you send the username until step 4 has moved the window to another chat. Ask the user which answer they see. If the username is taken, send another one into the same message field and ask again. Once BotFather shows the token, the user copies it from the reply and keeps it for step 7.
 4. Open `https://t.me/<the username>`. That replaces the BotFather chat on screen, so screenshots are safe again. Press **Start** and send any message. This chat is where your questions will arrive.
 5. Find the user's Telegram ID. Open https://t.me/userinfobot, press **Start**, and read the number it replies with. It is an ID, not a secret.
 6. Allow only that ID to use the bot, and make its chat the home channel your questions go to:
@@ -138,7 +138,7 @@ Your questions reach the user here while the gallery is closed, and their replie
    hermes -p apt-scraper config set TELEGRAM_HOME_CHANNEL "<the ID>"
    ```
 
-7. Open the dashboard's Channels page in the user's browser. `hermes dashboard --status` lists the running dashboard, and its port follows `--port` in that line:
+7. Open the dashboard's Channels page in the user's browser. `hermes dashboard --status` lists the running dashboard. Take the port from the line with `--port`. When no line has one, the port is 9119:
 
    ```bash
    cmd /c start "" "http://127.0.0.1:<port>/channels?profile=apt-scraper"   # Windows
@@ -188,10 +188,10 @@ iMessage exists only on macOS, and texting is off elsewhere. `imsg` needs macOS 
    - that terminal app,
    - `/usr/bin/osascript`. In the file chooser, they press Command-Shift-G, type `/usr/bin/osascript` and press Enter, then **Open**.
 
-   macOS reads this grant only when a program starts, so the gateway must start again after your turn has ended. Tell the user that the chat pauses for about a minute, and that they then reload the dashboard page and say "continue the connection setup". Then run this as the last command of your reply. It waits until your turn is over, because a restart during the turn would end it:
+   macOS reads this grant only when a program starts, so the gateway must start again after your turn has ended. Tell the user that the chat pauses for about a minute, and that they then reload the dashboard page and say "continue the connection setup". Then, as the last command of your reply, run this with the terminal tool's `background=true`. It waits 30 seconds so your turn is over first, and `--yes` lets the restart interrupt a scheduled job that is running:
 
    ```bash
-   nohup sh -c 'sleep 20; hermes -p default gateway restart' >/dev/null 2>&1 &
+   sh -c 'sleep 30; hermes -p default gateway restart --yes' > "$HERMES_HOME/logs/gateway-restart.log" 2>&1
    ```
 
    The stored results carry over.
@@ -203,7 +203,7 @@ Failures:
 | Reason in the check | Fix |
 |---|---|
 | The imsg command is not installed | Step 1 |
-| `unable to open database file`, or empty results | Step 3 for the context that failed. If the entries are already on, switch them off and on again, because they go stale after macOS, Homebrew or terminal updates. If the terminal still fails, also add `/System/Applications/Utilities/Terminal.app`, which the imsg documentation says macOS sometimes consults |
+| `unable to open database file`, or empty results | Read `$HERMES_HOME/logs/gateway-restart.log`. If the restart failed or was refused, show the user what it says and repeat the restart in step 3. Otherwise step 3 for the context that failed. If the entries are already on, switch them off and on again, because they go stale after macOS, Homebrew or terminal updates. If the terminal still fails, also add `/System/Applications/Utilities/Terminal.app`, which the imsg documentation says macOS sometimes consults |
 | `not authorized to send Apple events` | Open `x-apple.systempreferences:com.apple.preference.security?Privacy_Automation`, or **System Settings → Privacy & Security → Automation**. The user switches on **Messages** under the terminal app or `osascript`, then check again |
 | `not checked`, did not finish within 90 seconds | A permission dialog was waiting. The user answers it, then check again |
 | No test text has been sent from the terminal or the gateway yet | Step 5 in that context. For the terminal, first try `hermes -p default gateway start`: with the gateway service running, your commands run in the gateway |

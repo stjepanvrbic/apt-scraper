@@ -83,10 +83,10 @@ try {
     Remove-Item $savedConfig
 }
 
-# The account connections use Hermes's bundled google-workspace skill, which installing a profile
-# from a directory does not seed.
-Write-Step 'Hermes bundled skills'
-Invoke-Checked $hermes @('-p', $ProfileName, 'skills', 'opt-in', '--sync')
+# The account connections use Hermes's built-in google-workspace skill, which installing a profile
+# from a directory does not copy.
+Write-Step 'Google Workspace skill'
+Invoke-Checked $hermes @('-p', $ProfileName, 'skills', 'install', 'google-workspace', '--yes')
 
 # The search runs curl_cffi in an environment of its own, built from hash-pinned wheels with the Python
 # Hermes runs cron scripts with, which `hermes pm env` puts on PATH.

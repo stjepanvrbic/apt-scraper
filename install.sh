@@ -59,10 +59,10 @@ if $had_config; then cp "$saved_config" "$config"; fi
 rm -f "$saved_config"
 [ "$install_status" -eq 0 ] || exit "$install_status"
 
-# The account connections use Hermes's bundled google-workspace skill, which installing a profile
-# from a directory does not seed.
-step 'Hermes bundled skills'
-hermes -p "$PROFILE_NAME" skills opt-in --sync
+# The account connections use Hermes's built-in google-workspace skill, which installing a profile
+# from a directory does not copy.
+step 'Google Workspace skill'
+hermes -p "$PROFILE_NAME" skills install google-workspace --yes
 
 # The search runs curl_cffi in an environment of its own, built from hash-pinned wheels with the Python
 # Hermes runs cron scripts with, which `hermes pm env` puts on PATH.

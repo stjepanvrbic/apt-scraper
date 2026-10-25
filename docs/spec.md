@@ -35,7 +35,7 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 ### Installation and setup
 
 - `install.ps1` and `install.sh` install everything the agent needs, check that every Python environment the profile's scripts run in loads its packages, send a test message that must succeed, and finish with the agent's chat open in the Hermes web dashboard in the user's browser.
-- On first run the agent connects Gmail, Google Calendar, a Hermes messaging gateway such as Telegram, and iMessage on macOS, and checks each connection. It runs every command and does every step in the browser and in Telegram itself; the user only signs in, approves consent and permission dialogs, and pastes the Telegram bot token into the dashboard. A connection that fails its check is reported, and its channel is unused until it passes.
+- On first run the agent connects Gmail, Google Calendar, a Hermes messaging gateway such as Telegram, and iMessage on macOS, and checks each connection. It runs every command and does every step in the browser and in Telegram itself; the user only signs in, approves consent screens and macOS permissions, types their Mac password when an installer asks, and pastes the Telegram bot token into the dashboard. A connection that fails its check is reported, and its channel is unused until it passes.
 
 ### Interview
 

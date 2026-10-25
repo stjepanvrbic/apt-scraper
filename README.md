@@ -24,7 +24,7 @@ The installer:
 
 1. installs or updates Claude Code, and opens the Claude login if you are logged out,
 2. installs Hermes Agent with its computer-use driver, or updates an older Hermes,
-3. installs `profile/` as the Hermes profile `apt-scraper`, with Hermes's own skills,
+3. installs `profile/` as the Hermes profile `apt-scraper`, with Hermes's Google Workspace skill,
 4. installs the Claude subscription provider plugin into that profile,
 5. prepares the computer-use driver, and on macOS asks for Accessibility and Screen Recording access,
 6. installs the Hermes gateway as a service that starts when you log in. It runs the search and your conversations with the agent. Windows may ask for administrator approval,
@@ -40,6 +40,8 @@ You talk to the agent in the chat of the Hermes web dashboard, which the install
 ```bash
 hermes -p apt-scraper dashboard
 ```
+
+While the dashboard runs, the command opens it in your browser and returns. After a restart it starts the dashboard and keeps running, so leave that terminal open while you use the dashboard.
 
 Ask the agent to open the apartment gallery. It opens a local browser app with listings, favorites and notes. Until search results exist, it opens a separate sample gallery. See [the gallery guide](docs/gallery.md) for direct launch commands, development and the shared listing store.
 
