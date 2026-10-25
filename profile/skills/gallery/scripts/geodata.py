@@ -118,7 +118,8 @@ def rapid_transit_stations(archive):
         if header is None:
             raise ValueError('stop_times.txt is empty.')
         trip_column, stop_column = header.index('trip_id'), header.index('stop_id')
-        served = {row[stop_column] for row in reader if row[trip_column] in trips}
+        width = max(trip_column, stop_column) + 1
+        served = {row[stop_column] for row in reader if len(row) >= width and row[trip_column] in trips}
     stops = {row['stop_id']: row for row in rows(archive, 'stops.txt')}
     stations = {}
     for stop_id in served:
@@ -140,5 +141,5 @@ def fetch_stations(url, opener=open_url):
         try:
             with zipfile.ZipFile(file) as archive:
                 return rapid_transit_stations(archive)
-        except (zipfile.BadZipFile, NotImplementedError, KeyError, ValueError, csv.Error) as error:
+        except Exception as error:
             raise SourceUnavailable(f'The transit feed {url} is not a GTFS feed with routes, trips, stop times and stops: {error}') from None

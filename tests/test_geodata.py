@@ -151,6 +151,12 @@ class StationTests(unittest.TestCase):
             {'id': '7001', 'name': 'Tram stop', 'latitude': 41.88, 'longitude': -87.63},
         ])
 
+    def test_blank_and_short_stop_time_rows_are_skipped(self):
+        stop_times = table([['trip_id', 'arrival_time', 'departure_time', 'stop_id', 'stop_sequence'],
+                            ['blue-1', '08:00:00', '08:00:00', '30001', '1'], ['blue-1'], [], ['blue-2', '08:10:00', '08:10:00', '30004', '1']])
+        with zipfile.ZipFile(io.BytesIO(feed(**{'stop_times.txt': stop_times + '\r\n\r\n'}))) as archive:
+            self.assertEqual([station['name'] for station in rapid_transit_stations(archive)], ['Western', 'California'])
+
     def test_rail_metro_light_rail_and_monorail_count_and_buses_ferries_and_lifts_do_not(self):
         self.assertEqual([value for value in ('0', '1', '2', '3', '4', '5', '6', '7', '11', '12') if rail_route_type(value)], ['0', '1', '2', '12'])
         self.assertEqual([value for value in ('100', '109', '400', '401', '700', '702', '715', '900', '1000', '') if rail_route_type(value)],
@@ -168,7 +174,7 @@ class StationTests(unittest.TestCase):
         for opener in (unreachable, answering(b'<html>Not found</html>'), answering(feed(**{'stop_times.txt': 'trip_id,arrival_time\n'})),
                        answering(feed(**{'stops.txt': 'stop_id,stop_name\n'})), answering(feed(**{'stop_times.txt': ''})),
                        answering(feed(**{'stops.txt': feed_stops(latitude='nan')})), answering(feed(**{'stops.txt': feed_stops(latitude='97.5')})),
-                       answering(feed(**{'stops.txt': 'stop_id,"stop_name\n'}))):
+                       answering(feed(**{'stops.txt': 'stop_id,"stop_name\n'})), answering(feed(**{'stops.txt': feed_stops(latitude='')}))):
             with self.subTest(opener=opener), self.assertRaisesRegex(SourceUnavailable, 'transit.example'):
                 fetch_stations('https://transit.example/gtfs.zip', opener)
 

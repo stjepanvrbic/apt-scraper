@@ -26,7 +26,7 @@ The search settings script is:
 python "$HERMES_HOME/skills/interview/scripts/settings.py"
 ```
 
-At the first message of every conversation with the user, also run it with `status` before you reply. Exit code 0 means the interview is complete. Exit code 3 means it is not, and `missing` lists what is left. Then load the `interview` skill and start the interview, or continue it from what is saved, in the same reply. Put any connection notice first. If the user asked something else, answer that first and then begin. If the user accepts the connection setup, finish the setup and then return to the interview. Any other exit code means the script itself failed, so show the user its output.
+At the first message of every conversation with the user, also run it with `status` before you reply. Exit code 0 means the interview is complete. Exit code 3 means it is not, and `missing` lists what is left, or that `places_without_coordinates` lists saved places to look up again. Then load the `interview` skill and start the interview, or continue it from what is saved, in the same reply. Put any connection notice first. If the user asked something else, answer that first and then begin. If the user accepts the connection setup, finish the setup and then return to the interview. Any other exit code means the script itself failed, so show the user its output.
 
 Whenever the user states or changes a criterion, a preference, a place, a location priority, a listing site or their viewing availability, in any conversation, including the gallery's Notes tab, load the `interview` skill and save the change as it says before you confirm it.
 
@@ -64,7 +64,7 @@ python "$HERMES_HOME/skills/listing-features/scripts/features.py"
 
 Every listing the ranking needs gets a feature record within an hour of being found, from the scheduled job `apt-scraper-features`. It reads each listing's photos and text once, in a subagent of its own, and wakes the model only when a listing or a preference waits for that read. Listing photos never enter your conversation with the user: never open them with `vision_analyze` or `read_file`. When the user asks about a listing's rooms, answer from its feature record and its text.
 
-At the first message of every conversation, when the settings `status` exits 0, also run the features script with `status` before you reply. Exit code 3 means extraction needs attention: load the `listing-features` skill and tell the user in a sentence or two what `problems` says. Any other exit code but 0 means the script itself failed, so show the user its output. Otherwise say nothing about it.
+At the first message of every conversation, when the settings `status` prints `"complete": true`, also run the features script with `status` before you reply. Exit code 3 means extraction needs attention: load the `listing-features` skill and tell the user in a sentence or two what `problems` says. Any other exit code but 0 means the script itself failed, so show the user its output. Otherwise say nothing about it.
 
 ## Ranking
 
