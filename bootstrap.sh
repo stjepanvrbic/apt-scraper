@@ -33,10 +33,10 @@ main() {
 
     # Standard input is this script's pipe, and the installer asks for the Claude login and passwords.
     if (exec </dev/tty) 2>/dev/null; then
-        bash "$REPOSITORY/install.sh" "$@" </dev/tty
+        bash "$REPOSITORY/install.sh" ${1+"$@"} </dev/tty
     else
-        bash "$REPOSITORY/install.sh" "$@"
+        bash "$REPOSITORY/install.sh" ${1+"$@"}
     fi
 }
 
-main "$@"
+main ${1+"$@"}
