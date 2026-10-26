@@ -3,6 +3,7 @@ from unittest import mock
 
 from test_features_run import ROOT, FeaturesTestCase
 from contact import NotConnected
+from store import extraction_read
 
 
 class CompareInvitationTests(FeaturesTestCase):
@@ -45,6 +46,46 @@ class CompareInvitationTests(FeaturesTestCase):
             self.assertFalse(self.features.invite_compare()['sent'])
             send.assert_called_once()
         self.assertFalse(self.run_job()[1])
+
+    def test_a_send_error_leaves_the_report_wake_and_attempts_intact_and_the_next_run_sends_again(self):
+        self.prepare_records()
+        waiting = self.add(3)
+        with mock.patch('contact.require'), mock.patch('features.tell_user', side_effect=RuntimeError('gateway offline')):
+            report, wake = self.run_cron()
+        self.assertTrue(wake)
+        [task] = self.tasks(report)
+        self.assertEqual(self.manifest(task)['id'], waiting)
+        self.assertEqual(self.store.read_attempts(), {})
+        self.assertEqual(self.state.load()['handed'], [extraction_read(waiting, self.manifest(task)['fingerprint'])])
+        [problem] = self.features.status()['problems']
+        self.assertIn('Compare', problem)
+        self.assertIn('gateway offline', problem)
+        self.assertTrue(self.features.compare_invitation_pending())
+        self.save(task)
+        with mock.patch('contact.require'), mock.patch('features.tell_user', return_value={'success': True}) as send:
+            report, wake = self.run_cron()
+        send.assert_called_once()
+        self.assertFalse(wake)
+        self.assertEqual(self.store.read_attempts(), {})
+        self.assertEqual(self.features.status()['problems'], [])
+        self.assertFalse(self.features.compare_invitation_pending())
+
+    def test_a_failing_gateway_check_leaves_the_report_wake_and_handed_reads_intact(self):
+        self.prepare_records()
+        waiting = self.add(3)
+        with (mock.patch('contact.require', side_effect=RuntimeError('The connection check for gateway failed: timed out')),
+              mock.patch('features.tell_user') as send):
+            report, wake = self.run_cron()
+        send.assert_not_called()
+        self.assertTrue(wake)
+        [task] = self.tasks(report)
+        self.assertEqual(self.manifest(task)['id'], waiting)
+        self.assertEqual(self.state.load()['handed'], [extraction_read(waiting, self.manifest(task)['fingerprint'])])
+        self.assertNotIn('Extraction failed', report)
+        [problem] = self.features.status()['problems']
+        self.assertIn('Compare', problem)
+        self.assertIn('timed out', problem)
+        self.assertTrue(self.features.compare_invitation_pending())
 
     def test_invitation_waits_for_interview_and_two_eligible_records(self):
         self.prepare_records()

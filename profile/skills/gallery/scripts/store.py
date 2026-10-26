@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from code_features import FEATURES, configured_transit_feed, store_all_code_features, store_code_features
 from schema import content_fingerprint, migrate
-from queries import RANKABLE, RANKING_EXCLUSION, browse, snapshot, validate_page
+from queries import RANKABLE, RANKING_EXCLUSION, answered_pairs, browse, paired, snapshot, user_noted, validate_page
 from record import SEED_TAGS, known_spelling, validate_extraction, validate_judgments
 from scoring import reading_vocabulary, stated_phrases, validate_note_reading, validate_preference_reading
 
@@ -536,12 +536,12 @@ class ListingStore:
             facts = {identifier: json.loads(row['features']).get('facts', {}) for identifier, row in ranking.items() if row['features']}
             feedback = {row['listing_id']: row for row in connection.execute('SELECT * FROM feedback')}
             contacts = {row['listing_id'] for row in connection.execute('SELECT listing_id FROM contacts')}
-            noted = {row['listing_id'] for row in connection.execute("SELECT DISTINCT listing_id FROM notes WHERE role = 'user'")}
+            noted = user_noted(connection)
             note_readings = {row['note_id']: (row['listing_id'], json.loads(row['reading'])) for row in connection.execute(
                 'SELECT r.*, n.listing_id FROM note_readings r JOIN notes n ON n.id = r.note_id ORDER BY r.note_id')}
             preference_readings = {(row['kind'], row['phrase']): json.loads(row['features'])
                                    for row in connection.execute('SELECT * FROM preference_readings')}
-            pairs = [(row['chosen'], row['other']) for row in connection.execute('SELECT chosen, other FROM pairwise_answers ORDER BY id')]
+            pairs = answered_pairs(connection)
             visits = []
             if include_signals:
                 visits = [dict(row) for row in connection.execute('''SELECT s.listing_id, s.visit_id,
@@ -549,7 +549,7 @@ class ListingStore:
                     JOIN listings l ON l.id = s.listing_id AND l.fingerprint = s.fingerprint
                     GROUP BY s.listing_id, s.fingerprint, s.visit_id
                     HAVING SUM(s.kind = 'open') > 0 AND SUM(s.kind = 'close') > 0''')]
-            paired = {identifier for pair in pairs for identifier in pair}
+            compared = paired(pairs)
             listings = []
             for row in connection.execute(f'''SELECT l.*, {RANKABLE} AS rankable FROM listings l
                     LEFT JOIN feedback f ON f.listing_id = l.id ORDER BY l.id'''):
@@ -567,7 +567,7 @@ class ListingStore:
                     'given_up': not record and attempts.get(extraction_read(identifier, row['fingerprint']), 0) >= READ_ATTEMPTS,
                     'rank': ranking[identifier]['rank'] if identifier in ranking else None,
                     'favorite': bool(choice and choice['favorite']), 'dismissed': dismissed, 'contact': identifier in contacts,
-                    'user_notes': identifier in noted, 'paired': identifier in paired,
+                    'user_notes': identifier in noted, 'paired': identifier in compared,
                 })
         return {'listings': listings, 'settings': settings, 'preference_readings': preference_readings,
                 'note_readings': {note: reading for note, (_, reading) in note_readings.items()},
@@ -729,11 +729,10 @@ class ListingStore:
                                   [place['name'] for place in settings.get('places', [])])
 
     def unread_notes(self):
-        """The user's notes without a reading, oldest first, with the title of their listing."""
+        """The user's notes without a reading, oldest first."""
         with self.connect() as connection:
-            return [dict(row) for row in connection.execute('''SELECT n.id, n.listing_id, n.text, n.created_at,
-                COALESCE(json_extract(l.data, '$.title'), json_extract(l.data, '$.address'), l.id) AS listing
-                FROM notes n JOIN listings l ON l.id = n.listing_id LEFT JOIN note_readings r ON r.note_id = n.id
+            return [dict(row) for row in connection.execute('''SELECT n.id, n.listing_id, n.text, n.created_at
+                FROM notes n LEFT JOIN note_readings r ON r.note_id = n.id
                 WHERE n.role = 'user' AND r.note_id IS NULL ORDER BY n.id''')]
 
     def unread_preferences(self):
@@ -833,7 +832,7 @@ class ListingStore:
 
     def pairwise_answers(self):
         with self.connect() as connection:
-            return [(row['chosen'], row['other']) for row in connection.execute('SELECT chosen, other FROM pairwise_answers ORDER BY id')]
+            return answered_pairs(connection)
 
     def given_up_extractions(self):
         """The listings whose current content failed extraction READ_ATTEMPTS times and has no record. The ranking ranks

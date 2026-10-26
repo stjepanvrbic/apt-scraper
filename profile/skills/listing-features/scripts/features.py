@@ -3,13 +3,15 @@
 Commands:
   features.py run           one pass of the scheduled job apt-scraper-features: fetches the rapid-transit stations
                             once per transit feed, prepares the photos of the listings waiting for extraction, prints
-                            one extraction task per listing for the agent, and ends with a line that tells Hermes
-                            whether to wake the agent. Never fails.
+                            one extraction task per listing for the agent, sends the Compare invitation once it is due,
+                            and ends with a line that tells Hermes whether to wake the agent. Never fails.
   features.py save FILE     the extraction child's command: save one record from a JSON file in the scratch directory,
                             then delete the file
   features.py tags          the tag list, most used first, which the extraction child reads before choosing tags
-  features.py preferences   the next listings waiting for judgments of preferences stated after their extraction
-  features.py judge FILE    save those judgments from a JSON file in the scratch directory, then delete it
+  features.py preferences   write the judgment subagents' task files for the listings waiting for judgments of
+                            preferences stated after their extraction, and print their delegate_task calls
+  features.py judge FILE    the judgment child's command: save its judgments from a JSON file in the scratch
+                            directory, then delete it
   features.py readings      the user's notes and stated preferences waiting to be read into record features
   features.py read FILE     save those readings from a JSON file in the scratch directory, then delete it
   features.py status        whether extraction needs the user's attention
@@ -19,8 +21,8 @@ Commands:
 Exit codes: 0 done (for status: no problem), 3 extraction needs attention or the invitation gateway is not connected,
 1 the input or a step failed, 2 usage error.
 
-Hermes wakes the model whenever a cron script fails (cron/scheduler_prompt.py, "Script Error"), so run records a
-failure for status and ends with {"wakeAgent": false} instead.
+Hermes wakes the model whenever a cron script fails (cron/scheduler_prompt.py, "Script Error"), so run records its
+failures for status and ends with its wake decision instead.
 """
 
 import argparse
@@ -46,7 +48,7 @@ sys.path.insert(0, str(SKILLS / 'contact' / 'scripts'))
 from contact import NotConnected, tell_user, usable  # noqa: E402
 from geodata import SourceUnavailable, fetch_stations  # noqa: E402
 from record import CATEGORIES, FLAGS, NOT_SHOWN, RATINGS, ROOM_TYPES, UNIT_LEVELS, choices, validate_judgments  # noqa: E402
-from scoring import stated_phrases  # noqa: E402
+from scoring import labeled, stated_phrases  # noqa: E402
 from scratch import read_scratch_object, scratch_directory  # noqa: E402
 from store import READ_ATTEMPTS, ListingStore, extraction_read, store_path  # noqa: E402
 
@@ -62,7 +64,8 @@ JUDGMENT_BATCH = 25
 NOTE_BATCH = 25
 TASK_DESCRIPTION_LIMIT = 6000
 JUDGMENT_DESCRIPTION_LIMIT = 2000
-TEMPLATE = Path(__file__).resolve().parents[1] / 'extraction.md'
+EXTRACTION_TEMPLATE = Path(__file__).resolve().parents[1] / 'extraction.md'
+JUDGMENT_TEMPLATE = Path(__file__).resolve().parents[1] / 'judgment.md'
 MEDIA = SKILLS / 'gallery' / 'web' / 'media'
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36'
 EXTENSIONS = {'JPEG': 'jpg', 'PNG': 'png', 'WEBP': 'webp', 'GIF': 'gif'}
@@ -105,10 +108,6 @@ def judged_preferences(settings, readings):
     return list(dict.fromkeys(phrase for kind, phrase in stated_phrases(settings) if readings.get((kind, phrase)) == []))
 
 
-def labeled(listing):
-    return bool(listing['favorite'] or listing['dismissed'] or listing['contact'] or any(note['role'] == 'user' for note in listing['notes']))
-
-
 def needs_record(listing):
     """A listing the ranking ranks, or one the user labeled, which the ranking learns from even when it is not shown."""
     return bool(listing['matches_criteria'] and listing['status'] == 'available' and not listing['dismissed'] or labeled(listing))
@@ -146,6 +145,10 @@ def listing_fields(listing, limit):
             'size': listing.get('size'), 'amenities': listing.get('amenities') or [], 'description': description}
 
 
+def chunks(items, size):
+    return [items[start:start + size] for start in range(0, len(items), size)]
+
+
 def bullet_lines(items):
     return '\n'.join(f'  - {item}' for item in items)
 
@@ -159,16 +162,17 @@ def photo_overview(count):
 
 
 class RunState:
-    """The job's records next to the listing store: the last run's failure, the listings whose photos could not be
+    """The job's records next to the listing store: the last run's problems, the listings whose photos could not be
     downloaded, since when and why, the transit feed whose stations could not be fetched, since when, when last tried
-    and why, and the model reads the last run handed to the agent. A read handed over that still
-    waits at the next run counts as a failed attempt then, so an attempt counts only once its wake has ended."""
+    and why, the model reads the last run handed to the agent, how many judgment subagents its wake may start, and
+    when the Compare invitation was sent. A read handed over that still waits at the next run counts as a failed attempt
+    then, so an attempt counts only once its wake has ended."""
 
     def __init__(self, path):
         self.path = path
 
     def load(self):
-        return {'problem': None, 'photos_unavailable': {}, 'stations_unavailable': None, 'handed': [],
+        return {'problems': [], 'photos_unavailable': {}, 'stations_unavailable': None, 'handed': [], 'judgment_batches': SUBAGENTS_PER_WAKE,
                 **(json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {})}
 
     def update(self, **values):
@@ -215,17 +219,50 @@ class Features:
         }
 
     def run(self):
-        """One pass of the job. A wake holds at most SUBAGENTS_PER_WAKE extractions, because Hermes blocks the agent's
-        delegate_task once one turn has spawned that many subagents (tool_loop_guardrails.loop_caps.max_subagents in
-        hermes_cli/config_defaults.py), which would end the wake before its readings and judgments."""
+        """One pass of the job: the stations, the extraction tasks, the reads waiting for the agent, and then the
+        Compare invitation. A step that fails becomes one of the run's problems without stopping the others. The reads
+        handed to the agent are recorded once the report that hands them over is complete, and the invitation comes
+        after that, so the messaging gateway cannot change the report, the wake or the attempts."""
         if self.store.missing_settings():
-            self.state.update(problem=None)
+            self.state.update(problems=[])
             return ['The interview is not complete, so no listing is extracted.'], False
-        station_lines = self.refresh_stations()
-        state = self.state.load()
+        problems = []
+        lines = self.step(problems, 'Fetching the rapid-transit stations', self.refresh_stations) or []
+        work = self.count_attempts()
+        extraction = self.step(problems, 'Preparing the extraction tasks', lambda: self.prepare_extractions(work))
+        extraction_lines, tasks = extraction or ([], [])
+        judgment_batches = SUBAGENTS_PER_WAKE - len(tasks)
+        reading_lines, readings = self.reading_report(work, judgment_batches)
+        handed = [extraction_read(listing['id'], listing['content_fingerprint']) for listing in tasks] + readings
+        self.state.update(problems=problems, handed=handed, judgment_batches=judgment_batches)
+        problems += self.send_compare_invitation(problems)
+        return [*lines, *extraction_lines, *reading_lines, *problems], bool(handed)
+
+    @staticmethod
+    def step(problems, name, action):
+        """What action returns, or None when it fails, with the failure added to problems."""
+        try:
+            return action()
+        except Exception as error:
+            problems.append(f'{name} failed. {failure(error)}')
+            return None
+
+    def count_attempts(self):
+        """Counts a failed attempt for each read the last run handed to the agent that still waits, and returns the work
+        waiting now. The handed reads are forgotten before they are counted, so a run that fails before it hands
+        new ones over cannot count the same wake twice."""
+        handed = self.state.load()['handed']
+        self.state.update(handed=[])
         waiting = self.reads(self.outstanding())
-        self.store.record_read_attempts([read for read in state['handed'] if read in waiting], waiting)
-        work = self.outstanding()
+        self.store.record_read_attempts([read for read in handed if read in waiting], waiting)
+        return self.outstanding()
+
+    def prepare_extractions(self, work):
+        """Prepares the extraction tasks of this wake and returns the report's lines and the listings prepared. A wake
+        holds at most SUBAGENTS_PER_WAKE extractions, because Hermes blocks the agent's delegate_task once one turn has
+        spawned that many subagents (tool_loop_guardrails.loop_caps.max_subagents in hermes_cli/config_defaults.py),
+        which would end the wake before its readings and judgments."""
+        photos_unavailable = self.state.load()['photos_unavailable']
         now = self.now()
         deadline = now + PREPARE_BUDGET
         tasks, unavailable, deferred = [], {}, 0
@@ -233,32 +270,49 @@ class Features:
             if self.now() >= deadline or len(tasks) == SUBAGENTS_PER_WAKE:
                 deferred += 1
                 continue
-            since = state['photos_unavailable'].get(listing['id'], {}).get('since')
+            since = photos_unavailable.get(listing['id'], {}).get('since')
             overdue = since is not None and now - datetime.fromisoformat(since) >= PHOTO_PATIENCE
             try:
                 tasks.append((listing, self.prepare(listing, work['phrases'], leave_out_failing=overdue)))
             except PhotosUnavailable as error:
                 unavailable[listing['id']] = {'since': since or now.isoformat(), 'reason': str(error)}
-        handed = [extraction_read(listing['id'], listing['content_fingerprint']) for listing, _ in tasks]
-        handed += [judgment_read(listing, phrase) for listing, phrases in work['judge'] for phrase in phrases]
-        handed += [note_read(note) for note in work['notes']] + [preference_read(*item) for item in work['unread']]
-        self.state.update(problem=None, photos_unavailable=unavailable, handed=handed)
+        self.state.update(photos_unavailable=unavailable)
         self.remove_work_directories({work_directory(self.workspace, listing['id'], listing['content_fingerprint'])
                                       for listing in work['extract']})
-        lines = [*station_lines, f'{len(work["extract"])} listings wait for extraction: {len(tasks)} prepared below, {deferred + len(unavailable)} wait '
+        lines = [f'{len(work["extract"])} listings wait for extraction: {len(tasks)} prepared below, {deferred + len(unavailable)} wait '
                  f'for the next run, {len(work["extract_given_up"])} given up after {READ_ATTEMPTS} attempts.']
         if unavailable:
             lines.append(f'The photos of {len(unavailable)} listings could not be downloaded now, so they wait for the next run.')
         if tasks:
             lines += ['Extraction calls, in order, one delegate_task call each:',
                       json.dumps(self.calls([task for _, task in tasks], len(work['records'])), ensure_ascii=False)]
+        return lines, [listing for listing, _ in tasks]
+
+    @staticmethod
+    def reading_report(work, judgment_batches):
+        """The report's lines about the notes, stated preferences and judgments waiting, and the reads the wake hands
+        over: every note and stated preference, and the judgments of the listings in its first judgment_batches batches."""
+        lines = []
         if work['notes'] or work['unread']:
             lines.append(f'{len(work["notes"])} notes and {len(work["unread"])} stated preferences wait for a reading.')
         if work['judge']:
             lines.append(f'{len(work["judge"])} listings wait for judgments of preferences stated after their extraction.')
-        if self.compare_invitation_pending() and usable('gateway'):
-            self.invite_compare()
-        return lines, bool(tasks or work['judge'] or work['notes'] or work['unread'])
+        reads = [judgment_read(listing, phrase) for listing, phrases in work['judge'][:judgment_batches * JUDGMENT_BATCH] for phrase in phrases]
+        reads += [note_read(note) for note in work['notes']] + [preference_read(*item) for item in work['unread']]
+        return lines, reads
+
+    def send_compare_invitation(self, problems):
+        """Sends the Compare invitation when it is due and the gateway is connected. A failure is recorded as one of the
+        run's problems and returned, and the invitation stays pending for the next run."""
+        try:
+            if self.compare_invitation_pending() and usable('gateway'):
+                self.invite_compare()
+            return []
+        except Exception as error:
+            problem = (f'The message that asks the user to answer questions in the Compare tab could not be sent, '
+                       f'so the next run sends it again. {failure(error)}')
+            self.state.update(problems=[*problems, problem])
+            return [problem]
 
     def refresh_stations(self):
         """Fetches the rapid-transit stations of the transit feed once, and again only when the feed changes. A feed is tens
@@ -312,7 +366,7 @@ class Features:
         same tag list, so while the store has fewer than SEQUENTIAL_RECORDS records, each call runs one task and the next
         sees the tags it added. The rest run PARALLEL_TASKS at a time, Hermes's default delegation.max_concurrent_children."""
         single = max(0, SEQUENTIAL_RECORDS - records)
-        return [[task] for task in tasks[:single]] + [tasks[start:start + PARALLEL_TASKS] for start in range(single, len(tasks), PARALLEL_TASKS)]
+        return [[task] for task in tasks[:single]] + chunks(tasks[single:], PARALLEL_TASKS)
 
     def tag_lines(self):
         """The tag list, most used first, as the extraction subagent reads it."""
@@ -392,7 +446,7 @@ class Features:
     @staticmethod
     def task_text(listing, phrases, files, record_file):
         script = Path(__file__).resolve().as_posix()
-        return Template(TEMPLATE.read_text(encoding='utf-8')).substitute(
+        return Template(EXTRACTION_TEMPLATE.read_text(encoding='utf-8')).substitute(
             listing_id=listing['id'], fingerprint=listing['content_fingerprint'], photo_count=len(files),
             photo_overview=photo_overview(len(files)),
             photo_files='\n'.join(f'- Photo {number}: `{file.as_posix()}`' for number, file in enumerate(files, 1)),
@@ -429,12 +483,32 @@ class Features:
         return {'saved': value['id'], **result}
 
     def preferences(self):
+        """Writes the task file of one judgment subagent per batch of JUDGMENT_BATCH listings waiting for judgments, for
+        as many batches as the last run left its wake, and returns their delegate_task calls and how many listings wait
+        for a later wake. The listings whose judgments the run handed over come first, so the batches hold the reads
+        it counts. Listing text stays in the task files, out of the agent's conversation."""
+        state = self.state.load()
         work = self.outstanding()
-        batch = work['judge'][:JUDGMENT_BATCH]
-        return {'listings': [{'id': listing['id'], 'fingerprint': listing['content_fingerprint'], 'unjudged': phrases,
-                              'listing': listing_fields(listing, JUDGMENT_DESCRIPTION_LIMIT), 'record': self.digest(work['records'][listing['id']])}
-                             for listing, phrases in batch],
-                'remaining': len(work['judge']) - len(batch)}
+        handed = set(state['handed'])
+        waiting = sorted(work['judge'], key=lambda item: not any(judgment_read(item[0], phrase) in handed for phrase in item[1]))
+        batches = chunks(waiting, JUDGMENT_BATCH)[:state['judgment_batches']]
+        directory = self.workspace / 'judgments'
+        shutil.rmtree(directory, ignore_errors=True)
+        directory.mkdir(parents=True)
+        tasks = [self.judgment_task(directory / f'batch-{number}.md', batch, work['records']) for number, batch in enumerate(batches, 1)]
+        return {'calls': chunks(tasks, PARALLEL_TASKS), 'remaining': len(waiting) - sum(len(batch) for batch in batches)}
+
+    def judgment_task(self, task_file, batch, records):
+        judgments_file = scratch_directory() / f'judgments-{task_file.stem}.json'
+        listings = [{'id': listing['id'], 'fingerprint': listing['content_fingerprint'], 'unjudged': phrases,
+                     'listing': listing_fields(listing, JUDGMENT_DESCRIPTION_LIMIT), 'record': self.digest(records[listing['id']])}
+                    for listing, phrases in batch]
+        script = Path(__file__).resolve().as_posix()
+        task_file.write_text(Template(JUDGMENT_TEMPLATE.read_text(encoding='utf-8')).substitute(
+            count=len(batch), listings_json=json.dumps(listings, ensure_ascii=False, indent=1), judgments_file=judgments_file.as_posix(),
+            judge_command=f'python "{script}" judge "{judgments_file.as_posix()}"'), encoding='utf-8')
+        return {'goal': f'Judge stated preferences for {len(batch)} listings. Read your task file {task_file.as_posix()} with read_file '
+                        'first and follow it exactly.'}
 
     @staticmethod
     def digest(record):
@@ -473,7 +547,7 @@ class Features:
         batch = work['notes'][:NOTE_BATCH]
         return {'vocabulary': self.store.reading_vocabulary(),
                 'preferences': [{'kind': kind, 'phrase': phrase} for kind, phrase in work['unread']],
-                'notes': [{'id': note['id'], 'listing': note['listing'], 'text': note['text']} for note in batch],
+                'notes': [{'id': note['id'], 'listing': note['listing_id'], 'text': note['text']} for note in batch],
                 'remaining': len(work['notes']) - len(batch)}
 
     def read(self, value):
@@ -493,7 +567,7 @@ class Features:
 
     def status(self):
         state = self.state.load()
-        problems = [state['problem']] if state['problem'] else []
+        problems = list(state['problems'])
         if self.store.missing_settings():
             return {'problems': problems, 'records': 0, 'waiting': 0, 'given_up': [], 'awaiting_judgment': 0, 'awaiting_reading': 0,
                     'photos_unavailable': {}}
@@ -544,7 +618,7 @@ def run():
     except Exception as error:
         lines, wake = [f'Extraction failed. {failure(error)}'], False
         try:
-            state.update(problem=lines[0])
+            state.update(problems=lines)
         except Exception as record_error:
             lines.append(f'The failure could not be recorded for status. {failure(record_error)}')
     print('\n'.join([*lines, json.dumps({'wakeAgent': wake})]))
