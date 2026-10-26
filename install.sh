@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs Claude Code, Hermes Agent with its computer-use driver, the Claude
 # subscription provider plugin and this repository's Hermes profile on macOS
-# and Linux.
+# and Linux, then opens the profile's chat in the Hermes web dashboard.
 # Safe to re-run: every step updates what is already there.
 set -euo pipefail
 
@@ -10,6 +10,7 @@ PLUGIN_NAME=claude-subscription-directsdk
 MINIMUM_CLAUDE_VERSION=2.1.284
 MINIMUM_HERMES_VERSION=0.22.5
 PROFILE_SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/profile"
+DASHBOARD_ADDRESS=http://127.0.0.1:9119
 export PATH="$HOME/.local/bin:$PATH"
 
 step() { printf '\033[36m==> %s\033[0m\n' "$1"; }
@@ -59,6 +60,11 @@ if $had_config; then cp "$saved_config" "$config"; fi
 rm -f "$saved_config"
 [ "$install_status" -eq 0 ] || exit "$install_status"
 
+# The account connections use Hermes's built-in google-workspace skill, which installing a profile
+# from a directory does not copy.
+step 'Google Workspace skill'
+hermes -p "$PROFILE_NAME" skills install google-workspace --yes
+
 # The search runs curl_cffi in an environment of its own, built from hash-pinned wheels with the Python
 # Hermes runs cron scripts with, which `hermes pm env` puts on PATH.
 step 'Search environment'
@@ -105,6 +111,13 @@ if [ "$(uname -s)" = Darwin ]; then
 fi
 hermes -p "$PROFILE_NAME" computer-use status
 
+# One gateway on the machine serves every profile. It runs the scheduled jobs, the messaging gateway
+# and every chat turn, including the dashboard's, so it starts at login and the search keeps running
+# while no chat is open. Hermes refuses gateway services for named profiles.
+step 'Hermes gateway service'
+hermes -p default gateway install --if-missing --start-now --start-on-login
+hermes -p default gateway start
+
 step 'Test message through the Claude subscription'
 reply=$(hermes -p "$PROFILE_NAME" chat -q 'Reply with exactly: ready' --oneshot -Q) || {
     echo "Test message failed (exit code $?)" >&2
@@ -116,4 +129,103 @@ if ! [[ $reply_lower =~ (^|[^a-z])ready([^a-z]|$) ]]; then
     exit 1
 fi
 
-printf '\n\033[32mInstalled. Run: hermes -p %s\033[0m\n' "$PROFILE_NAME"
+# The dashboard starts at login, and the apt-scraper app in Applications opens its chat, starting the
+# dashboard first when it is not running. Both start it through one LaunchAgent, so launchd owns it and
+# `hermes update` restarts it. `hermes update` rebuilds the web UI, so these starts skip the build.
+if [ "$(uname -s)" = Darwin ]; then
+    step 'Dashboard at login and the apt-scraper shortcut'
+    dashboard_label=io.github.stjepanvrbic.apt-scraper.dashboard
+    dashboard_agent="$HOME/Library/LaunchAgents/$dashboard_label.plist"
+    mkdir -p "$(dirname "$dashboard_agent")"
+    cat >"$dashboard_agent" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$dashboard_label</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$(command -v hermes)</string>
+        <string>-p</string>
+        <string>$PROFILE_NAME</string>
+        <string>dashboard</string>
+        <string>--no-open</string>
+        <string>--skip-build</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+EOF
+    app="$HOME/Applications/$PROFILE_NAME.app/Contents"
+    mkdir -p "$app/MacOS"
+    cat >"$app/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>$PROFILE_NAME</string>
+    <key>CFBundleIdentifier</key>
+    <string>io.github.stjepanvrbic.apt-scraper</string>
+    <key>CFBundleName</key>
+    <string>$PROFILE_NAME</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>
+EOF
+    cat >"$app/MacOS/$PROFILE_NAME" <<EOF
+#!/bin/bash
+# Opens the $PROFILE_NAME chat, starting the dashboard through its LaunchAgent when it is not running.
+answers() { curl -s -o /dev/null --max-time 1 '$DASHBOARD_ADDRESS/'; }
+if ! answers; then
+    launchctl bootstrap "gui/\$(id -u)" '$dashboard_agent' 2>/dev/null || launchctl kickstart "gui/\$(id -u)/$dashboard_label"
+fi
+deadline=\$((SECONDS + 120))
+until answers; do
+    if [ "\$SECONDS" -ge "\$deadline" ]; then
+        osascript -e 'display alert "The $PROFILE_NAME dashboard did not start." message "Run hermes -p $PROFILE_NAME dashboard in Terminal to see why."'
+        exit 1
+    fi
+    sleep 0.5
+done
+open '$DASHBOARD_ADDRESS/chat?profile=$PROFILE_NAME'
+EOF
+    chmod +x "$app/MacOS/$PROFILE_NAME"
+fi
+
+# The first start builds the dashboard's web UI, so later starts need no npm. The dashboard keeps
+# running after this terminal closes. A dashboard that is already running prints its address and exits.
+step 'Hermes web dashboard'
+dashboard_log=$(mktemp)
+nohup hermes -p "$PROFILE_NAME" dashboard --no-open </dev/null >"$dashboard_log" 2>&1 &
+dashboard_pid=$!
+deadline=$((SECONDS + 900))
+dashboard_url=""
+while [ -z "$dashboard_url" ]; do
+    exited=false
+    kill -0 "$dashboard_pid" 2>/dev/null || exited=true
+    port=$(sed -n 's/.*HERMES_DASHBOARD_READY port=\([0-9][0-9]*\).*/\1/p' "$dashboard_log" | head -n 1)
+    if [ -n "$port" ]; then
+        dashboard_url="http://127.0.0.1:$port"
+    else
+        dashboard_url=$(sed -n "s|.*Managing profile '[^']*': \(https\{0,1\}://[^/ ]*\).*|\1|p" "$dashboard_log" | head -n 1)
+    fi
+    if [ -z "$dashboard_url" ]; then
+        if $exited || [ "$SECONDS" -ge "$deadline" ]; then
+            echo 'The Hermes dashboard did not start. Its output:' >&2
+            cat "$dashboard_log" >&2
+            exit 1
+        fi
+        sleep 1
+    fi
+done
+chat_url="$dashboard_url/chat?profile=$PROFILE_NAME"
+if [ "$(uname -s)" = Darwin ]; then open "$chat_url"; else xdg-open "$chat_url"; fi
+
+printf '\n\033[32mInstalled. The Hermes dashboard is open at %s\033[0m\n' "$chat_url"
+printf '\033[32mSay hello in its chat to start. To open it again, open %s in Applications.\033[0m\n' "$PROFILE_NAME"
