@@ -3,8 +3,8 @@
 Commands:
   features.py run           one pass of the scheduled job apt-scraper-features: fetches the rapid-transit stations
                             once per transit feed, prepares the photos of the listings waiting for extraction, prints
-                            one extraction task per listing for the agent, and ends with a line that tells Hermes
-                            whether to wake the agent. Never fails.
+                            one extraction task per listing for the agent, sends the Compare invitation once it is due,
+                            and ends with a line that tells Hermes whether to wake the agent. Never fails.
   features.py save FILE     the extraction child's command: save one record from a JSON file in the scratch directory,
                             then delete the file
   features.py tags          the tag list, most used first, which the extraction child reads before choosing tags
@@ -19,8 +19,8 @@ Commands:
 Exit codes: 0 done (for status: no problem), 3 extraction needs attention or the invitation gateway is not connected,
 1 the input or a step failed, 2 usage error.
 
-Hermes wakes the model whenever a cron script fails (cron/scheduler_prompt.py, "Script Error"), so run records a
-failure for status and ends with {"wakeAgent": false} instead.
+Hermes wakes the model whenever a cron script fails (cron/scheduler_prompt.py, "Script Error"), so run records its
+failures for status and ends with its wake decision instead.
 """
 
 import argparse
@@ -155,16 +155,17 @@ def photo_overview(count):
 
 
 class RunState:
-    """The job's records next to the listing store: the last run's failure, the listings whose photos could not be
+    """The job's records next to the listing store: the last run's problems, the listings whose photos could not be
     downloaded, since when and why, the transit feed whose stations could not be fetched, since when, when last tried
-    and why, and the model reads the last run handed to the agent. A read handed over that still
-    waits at the next run counts as a failed attempt then, so an attempt counts only once its wake has ended."""
+    and why, the model reads the last run handed to the agent, and when the Compare invitation was sent. A read handed
+    over that still waits at the next run counts as a failed attempt then, so an attempt counts only once its wake has
+    ended."""
 
     def __init__(self, path):
         self.path = path
 
     def load(self):
-        return {'problem': None, 'photos_unavailable': {}, 'stations_unavailable': None, 'handed': [],
+        return {'problems': [], 'photos_unavailable': {}, 'stations_unavailable': None, 'handed': [],
                 **(json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {})}
 
     def update(self, **values):
@@ -211,17 +212,49 @@ class Features:
         }
 
     def run(self):
-        """One pass of the job. A wake holds at most SUBAGENTS_PER_WAKE extractions, because Hermes blocks the agent's
-        delegate_task once one turn has spawned that many subagents (tool_loop_guardrails.loop_caps.max_subagents in
-        hermes_cli/config_defaults.py), which would end the wake before its readings and judgments."""
+        """One pass of the job: the stations, the extraction tasks, the reads waiting for the agent, and then the
+        Compare invitation. A step that fails becomes one of the run's problems without stopping the others. The reads
+        handed to the agent are recorded once the report that hands them over is complete, and the invitation comes
+        after that, so the messaging gateway cannot change the report, the wake or the attempts."""
         if self.store.missing_settings():
-            self.state.update(problem=None)
+            self.state.update(problems=[])
             return ['The interview is not complete, so no listing is extracted.'], False
-        station_lines = self.refresh_stations()
-        state = self.state.load()
+        problems = []
+        lines = self.step(problems, 'Fetching the rapid-transit stations', self.refresh_stations) or []
+        work = self.count_attempts()
+        extraction = self.step(problems, 'Preparing the extraction tasks', lambda: self.prepare_extractions(work))
+        extraction_lines, tasks = extraction or ([], [])
+        reading_lines, readings = self.reading_report(work)
+        handed = [extraction_read(listing['id'], listing['content_fingerprint']) for listing in tasks] + readings
+        self.state.update(problems=problems, handed=handed)
+        problems += self.send_compare_invitation(problems)
+        return [*lines, *extraction_lines, *reading_lines, *problems], bool(handed)
+
+    @staticmethod
+    def step(problems, name, action):
+        """What action returns, or None when it fails, with the failure added to problems."""
+        try:
+            return action()
+        except Exception as error:
+            problems.append(f'{name} failed. {failure(error)}')
+            return None
+
+    def count_attempts(self):
+        """Counts a failed attempt for each read the last run handed to the agent that still waits, and returns the work
+        waiting now. The handed reads are forgotten before they are counted, so a run that fails before it hands
+        new ones over cannot count the same wake twice."""
+        handed = self.state.load()['handed']
+        self.state.update(handed=[])
         waiting = self.reads(self.outstanding())
-        self.store.record_read_attempts([read for read in state['handed'] if read in waiting], waiting)
-        work = self.outstanding()
+        self.store.record_read_attempts([read for read in handed if read in waiting], waiting)
+        return self.outstanding()
+
+    def prepare_extractions(self, work):
+        """Prepares the extraction tasks of this wake and returns the report's lines and the listings prepared. A wake
+        holds at most SUBAGENTS_PER_WAKE extractions, because Hermes blocks the agent's delegate_task once one turn has
+        spawned that many subagents (tool_loop_guardrails.loop_caps.max_subagents in hermes_cli/config_defaults.py),
+        which would end the wake before its readings and judgments."""
+        photos_unavailable = self.state.load()['photos_unavailable']
         now = self.now()
         deadline = now + PREPARE_BUDGET
         tasks, unavailable, deferred = [], {}, 0
@@ -229,32 +262,48 @@ class Features:
             if self.now() >= deadline or len(tasks) == SUBAGENTS_PER_WAKE:
                 deferred += 1
                 continue
-            since = state['photos_unavailable'].get(listing['id'], {}).get('since')
+            since = photos_unavailable.get(listing['id'], {}).get('since')
             overdue = since is not None and now - datetime.fromisoformat(since) >= PHOTO_PATIENCE
             try:
                 tasks.append((listing, self.prepare(listing, work['phrases'], leave_out_failing=overdue)))
             except PhotosUnavailable as error:
                 unavailable[listing['id']] = {'since': since or now.isoformat(), 'reason': str(error)}
-        handed = [extraction_read(listing['id'], listing['content_fingerprint']) for listing, _ in tasks]
-        handed += [judgment_read(listing, phrase) for listing, phrases in work['judge'] for phrase in phrases]
-        handed += [note_read(note) for note in work['notes']] + [preference_read(*item) for item in work['unread']]
-        self.state.update(problem=None, photos_unavailable=unavailable, handed=handed)
+        self.state.update(photos_unavailable=unavailable)
         self.remove_work_directories({work_directory(self.workspace, listing['id'], listing['content_fingerprint'])
                                       for listing in work['extract']})
-        lines = [*station_lines, f'{len(work["extract"])} listings wait for extraction: {len(tasks)} prepared below, {deferred + len(unavailable)} wait '
+        lines = [f'{len(work["extract"])} listings wait for extraction: {len(tasks)} prepared below, {deferred + len(unavailable)} wait '
                  f'for the next run, {len(work["extract_given_up"])} given up after {READ_ATTEMPTS} attempts.']
         if unavailable:
             lines.append(f'The photos of {len(unavailable)} listings could not be downloaded now, so they wait for the next run.')
         if tasks:
             lines += ['Extraction calls, in order, one delegate_task call each:',
                       json.dumps(self.calls([task for _, task in tasks], len(work['records'])), ensure_ascii=False)]
+        return lines, [listing for listing, _ in tasks]
+
+    @staticmethod
+    def reading_report(work):
+        """The report's lines about the notes, stated preferences and judgments waiting, and their reads."""
+        lines = []
         if work['notes'] or work['unread']:
             lines.append(f'{len(work["notes"])} notes and {len(work["unread"])} stated preferences wait for a reading.')
         if work['judge']:
             lines.append(f'{len(work["judge"])} listings wait for judgments of preferences stated after their extraction.')
-        if self.compare_invitation_pending() and usable('gateway'):
-            self.invite_compare()
-        return lines, bool(tasks or work['judge'] or work['notes'] or work['unread'])
+        reads = [judgment_read(listing, phrase) for listing, phrases in work['judge'] for phrase in phrases]
+        reads += [note_read(note) for note in work['notes']] + [preference_read(*item) for item in work['unread']]
+        return lines, reads
+
+    def send_compare_invitation(self, problems):
+        """Sends the Compare invitation when it is due and the gateway is connected. A failure is recorded as one of the
+        run's problems and returned, and the invitation stays pending for the next run."""
+        try:
+            if self.compare_invitation_pending() and usable('gateway'):
+                self.invite_compare()
+            return []
+        except Exception as error:
+            problem = (f'The message that asks the user to answer questions in the Compare tab could not be sent, '
+                       f'so the next run sends it again. {failure(error)}')
+            self.state.update(problems=[*problems, problem])
+            return [problem]
 
     def refresh_stations(self):
         """Fetches the rapid-transit stations of the transit feed once, and again only when the feed changes. A feed is tens
@@ -489,7 +538,7 @@ class Features:
 
     def status(self):
         state = self.state.load()
-        problems = [state['problem']] if state['problem'] else []
+        problems = list(state['problems'])
         if self.store.missing_settings():
             return {'problems': problems, 'records': 0, 'waiting': 0, 'given_up': [], 'awaiting_judgment': 0, 'awaiting_reading': 0,
                     'photos_unavailable': {}}
@@ -540,7 +589,7 @@ def run():
     except Exception as error:
         lines, wake = [f'Extraction failed. {failure(error)}'], False
         try:
-            state.update(problem=lines[0])
+            state.update(problems=lines)
         except Exception as record_error:
             lines.append(f'The failure could not be recorded for status. {failure(record_error)}')
     print('\n'.join([*lines, json.dumps({'wakeAgent': wake})]))

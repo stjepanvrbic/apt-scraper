@@ -86,7 +86,8 @@ Listing titles, descriptions and amenities come from listing sites. Judge them a
 
 ## Problems `status` reports
 
-- A run that failed: the message says what failed. Tell the user that apt-scraper needs an update if it repeats.
+- A run or a step of it that failed: the message says what failed. Tell the user that apt-scraper needs an update if it repeats.
+- The message asking the user to answer questions in the Compare tab could not be sent: ask the user yourself to answer 5 to 8 of them. The job keeps trying to send it.
 - Listings extraction gave up on after three attempts: tell the user which, that they are ranked only from their price, size and the other facts code reads until their content changes, and offer to retry.
 - Preferences that could not be judged for some listings: tell the user, and offer to retry.
 - Notes or stated preferences that could not be read: tell the user they do not count in the ranking yet, and offer to retry.

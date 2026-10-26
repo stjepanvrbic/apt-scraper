@@ -2,6 +2,7 @@ import io
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -18,7 +19,7 @@ from test_feature_record import extraction  # noqa: E402
 from test_gallery_store import ListingStore, listing  # noqa: E402
 from test_listing_photos import picture, recompressed, zillow  # noqa: E402
 import features  # noqa: E402
-from features import PHOTO_PATIENCE, READ_ATTEMPTS, SEQUENTIAL_RECORDS, STATION_RETRY, SUBAGENTS_PER_WAKE, Features, PhotosUnavailable, RunState  # noqa: E402
+from features import PHOTO_PATIENCE, READ_ATTEMPTS, SEQUENTIAL_RECORDS, STATION_RETRY, SUBAGENTS_PER_WAKE, Features, PhotosUnavailable, RunState, note_read  # noqa: E402
 from geodata import SourceUnavailable  # noqa: E402
 from scoring import design, observations  # noqa: E402
 
@@ -106,6 +107,13 @@ class FeaturesTestCase(unittest.TestCase):
     def run_job(self):
         lines, wake = self.features.run()
         return '\n'.join(lines), wake
+
+    def run_cron(self):
+        """One run of the cron job's command, as Hermes sees it: the report, and the wake decision of its last line."""
+        with mock.patch.object(features, 'open_features', return_value=self.features), mock.patch('sys.stdout', new=io.StringIO()) as output:
+            self.assertEqual(features.main(['run']), 0)
+        *report, gate = output.getvalue().splitlines()
+        return '\n'.join(report), json.loads(gate)['wakeAgent']
 
     def calls(self, report):
         return json.loads(report.split('Extraction calls, in order, one delegate_task call each:\n', 1)[1].split('\n', 1)[0])
@@ -409,10 +417,44 @@ class AttemptTests(FeaturesTestCase):
     def test_a_failing_run_records_its_problem_and_does_not_wake_the_agent(self):
         broken = Features(mock.Mock(missing_settings=mock.Mock(side_effect=OSError('disk unplugged'))), self.state,
                           self.home / 'extraction', self.server.fetch, lambda: NOW, self.transit.fetch)
-        with mock.patch.object(features, 'open_features', return_value=broken), mock.patch('sys.stdout', new=io.StringIO()) as output:
-            self.assertEqual(features.main(['run']), 0)
-        self.assertEqual(output.getvalue().splitlines()[-1], '{"wakeAgent": false}')
-        self.assertIn('disk unplugged', self.state.load()['problem'])
+        self.features = broken
+        self.assertFalse(self.run_cron()[1])
+        [problem] = self.state.load()['problems']
+        self.assertIn('disk unplugged', problem)
+
+    def test_a_failed_station_fetch_does_not_stop_extraction(self):
+        identifier = self.add(1)
+        with mock.patch.object(self.store, 'save_stations', side_effect=sqlite3.OperationalError('database is locked')):
+            report, wake = self.run_cron()
+        self.assertTrue(wake)
+        self.assertEqual(self.manifest(self.tasks(report)[0])['id'], identifier)
+        [problem] = self.features.status()['problems']
+        self.assertIn('stations', problem)
+        self.assertIn('database is locked', problem)
+
+    def test_a_failed_preparation_hands_nothing_but_the_readings_and_counts_no_attempt_later(self):
+        identifier = self.add(1)
+        self.save(self.tasks(self.run_job()[0])[0])
+        self.store.add_note('Too dark.', listing_id=identifier, role='user')
+        self.add(2)
+        with mock.patch.object(Features, 'prepare', side_effect=ValueError('broken image')):
+            report, wake = self.run_cron()
+        self.assertTrue(wake)
+        self.assertIn('1 notes and 0 stated preferences wait for a reading.', report)
+        self.assertNotIn('Extraction calls', report)
+        self.assertTrue(any('broken image' in problem for problem in self.features.status()['problems']))
+        self.run_cron()
+        self.assertEqual(self.store.read_attempts(), {note_read(note): 1 for note in self.store.unread_notes()})
+        self.assertEqual(self.features.status()['problems'], [])
+
+    def test_a_run_that_fails_after_counting_attempts_does_not_count_them_again(self):
+        self.add(1)
+        self.run_job()
+        with mock.patch.object(Features, 'reading_report', side_effect=OSError('disk unplugged')):
+            self.assertFalse(self.run_cron()[1])
+        self.assertEqual(list(self.store.read_attempts().values()), [1])
+        self.run_job()
+        self.assertEqual(list(self.store.read_attempts().values()), [1])
 
 
 class StationTests(FeaturesTestCase):
