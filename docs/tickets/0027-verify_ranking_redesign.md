@@ -6,7 +6,7 @@ priority: 2
 assignee: Stjepan Vrbic
 milestone:
 parent: 0015
-blocked_by: []
+blocked_by: [0043]
 related: [0014, 0033]
 ---
 
@@ -104,3 +104,4 @@ Tech debt fixed: the Design section's path to the spike's root held a control ch
 - 2026-10-25: Also waiting on the owner: the installer runs on Windows and macOS, and the Telegram delivery of the pairwise invitation, as Result lists under "Not verified, for the owner".
 
 - 2026-10-25: Owner decision on the bar: (a), the scoring model's result on these same 129 listings. The item passes with 6 of 16 and mean unseen rank 29.5. Left for the owner: the Windows installer run, the macOS run, and the Telegram invitation on a connected profile.
+- 2026-10-26: An end-to-end run on `main` with one real Zillow search, in a throwaway root, is recorded in the [end-to-end report](../research/e2e_run_2026-10-26.md). Pairwise questions fail on a profile without a messaging gateway: nobody asks the user for Compare answers ([0043](0043-compare_invitation_without_gateway.md)), which now blocks this ticket. The run also passed the interview, listing features, a single pairwise answer and the note reading live, and filed 0044 to 0047 as smaller bugs.
