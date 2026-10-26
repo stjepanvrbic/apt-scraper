@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/sea
 
 from test_gallery_store import ListingStore  # noqa: E402
 from matching import evaluate  # noqa: E402
-from search import RUN_BUDGET, Search, SearchState  # noqa: E402
+from search import Search, SearchState  # noqa: E402
 from sites.errors import Blocked, Changed, Gone  # noqa: E402
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'profile/skills/search/scripts/search.py'
@@ -295,8 +295,8 @@ class SearchRunTests(unittest.TestCase):
         self.assertFalse(report['wake'])
         status = Search(self.store, SearchState(self.directory / 'search.sqlite3'), client=None, site_for=None, site_named=None,
                         now=lambda: self.now).status()
-        self.assertEqual(status['state'], 'failed')
         self.assertTrue(any('disk full' in problem for problem in status['problems']))
+        self.assertEqual(status['state'], 'failed')
 
     def test_criteria_narrowed_during_a_run_hide_every_listing_outside_them_when_the_run_ends(self):
         self.store.update_settings(criteria={**SETTINGS['criteria'], 'other': []}, judge=evaluate)
@@ -423,7 +423,7 @@ class SearchScriptTests(unittest.TestCase):
         self.assertTrue(any('gateway' in problem for problem in report['problems']))
         state.start_run(datetime.now(timezone.utc) - timedelta(hours=4))
         report = json.loads(self.run_script('status').stdout)
-        self.assertEqual(report['state'], 'stopped')
+        self.assertEqual((report['state'], report['running_since']), ('stopped', None))
         self.assertTrue(any('gateway' in problem for problem in report['problems']))
 
     def test_status_reports_a_first_run_in_progress_without_a_problem(self):
@@ -439,7 +439,7 @@ class SearchScriptTests(unittest.TestCase):
     def test_status_reports_a_run_that_has_gone_on_longer_than_twice_its_budget(self):
         self.store.update_settings(**SETTINGS)
         state = SearchState(self.home / 'workspace' / 'gallery' / 'search.sqlite3')
-        state.start_run(datetime.now(timezone.utc) - 2 * RUN_BUDGET - timedelta(minutes=1))
+        state.start_run(datetime.now(timezone.utc) - timedelta(minutes=51))
         result = self.run_script('status')
         self.assertEqual(result.returncode, 3, result.stdout)
         report = json.loads(result.stdout)

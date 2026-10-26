@@ -300,7 +300,7 @@ class Search:
         shown = [item for item in listings if item['matches_criteria'] and item['status'] == 'available' and not item['dismissed']]
         first_seen, reported_at = self.state.first_seen(), self.state.reported_at()
         return {
-            'state': state, 'problems': problems, 'running_since': running_since and running_since.isoformat(),
+            'state': state, 'problems': problems, 'running_since': running_since.isoformat() if state == 'running' else None,
             'last_run': last, 'shown': len(shown), 'awaiting_judgment': len(self.pending()) if not missing else 0,
             'unavailable': sum(item['status'] == 'unavailable' for item in listings),
             'new_since_report': sum(first_seen.get(item['id'], reported_at) > reported_at for item in shown),
