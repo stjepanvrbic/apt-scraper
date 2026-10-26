@@ -1,9 +1,9 @@
 ---
 title: The review pass reads the preferences of the rerank it reviews
 type: Bug
-state: Backlog
+state: In Progress
 priority: 4
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []

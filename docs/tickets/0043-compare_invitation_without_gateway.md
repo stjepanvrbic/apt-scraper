@@ -1,9 +1,9 @@
 ---
 title: A user without a messaging gateway is asked for Compare answers
 type: Bug
-state: Todo
+state: In Progress
 priority: 2
-assignee:
+assignee: agent
 milestone:
 parent: 0015
 blocked_by: []

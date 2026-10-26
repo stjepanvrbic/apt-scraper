@@ -1,9 +1,9 @@
 ---
 title: A reason's station distance reads as one item of its list
 type: Bug
-state: Backlog
+state: In Progress
 priority: 3
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []
