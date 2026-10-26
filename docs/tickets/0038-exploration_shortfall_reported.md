@@ -1,9 +1,9 @@
 ---
 title: A shortfall of exploration listings is reported, not silent
 type: Bug
-state: Todo
+state: In Progress
 priority: 3
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []

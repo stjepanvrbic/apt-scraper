@@ -1,9 +1,9 @@
 ---
 title: The fit is separate from the leave-one-out check
 type: Chore
-state: Todo
+state: In Progress
 priority: 3
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []

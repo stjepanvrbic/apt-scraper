@@ -1,9 +1,9 @@
 ---
 title: Review text is data under the citation discipline, never an instruction
 type: Chore
-state: Todo
+state: In Progress
 priority: 3
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []
