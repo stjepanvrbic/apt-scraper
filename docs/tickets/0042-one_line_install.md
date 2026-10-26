@@ -1,9 +1,9 @@
 ---
 title: One-line install that ends in the agent-guided setup
 type: Feature
-state: In Progress
+state: Done
 priority: 2
-assignee: agent
+assignee:
 milestone:
 parent:
 blocked_by: []
@@ -20,7 +20,7 @@ A new user installs with one command pasted into a terminal, on Windows or macOS
 - [x] Rerunning the same line updates the repository and the profile, and keeps the user's `config.yaml`, data and credentials.
 - [x] `README.md` leads with the two lines and nothing else a user must do before the chat opens; the clone-and-run path stays for development.
 - [x] A test runs each bootstrap against a fake `git` and a fake installer in temporary directories, for a fresh install and a rerun.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
@@ -58,3 +58,5 @@ Not run: either line on a real machine, because the raw URLs fail while the repo
 Delivered on `feat/one_line_install` in [PR #35](https://github.com/stjepanvrbic/apt-scraper/pull/35), open against `main`, not merged. Spec decisions checked: none concern installation, and none have ADR identifiers.
 
 ## Comments
+
+- 2026-10-26: Review found that `set -u` with an empty `"$@"` exits on macOS bash 3.2; fixed with `${1+"$@"}` in `bootstrap.sh` and the same pre-existing case in `install.sh`. Confirmed from bash's COMPAT notes, not run on a Mac. Gallery data under Hermes lives in `HERMES_HOME/workspace/gallery/`, not beside the clone.
