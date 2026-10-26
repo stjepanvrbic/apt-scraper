@@ -10,7 +10,6 @@ PLUGIN_NAME=claude-subscription-directsdk
 MINIMUM_CLAUDE_VERSION=2.1.284
 MINIMUM_HERMES_VERSION=0.22.5
 PROFILE_SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/profile"
-DASHBOARD_ADDRESS=http://127.0.0.1:9119
 export PATH="$HOME/.local/bin:$PATH"
 
 step() { printf '\033[36m==> %s\033[0m\n' "$1"; }
@@ -129,13 +128,48 @@ if ! [[ $reply_lower =~ (^|[^a-z])ready([^a-z]|$) ]]; then
     exit 1
 fi
 
+# The first start builds the dashboard's web UI, so later starts need no npm. The dashboard keeps
+# running after this terminal closes. A dashboard that is already running prints its address and exits.
+# The launchers below start and open the dashboard at the address recorded here.
+step 'Hermes web dashboard'
+dashboard_log=$(mktemp)
+nohup hermes -p "$PROFILE_NAME" dashboard --no-open </dev/null >"$dashboard_log" 2>&1 &
+dashboard_pid=$!
+deadline=$((SECONDS + 900))
+dashboard_url=""
+while [ -z "$dashboard_url" ]; do
+    exited=false
+    kill -0 "$dashboard_pid" 2>/dev/null || exited=true
+    port=$(sed -n 's/.*HERMES_DASHBOARD_READY port=\([0-9][0-9]*\).*/\1/p' "$dashboard_log" | head -n 1)
+    if [ -n "$port" ]; then
+        dashboard_url="http://127.0.0.1:$port"
+    else
+        dashboard_url=$(sed -n "s|.*Managing profile '[^']*': \(https\{0,1\}://[^/ ]*\).*|\1|p" "$dashboard_log" | head -n 1)
+    fi
+    if [ -z "$dashboard_url" ]; then
+        if $exited || [ "$SECONDS" -ge "$deadline" ]; then
+            echo 'The Hermes dashboard did not start. Its output:' >&2
+            cat "$dashboard_log" >&2
+            exit 1
+        fi
+        sleep 1
+    fi
+done
+printf '%s' "$dashboard_url" >"$profile_home/dashboard-address"
+chat_url="$dashboard_url/chat?profile=$PROFILE_NAME"
+if [ "$(uname -s)" = Darwin ]; then open "$chat_url"; else xdg-open "$chat_url"; fi
+
 # The dashboard starts at login, and the apt-scraper app in Applications opens its chat, starting the
-# dashboard first when it is not running. Both start it through one LaunchAgent, so launchd owns it and
-# `hermes update` restarts it. `hermes update` rebuilds the web UI, so these starts skip the build.
+# dashboard first when Hermes does not answer at the recorded address. Any listener answers HTTP, so
+# only Hermes's health reply, "ok" with its version, counts. Both start the dashboard through one
+# LaunchAgent on the recorded port, so launchd owns it and `hermes update` restarts it. Hermes finds
+# that job only when its arguments start with hermes, so the port is written into them rather than
+# read from the file. `hermes update` rebuilds the web UI, so these starts skip the build.
 if [ "$(uname -s)" = Darwin ]; then
     step 'Dashboard at login and the apt-scraper shortcut'
     dashboard_label=io.github.stjepanvrbic.apt-scraper.dashboard
     dashboard_agent="$HOME/Library/LaunchAgents/$dashboard_label.plist"
+    dashboard_address="$profile_home/dashboard-address"
     mkdir -p "$(dirname "$dashboard_agent")"
     cat >"$dashboard_agent" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -152,6 +186,8 @@ if [ "$(uname -s)" = Darwin ]; then
         <string>dashboard</string>
         <string>--no-open</string>
         <string>--skip-build</string>
+        <string>--port</string>
+        <string>${dashboard_url##*:}</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -180,52 +216,29 @@ EOF
 EOF
     cat >"$app/MacOS/$PROFILE_NAME" <<EOF
 #!/bin/bash
-# Opens the $PROFILE_NAME chat, starting the dashboard through its LaunchAgent when it is not running.
-answers() { curl -s -o /dev/null --max-time 1 '$DASHBOARD_ADDRESS/'; }
-if ! answers; then
+# Opens the $PROFILE_NAME chat, starting the dashboard through its LaunchAgent unless Hermes answers at
+# its recorded address.
+address=\$(cat '$dashboard_address')
+hermes_answers() {
+    local health
+    health=\$(curl -s --max-time 1 -w '\n%{http_code}' "\$address/api/health") || return 1
+    [ "\$(printf '%s\n' "\$health" | tail -n 1)" = 200 ] && grep -Eq '^\{.*"ok": *true[,}]' <<<"\$health" && grep -Eq '"version": *"' <<<"\$health"
+}
+if ! hermes_answers; then
     launchctl bootstrap "gui/\$(id -u)" '$dashboard_agent' 2>/dev/null || launchctl kickstart "gui/\$(id -u)/$dashboard_label"
 fi
 deadline=\$((SECONDS + 120))
-until answers; do
+until hermes_answers; do
     if [ "\$SECONDS" -ge "\$deadline" ]; then
-        osascript -e 'display alert "The $PROFILE_NAME dashboard did not start." message "Run hermes -p $PROFILE_NAME dashboard in Terminal to see why."'
+        osascript -e "display alert \"The $PROFILE_NAME dashboard did not answer at \$address.\" message \"Run hermes -p $PROFILE_NAME dashboard --port \${address##*:} in Terminal to see why.\""
         exit 1
     fi
     sleep 0.5
 done
-open '$DASHBOARD_ADDRESS/chat?profile=$PROFILE_NAME'
+open "\$address/chat?profile=$PROFILE_NAME"
 EOF
     chmod +x "$app/MacOS/$PROFILE_NAME"
 fi
-
-# The first start builds the dashboard's web UI, so later starts need no npm. The dashboard keeps
-# running after this terminal closes. A dashboard that is already running prints its address and exits.
-step 'Hermes web dashboard'
-dashboard_log=$(mktemp)
-nohup hermes -p "$PROFILE_NAME" dashboard --no-open </dev/null >"$dashboard_log" 2>&1 &
-dashboard_pid=$!
-deadline=$((SECONDS + 900))
-dashboard_url=""
-while [ -z "$dashboard_url" ]; do
-    exited=false
-    kill -0 "$dashboard_pid" 2>/dev/null || exited=true
-    port=$(sed -n 's/.*HERMES_DASHBOARD_READY port=\([0-9][0-9]*\).*/\1/p' "$dashboard_log" | head -n 1)
-    if [ -n "$port" ]; then
-        dashboard_url="http://127.0.0.1:$port"
-    else
-        dashboard_url=$(sed -n "s|.*Managing profile '[^']*': \(https\{0,1\}://[^/ ]*\).*|\1|p" "$dashboard_log" | head -n 1)
-    fi
-    if [ -z "$dashboard_url" ]; then
-        if $exited || [ "$SECONDS" -ge "$deadline" ]; then
-            echo 'The Hermes dashboard did not start. Its output:' >&2
-            cat "$dashboard_log" >&2
-            exit 1
-        fi
-        sleep 1
-    fi
-done
-chat_url="$dashboard_url/chat?profile=$PROFILE_NAME"
-if [ "$(uname -s)" = Darwin ]; then open "$chat_url"; else xdg-open "$chat_url"; fi
 
 printf '\n\033[32mInstalled. The Hermes dashboard is open at %s\033[0m\n' "$chat_url"
 printf '\033[32mSay hello in its chat to start. To open it again, open %s in Applications.\033[0m\n' "$PROFILE_NAME"

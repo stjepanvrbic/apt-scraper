@@ -10,7 +10,6 @@ $PluginName = 'claude-subscription-directsdk'
 $MinimumClaudeVersion = [version]'2.1.284'
 $MinimumHermesVersion = [version]'0.22.5'
 $ProfileSource = Join-Path $PSScriptRoot 'profile'
-$DashboardAddress = 'http://127.0.0.1:9119'
 
 function Write-Step([string]$Message) { Write-Host "==> $Message" -ForegroundColor Cyan }
 
@@ -141,56 +140,9 @@ Write-Step 'Test message through the Claude subscription'
 $reply = Invoke-Native $hermes @('-p', $ProfileName, 'chat', '-q', 'Reply with exactly: ready', '--oneshot', '-Q') | Out-String
 if ($reply -notmatch '\bready\b') { throw "Test message failed. Reply: $reply" }
 
-# The dashboard starts at login, and the Start menu's apt-scraper opens its chat, starting the dashboard
-# first when it is not running. wscript has no console and runs the dashboard's console hidden, as
-# Hermes's own gateway launcher does. `hermes update` rebuilds the web UI, so these starts skip the build.
-Write-Step 'Dashboard at login and the apt-scraper shortcut'
-function ConvertTo-VbsString([string]$Text) { '"' + $Text.Replace('"', '""') + '"' }
-$launcher = "$profileHome\dashboard.vbs"
-$dashboardCommand = "`"$hermes`" -p $ProfileName dashboard --no-open --skip-build"
-Set-Content -Path $launcher -Encoding Unicode -Value @(
-    "' Starts the $ProfileName dashboard without a window. With /open, opens its chat once it answers."
-    'Option Explicit'
-    'Dim shell, deadline'
-    'Set shell = CreateObject("WScript.Shell")'
-    "If Not DashboardAnswers() Then shell.Run $(ConvertTo-VbsString $dashboardCommand), 0, False"
-    'If WScript.Arguments.Named.Exists("open") Then'
-    '    deadline = DateAdd("s", 120, Now)'
-    '    Do Until DashboardAnswers()'
-    '        If Now > deadline Then'
-    "            WScript.Echo $(ConvertTo-VbsString "The $ProfileName dashboard did not start. Run 'hermes -p $ProfileName dashboard' in a terminal to see why.")"
-    '            WScript.Quit 1'
-    '        End If'
-    '        WScript.Sleep 500'
-    '    Loop'
-    "    shell.Run $(ConvertTo-VbsString "$DashboardAddress/chat?profile=$ProfileName")"
-    'End If'
-    ''
-    'Function DashboardAnswers()'
-    '    Dim request'
-    '    Set request = CreateObject("WinHttp.WinHttpRequest.5.1")'
-    '    request.SetTimeouts 1000, 1000, 1000, 1000'
-    '    On Error Resume Next'
-    "    request.Open `"GET`", $(ConvertTo-VbsString "$DashboardAddress/"), False"
-    '    request.Send'
-    '    DashboardAnswers = (Err.Number = 0)'
-    'End Function'
-)
-$programs = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
-foreach ($entry in @(
-    @{ Path = "$programs\Startup\$ProfileName dashboard.lnk"; Arguments = "`"$launcher`""; Description = "Starts the $ProfileName dashboard" },
-    @{ Path = "$programs\$ProfileName.lnk"; Arguments = "`"$launcher`" /open"; Description = "Opens the $ProfileName chat" }
-)) {
-    New-Item -ItemType Directory -Force -Path (Split-Path $entry.Path) | Out-Null
-    $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($entry.Path)
-    $shortcut.TargetPath = "$env:SystemRoot\System32\wscript.exe"
-    $shortcut.Arguments = $entry.Arguments
-    $shortcut.Description = $entry.Description
-    $shortcut.Save()
-}
-
 # The first start builds the dashboard's web UI, so later starts need no npm. The dashboard keeps
 # running after this window closes. A dashboard that is already running prints its address and exits.
+# The launchers below start and open the dashboard at the address recorded here.
 Write-Step 'Hermes web dashboard'
 $dashboardLog = Join-Path ([IO.Path]::GetTempPath()) "hermes-dashboard-$([IO.Path]::GetRandomFileName()).log"
 $dashboard = Start-Process -FilePath $hermes -ArgumentList @('-p', $ProfileName, 'dashboard', '--no-open') -WindowStyle Hidden `
@@ -206,8 +158,69 @@ while (-not $dashboardUrl) {
         throw "The Hermes dashboard did not start. Its output:`n$output$(Get-Content "$dashboardLog.err" -Raw -ErrorAction SilentlyContinue)"
     } else { Start-Sleep -Seconds 1 }
 }
+Set-Content -Path "$profileHome\dashboard-address" -Value $dashboardUrl -NoNewline -Encoding ASCII
 $chatUrl = "$dashboardUrl/chat?profile=$ProfileName"
 Start-Process $chatUrl
+
+# The dashboard starts at login, and the Start menu's apt-scraper opens its chat, starting the dashboard
+# first when Hermes does not answer at the recorded address. Any listener answers HTTP, so only
+# Hermes's health reply counts: "ok" with its version, matched by a pattern because VBScript has no
+# JSON parser. wscript has no console and runs the dashboard's console hidden, as Hermes's own gateway
+# launcher does.
+# `hermes update` rebuilds the web UI, so these starts skip the build.
+Write-Step 'Dashboard at login and the apt-scraper shortcut'
+function ConvertTo-VbsString([string]$Text) { '"' + $Text.Replace('"', '""') + '"' }
+$launcher = "$profileHome\dashboard.vbs"
+$dashboardCommand = "`"$hermes`" -p $ProfileName dashboard --no-open --skip-build --port "
+Set-Content -Path $launcher -Encoding Unicode -Value @(
+    "' Starts the $ProfileName dashboard without a window unless Hermes answers at its recorded address."
+    "' With /open, opens its chat once Hermes answers there."
+    'Option Explicit'
+    'Dim shell, address, port, deadline'
+    'Set shell = CreateObject("WScript.Shell")'
+    "address = CreateObject(`"Scripting.FileSystemObject`").OpenTextFile($(ConvertTo-VbsString "$profileHome\dashboard-address")).ReadAll"
+    'port = Mid(address, InStrRev(address, ":") + 1)'
+    "If Not HermesAnswers() Then shell.Run $(ConvertTo-VbsString $dashboardCommand) & port, 0, False"
+    'If WScript.Arguments.Named.Exists("open") Then'
+    '    deadline = DateAdd("s", 120, Now)'
+    '    Do Until HermesAnswers()'
+    '        If Now > deadline Then'
+    "            WScript.Echo $(ConvertTo-VbsString "The $ProfileName dashboard did not answer at ") & address & $(ConvertTo-VbsString ". Run 'hermes -p $ProfileName dashboard --port ") & port & $(ConvertTo-VbsString "' in a terminal to see why.")"
+    '            WScript.Quit 1'
+    '        End If'
+    '        WScript.Sleep 500'
+    '    Loop'
+    "    shell.Run address & $(ConvertTo-VbsString "/chat?profile=$ProfileName")"
+    'End If'
+    ''
+    'Function HermesAnswers()'
+    '    Dim request, health'
+    '    HermesAnswers = False'
+    '    Set request = CreateObject("WinHttp.WinHttpRequest.5.1")'
+    '    request.SetTimeouts 1000, 1000, 1000, 1000'
+    '    On Error Resume Next'
+    '    request.Open "GET", address & "/api/health", False'
+    '    request.Send'
+    '    If Err.Number <> 0 Then Exit Function'
+    '    On Error GoTo 0'
+    '    If request.Status <> 200 Then Exit Function'
+    '    Set health = New RegExp'
+    '    health.Pattern = "^\{(?=.*""ok"":\s*true[,}])(?=.*""version"":\s*"")"'
+    '    HermesAnswers = health.Test(request.ResponseText)'
+    'End Function'
+)
+$programs = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
+foreach ($entry in @(
+    @{ Path = "$programs\Startup\$ProfileName dashboard.lnk"; Arguments = "`"$launcher`""; Description = "Starts the $ProfileName dashboard" },
+    @{ Path = "$programs\$ProfileName.lnk"; Arguments = "`"$launcher`" /open"; Description = "Opens the $ProfileName chat" }
+)) {
+    New-Item -ItemType Directory -Force -Path (Split-Path $entry.Path) | Out-Null
+    $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($entry.Path)
+    $shortcut.TargetPath = "$env:SystemRoot\System32\wscript.exe"
+    $shortcut.Arguments = $entry.Arguments
+    $shortcut.Description = $entry.Description
+    $shortcut.Save()
+}
 
 Write-Host ''
 Write-Host "Installed. The Hermes dashboard is open at $chatUrl" -ForegroundColor Green
