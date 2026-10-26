@@ -3,6 +3,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from urllib.error import HTTPError
 from uuid import uuid4
 
@@ -94,11 +95,12 @@ class SignalStoreTests(unittest.TestCase):
         connection.close()
         old = ListingStore.__new__(ListingStore)
         old.path = path
-        old.upsert_listing(listing())
-        with old.connect(write=True) as connection:
-            connection.execute('''UPDATE code_features SET nearest_station = 'Central', station_distance_km = 0.25,
-                place_distances_km = '{"Work": 1.5}' WHERE listing_id = 'example:100' ''')
-        before = old.code_features()
+        with patch('store.MIGRATIONS', MIGRATIONS[:7]):
+            old.upsert_listing(listing())
+            with old.connect(write=True) as connection:
+                connection.execute('''UPDATE code_features SET nearest_station = 'Central', station_distance_km = 0.25,
+                    place_distances_km = '{"Work": 1.5}' WHERE listing_id = 'example:100' ''')
+            before = old.code_features()
         migrated = ListingStore(path)
         self.assertEqual(migrated.schema_version, len(MIGRATIONS))
         with migrated.connect() as connection:

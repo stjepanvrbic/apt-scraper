@@ -180,12 +180,9 @@ class MigrationTests(unittest.TestCase):
                 for migration in MIGRATIONS[:4]:
                     migration(connection)
                 connection.execute('PRAGMA user_version = 4')
-                connection.commit()
-            old = ListingStore.__new__(ListingStore)
-            old.path = path
-            with old.connect(write=True) as connection:
                 connection.execute("INSERT INTO listings (id, data, status, first_seen, fingerprint) VALUES ('example:1', '{}', 'available', '2026-10-01', 'f')")
                 connection.execute("INSERT INTO ranking (listing_id, fingerprint, rank, reason) VALUES ('example:1', 'f', 3, 'Kept.')")
+                connection.commit()
             store = ListingStore(path)
             self.assertEqual(store.schema_version, len(MIGRATIONS))
             with store.connect() as connection:

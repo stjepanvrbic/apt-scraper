@@ -24,7 +24,7 @@ class MigrationTests(unittest.TestCase):
                 self.assertEqual(saved['rental_period'], 'month')
                 self.assertEqual(saved['notes'][0]['text'], 'Keep the courtyard.')
 
-    def test_a_stored_notes_session_is_dropped_and_its_running_reply_closed(self):
+    def test_a_stored_notes_session_is_not_carried_over_and_its_running_reply_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'listings.sqlite3'
             with closing(sqlite3.connect(path)) as connection, connection:
@@ -44,6 +44,34 @@ class MigrationTests(unittest.TestCase):
             reply = state['messages'][-1]
             self.assertEqual(reply['status'], 'error')
             self.assertIn('Send the message again', reply['error'])
+
+    def test_a_session_written_by_a_process_that_predates_the_migration_is_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ListingStore(Path(directory) / 'listings.sqlite3')
+            identity = store.start_chat('Quiet street', 'request')
+            with closing(sqlite3.connect(store.path)) as connection, connection:
+                connection.execute("UPDATE chat_session SET session_id = 'local-shared-titled' WHERE id = 1")
+            self.assertIsNone(store.chat_state()['session_id'])
+            store.update_chat(identity, status='complete', session_id='local-own')
+            with closing(sqlite3.connect(store.path)) as connection, connection:
+                connection.execute("UPDATE chat_session SET session_id = 'local-shared-titled' WHERE id = 1")
+            self.assertEqual(store.chat_state()['session_id'], 'local-own')
+
+    def test_a_store_refuses_a_database_migrated_after_it_was_opened(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ListingStore(Path(directory) / 'listings.sqlite3')
+            identity = store.start_chat('Quiet street', 'request')
+            with closing(sqlite3.connect(store.path)) as connection:
+                connection.execute(f'PRAGMA user_version = {len(MIGRATIONS) + 1}')
+            before = store.path.read_bytes()
+            for operation in (lambda: store.update_chat(identity, status='complete', session_id='local-own'),
+                              lambda: store.start_chat('Another', 'another-request'),
+                              lambda: store.upsert_listing(listing()),
+                              store.chat_state):
+                with self.assertRaisesRegex(ValueError, 'migrated'):
+                    operation()
+            self.assertEqual(store.path.read_bytes(), before)
+            self.assertEqual(store.schema_version, len(MIGRATIONS) + 1)
 
     def test_newer_schema_is_rejected_without_modification(self):
         with tempfile.TemporaryDirectory() as directory:
