@@ -1,7 +1,12 @@
 import json
 
 
-RANKABLE = "l.matches_criteria = 1 AND l.status = 'available' AND COALESCE(f.dismissed, 0) = 0"
+RANKING_EXCLUSION = """CASE
+    WHEN l.status != 'available' THEN 'Not ranked: unavailable.'
+    WHEN COALESCE(f.dismissed, 0) != 0 THEN 'Not ranked: dismissed.'
+    WHEN l.matches_criteria != 1 THEN 'Not ranked: outside the criteria.'
+END"""
+RANKABLE = f'({RANKING_EXCLUSION}) IS NULL'
 
 
 def validate_page(page, page_size):

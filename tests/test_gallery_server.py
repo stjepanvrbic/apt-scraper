@@ -11,7 +11,7 @@ from store import ListingStore
 from server import make_server
 
 
-class GalleryServerTests(unittest.TestCase):
+class GalleryServerCase(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -34,6 +34,8 @@ class GalleryServerTests(unittest.TestCase):
         with urlopen(request, timeout=3) as response:
             return json.load(response)
 
+
+class GalleryServerTests(GalleryServerCase):
     def test_browser_actions_are_saved_in_shared_store(self):
         self.assertEqual(self.request('/api/listings/example:100')['title'], 'Courtyard apartment')
         self.request('/api/listings/example:100/feedback', {'favorite': True})

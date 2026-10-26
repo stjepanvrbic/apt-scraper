@@ -34,7 +34,8 @@ class SearchRankingTests(unittest.TestCase):
         self.assertTrue(changed['needs_analysis'])
         saved = self.store.listing('example:100')
         self.assertEqual(saved['first_seen'], '2026-10-20')
-        self.assertEqual(saved['rank'], 1)
+        self.assertIsNone(saved['rank'])
+        self.assertEqual(self.store.state()['listings'][0]['rank'], 1)
         self.assertFalse(saved['analysis_current'])
         self.assertIsNone(self.store.features('example:100'))
         with self.assertRaisesRegex(ValueError, 'changed'):

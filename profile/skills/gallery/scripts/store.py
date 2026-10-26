@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from code_features import FEATURES, configured_transit_feed, store_all_code_features, store_code_features
 from schema import content_fingerprint, migrate
-from queries import RANKABLE, browse, snapshot, validate_page
+from queries import RANKABLE, RANKING_EXCLUSION, browse, snapshot, validate_page
 from record import SEED_TAGS, known_spelling, validate_extraction, validate_judgments
 from scoring import reading_vocabulary, stated_phrases, validate_note_reading, validate_preference_reading
 
@@ -281,6 +281,31 @@ def validate_agent(agent):
 def extraction_read(listing_id, fingerprint):
     """The model_reads key of the extraction of one listing content."""
     return json.dumps(['extraction', listing_id, fingerprint])
+
+
+def explain_pending_rankings(connection, listings):
+    pending = {listing['id']: listing for listing in listings if not listing['analysis_current'] or listing['rank'] is None}
+    if not pending:
+        return
+    placeholders = ','.join('?' for _ in pending)
+    rows = connection.execute(f'''SELECT l.id, l.fingerprint, records.listing_id AS record,
+        {RANKING_EXCLUSION} AS exclusion FROM listings l
+        LEFT JOIN feedback f ON f.listing_id = l.id
+        LEFT JOIN feature_records records ON records.listing_id = l.id AND records.fingerprint = l.fingerprint
+        WHERE l.id IN ({placeholders})''', list(pending)).fetchall()
+    reads = [extraction_read(row['id'], row['fingerprint']) for row in rows]
+    attempts = dict(connection.execute(f'SELECT read, attempts FROM model_reads WHERE read IN ({placeholders})', reads))
+    for row, read in zip(rows, reads):
+        listing = pending[row['id']]
+        if row['exclusion']:
+            reason = row['exclusion']
+        elif row['record']:
+            reason = 'Not ranked yet: new or changed since the last rerank.'
+        elif attempts.get(read, 0) >= READ_ATTEMPTS:
+            reason = f'Not ranked yet: extraction failed {READ_ATTEMPTS} times. Score and rerank to use code-derived features.'
+        else:
+            reason = 'Not ranked yet: waiting for its feature record.'
+        listing.update(rank=None, reason=reason, exploration=False)
 
 
 def apply_criteria(connection, judge):
@@ -912,6 +937,7 @@ class ListingStore:
 
     def listing(self, listing_id, *, notes_page=1, correspondence_page=1, viewings_page=1, visible_only=False):
         with self.connect() as connection:
+            connection.execute('BEGIN')
             row = connection.execute('SELECT * FROM listings WHERE id = ?', (listing_id,)).fetchone()
             if not row or visible_only and not row['matches_criteria'] and not connection.execute(
                     'SELECT 1 FROM contacts WHERE listing_id = ? UNION SELECT 1 FROM viewings WHERE listing_id = ?', (listing_id, listing_id)).fetchone():
@@ -936,6 +962,9 @@ class ListingStore:
                 rows = [dict(item) for item in connection.execute(
                     f'SELECT * FROM {key} WHERE listing_id = ? ORDER BY {order} LIMIT 50 OFFSET ?', (listing_id, (page - 1) * 50))]
                 listing[key] = rows if key == 'viewings' else list(reversed(rows))
+            explain_pending_rankings(connection, [listing])
+            if listing['rank'] is None:
+                listing['explanation'] = None
             return listing
 
     def state(self):
@@ -984,7 +1013,9 @@ class ListingStore:
 
     def browse(self, view='Rankings', *, page=1, page_size=24):
         with self.connect() as connection:
-            return browse(connection, view, page, page_size)
+            result = browse(connection, view, page, page_size)
+            explain_pending_rankings(connection, result['items'])
+            return result
 
     def feedback(self, listing_id, *, favorite=None, dismissed=None):
         for value in (favorite, dismissed):

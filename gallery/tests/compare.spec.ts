@@ -222,6 +222,7 @@ test('Compare cards and details are accessible on desktop and mobile', async ({ 
     await expect(details.getByRole('heading', { name: /Courtyard apartment/ })).toBeVisible();
     await expect(details.getByText('Bright rooms facing a shared courtyard.')).toBeVisible();
     await expect(details.getByText(/Why it ranks|must not bias/)).toHaveCount(0);
+    await expect(details).toHaveCSS('opacity', '1');
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
     await page.screenshot({ path: testInfo.outputPath('compare-details-mobile.png'), fullPage: true });
     await page.getByRole('button', { name: 'Close listing details' }).click();
