@@ -12,12 +12,12 @@ related: [0022, 0027]
 
 ## Outcome
 
-The gallery server answers every rejected `POST` with its status and error, and the client receives that answer, also on a busy Windows machine.
+The gallery server answers every `POST` it rejects with the rejection's status and error, whatever the request's body, and the client receives that answer.
 
 ## Acceptance
 
-- [ ] A `POST` with a body that the server rejects for authentication (401), origin (403) or content type (400) is answered with that status every time, in a test that sends a body large enough to stay unread.
-- [ ] `test_rerank_requires_authentication_same_origin_and_an_empty_json_object` in `tests/test_rerank_server.py` passes in 20 consecutive full-suite runs.
+- [ ] A test sends, over a raw socket, a `POST` whose headers and body the server rejects for each of: missing token (401), foreign origin (403), wrong content type (400), a declared length over 100,000 bytes (400) and an invalid `Content-Length` (400). It finishes sending the whole body before reading, then reads the full status line and error for each, 200 times each without a connection reset.
+- [ ] `test_rerank_requires_authentication_same_origin_and_an_empty_json_object` in `tests/test_rerank_server.py` sends bodies large enough that the unfixed server fails it in most runs, and passes on the fixed one.
 - [ ] Merged to `main` through a reviewed pull request.
 
 ## Spec
@@ -26,16 +26,16 @@ The gallery server answers every rejected `POST` with its status and error, and 
 
 ## Design
 
-`do_POST` in `profile/skills/gallery/scripts/server.py` returns after `allowed()` rejects a request, and raises before `self.rfile.read(length)` for a wrong content type, so the request body stays unread when the handler replies and the connection closes. On Windows, closing a socket with unread received data sends a reset, and a client still sending or not yet reading gets `ConnectionAbortedError: [WinError 10053]` in place of the 401, 403 or 400.
+`do_POST` in `profile/skills/gallery/scripts/server.py` returns after `allowed()` has replied 401 or 403, and raises before `self.rfile.read(length)` for a wrong content type or a length outside 1 to 100,000 bytes. In each case the request body is still unread when the handler replies and the HTTP/1.0 connection closes. The client then sometimes gets `ConnectionAbortedError: [WinError 10053]` in place of the status.
 
-Observed once in two full runs of `python -m unittest discover -s tests` on `main` at `cf3ac2f`, while a Hermes search and extraction ran on the same machine: the subtest's `ConnectionAbortedError` escaped `assertRaises(HTTPError)`, and the test then failed on `raised.exception`. Five further runs of the module alone and the second full run passed.
+Within the gallery, a user meets it when a tab outlives the server it was opened from, since each server start issues a new token, and on any request with a body over 100,000 bytes, such as a long note.
 
-Reproduced against a server on a temporary store, 200 unauthenticated `POST /api/rerank` requests per row: with an empty body all 800 got 401; with a body of 2 bytes 1 of 200 ended in `ConnectionAbortedError`, 1,000 bytes 0, 60,000 bytes 2, and 99,000 bytes 3, 8 and 5 in three rows. Only rejected requests leave a body unread, and the gallery's own requests carry the token and JSON, so a user meets it when the token has expired, as a connection error in place of "Gallery access is missing or expired".
-
-Read and discard the declared body, up to the server's 100,000-byte limit, before replying to a rejected `POST`.
+Read and discard the declared body before replying to a rejected request. A body over the limit cannot be drained cheaply, so that reply needs a way to end the connection without a reset, which the first acceptance item checks.
 
 ## Deviations
 
 ## Result
 
 ## Comments
+
+- 2026-10-25: Found while verifying the ranking redesign on `main` at `cf3ac2f`. `python -m unittest discover -s tests` had 2 errors in one of two full runs: one subtest of the test above got the reset, which escaped `assertRaises(HTTPError)`, and the test then failed on `raised.exception`. `tests/test_rerank_server.py` alone failed the same way in 1 of 12 runs on an idle machine. A script that sends unauthenticated `POST /api/rerank` requests to a server on a temporary store, 400 per row, got a reset for 0 of 800 requests with no body, 4 of 800 with the 2-byte body `{}` the test sends, 1 of 400 with 1,000 bytes, 6 of 400 with 60,000 bytes and 19 of 800 with 99,000 bytes. Every other request got the 401. The script and its output are `scripts\reset_repro.py` and `results\reset-repro.txt` in `%TEMP%\apt-verify-0027-root`.
