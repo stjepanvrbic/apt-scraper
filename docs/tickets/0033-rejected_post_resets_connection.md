@@ -1,9 +1,9 @@
 ---
 title: A rejected gallery request can reset the connection instead of answering
 type: Bug
-state: Todo
+state: In Progress
 priority: 3
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []
