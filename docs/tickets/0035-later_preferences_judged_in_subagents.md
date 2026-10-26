@@ -41,6 +41,8 @@ No listing text reaches the features job agent: the run's report and `preference
 
 Checks at `5ea8fba`: `python -m unittest discover -s tests`: 517 passed, 0 skipped. `ruff check profile tests`: clean. Hermes's skill linter (`tools/skill_linter.py`, under Hermes's venv Python): 0 findings for `listing-features`, the same 6 `gallery` warnings as `main`. Its cron prompt scanner (`_scan_cron_prompt`, `_scan_cron_skill_assembled`) passes the job prompt with the skill, and its context scanner (`_scan_context_content`) leaves `SKILL.md`, `extraction.md` and `judgment.md` unchanged. Checked against Spec › Listing features, Ranking, Contracts and invariants and Decisions at the same revision, none changed; the project keeps its decisions in the spec, with no ADR register.
 
+Checks at `6f369aa`, after merging `main` (`6feee4c`): `python -m unittest discover -s tests`: 524 passed, 0 skipped. `ruff check profile tests`: clean. Hermes's skill linter: 0 findings for `listing-features`, the same 6 `gallery` warnings as `main`. Its context scanner leaves `SKILL.md`, `extraction.md` and `judgment.md` unchanged.
+
 Delivered on `fix/features_job` in [PR #33](https://github.com/stjepanvrbic/apt-scraper/pull/33), open against `main`, not merged; review is pending with the coordinator.
 
 ## Comments
