@@ -1,13 +1,13 @@
+import io
 import json
 import os
 import signal
-import socket
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import unittest
-import io
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
@@ -20,12 +20,27 @@ from launch import api_request
 SCRIPT = Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts/gallery.py'
 
 
+def free_port():
+    with socket.socket() as listener:
+        listener.bind(('127.0.0.1', 0))
+        return listener.getsockname()[1]
+
+
 def connection(url):
     address = urlsplit(url)
     return {'url': f'{address.scheme}://{address.netloc}', 'token': parse_qs(address.fragment)['token'][0]}
 
 
 class GalleryLauncherTests(unittest.TestCase):
+    def setUp(self):
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        self.home = Path(home.name)
+        # The launcher runs in child processes, so the tests move the home directory that secrets_directory() resolves from.
+        environment = patch.dict(os.environ, {'HOME': home.name, 'USERPROFILE': home.name})
+        environment.start()
+        self.addCleanup(environment.stop)
+
     def test_opener_receives_the_authenticated_url_without_opening_a_browser(self):
         from gallery import main
         output = io.StringIO()
@@ -48,25 +63,25 @@ class GalleryLauncherTests(unittest.TestCase):
     def test_open_returns_a_launch_secret_and_stop_ends_the_server(self):
         with tempfile.TemporaryDirectory() as directory:
             database = str(Path(directory) / 'listings.sqlite3')
-            with socket.socket() as listener:
-                listener.bind(('127.0.0.1', 0))
-                port = listener.getsockname()[1]
+            port = free_port()
             command = [sys.executable, str(SCRIPT), '--database', database, '--port', str(port)]
+            records = self.home / '.secrets' / 'apt-scraper' / 'gallery'
             result = subprocess.run([*command, 'open', '--no-browser'], capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stderr)
             try:
                 address = urlsplit(json.loads(result.stdout)['url'])
                 self.assertGreater(len(parse_qs(address.fragment).get('token', [''])[0]), 30)
+                self.assertEqual(len(list(records.glob('*.json'))), 1)
             finally:
                 stopped = subprocess.run([*command, 'stop'], capture_output=True, text=True, timeout=10)
                 self.assertEqual(stopped.returncode, 0, stopped.stderr)
+            self.assertEqual(list(records.iterdir()), [])
+
     def test_open_restarts_a_changed_install_and_rotates_its_secret(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'skill'
             shutil.copytree(SCRIPT.parent, root / 'scripts', ignore=shutil.ignore_patterns('__pycache__'))
-            with socket.socket() as listener:
-                listener.bind(('127.0.0.1', 0))
-                port = listener.getsockname()[1]
+            port = free_port()
             command = [sys.executable, str(root / 'scripts/gallery.py'), '--database', str(Path(directory) / 'listings.sqlite3'), '--port', str(port)]
             def open_server():
                 result = subprocess.run([*command, 'open', '--no-browser'], capture_output=True, text=True, timeout=20)
@@ -80,8 +95,8 @@ class GalleryLauncherTests(unittest.TestCase):
                 current = api_request(second, '/api/health')
                 self.assertNotEqual(previous['process_id'], current['process_id'])
                 self.assertNotEqual(previous['install_id'], current['install_id'])
-                self.assertFalse(first['token'] == second['token'])
-                self.assertFalse(second['token'] in (Path(directory) / 'gallery.log').read_text())
+                self.assertNotEqual(first['token'], second['token'])
+                self.assertNotIn(second['token'], (Path(directory) / 'gallery.log').read_text())
             finally:
                 result = subprocess.run([*command, 'stop'], capture_output=True, text=True, timeout=10)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -91,9 +106,7 @@ class GalleryLauncherTests(unittest.TestCase):
             environment = Path(directory) / 'environment'
             subprocess.run([sys.executable, '-m', 'venv', '--without-pip', str(environment)], check=True, capture_output=True)
             interpreter = environment / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
-            with socket.socket() as listener:
-                listener.bind(('127.0.0.1', 0))
-                port = listener.getsockname()[1]
+            port = free_port()
             result = subprocess.run([str(interpreter), str(SCRIPT), '--database', str(Path(directory) / 'listings.sqlite3'),
                                      '--port', str(port), 'open', '--no-browser'], capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stderr)
