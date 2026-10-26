@@ -7,9 +7,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
 
 from record import CATEGORIES, FLAGS, RATINGS  # noqa: E402
-from scoring import (DEFAULT_HYPERPARAMETERS, EXPLORATION_RANKS, expand, gradient, hessian, TOP, design, fit, fit_model, held_out_fit,  # noqa: E402
-                     observations, prior, questions, rank_listings, reading_vocabulary, validate_note_reading,
-                     validate_preference_reading)
+from scoring import (DEFAULT_HYPERPARAMETERS, EXPLORATION_RANKS, PRIOR_SCALES, UNLABELED_WEIGHTS, expand, gradient, hessian, TOP,  # noqa: E402
+                     design, fit, fit_model, held_out_fit, held_out_ranks, held_out_scores, observations, prior, questions,
+                     rank_listings, reading_vocabulary, summary_of, validate_note_reading, validate_preference_reading,
+                     weak_negative_score)
 
 SETTINGS = {'criteria': {'location': ['Logan Square', 'Avondale']}, 'preferences': {'likes': [], 'dislikes': []},
             'location_priorities': {'rapid_transit': 'low', 'areas': {'Logan Square': 'medium', 'Avondale': 'medium'}}}
@@ -416,24 +417,32 @@ class ReproducibilityTests(unittest.TestCase):
         self.assertEqual(first['ranked'], second['ranked'])
 
 
+def garden_neighborhood():
+    """40 listings of which 6 are garden units with a patio, the first 5 of them favorites."""
+    listings = neighborhood(40)
+    for number in GARDEN:
+        listings[number]['record']['traits'] = ['garden', 'patio']
+        listings[number]['record']['unit_level'] = {'value': 'garden or basement', 'evidence': 'Photos.'}
+    for number in GARDEN[:5]:
+        listings[number]['favorite'] = True
+    return listings
+
+
+GARDEN = [3, 8, 14, 21, 27, 33]
+
+
 class HeldOutTests(unittest.TestCase):
     def test_each_favorite_is_ranked_among_the_other_listings_by_a_fit_without_it(self):
-        listings = neighborhood(40)
-        garden = [3, 8, 14, 21, 27, 33]
-        for number in garden:
-            listings[number]['record']['traits'] = ['garden', 'patio']
-            listings[number]['record']['unit_level'] = {'value': 'garden or basement', 'evidence': 'Photos.'}
-        for number in garden[:5]:
-            listings[number]['favorite'] = True
+        listings = garden_neighborhood()
         result = rank_listings(inputs(listings), seed=1)
         held_out = {item['id']: item['rank'] for item in result['summary']['held_out']}
-        self.assertEqual(set(held_out), {listings[number]['id'] for number in garden[:5]})
+        self.assertEqual(set(held_out), {listings[number]['id'] for number in GARDEN[:5]})
         self.assertTrue(all(rank <= 3 for rank in held_out.values()), held_out)
         self.assertEqual(result['summary']['held_out_median'], sorted(held_out.values())[2])
         unseen = min((ranked['rank'], identifier) for identifier, ranked in result['ranked'].items() if identifier not in held_out)
-        self.assertEqual(unseen, (6, listings[33]['id']))
+        self.assertEqual(unseen, (6, listings[GARDEN[5]]['id']))
 
-    def test_the_held_out_fit_is_the_fit_without_the_favorite(self):
+    def test_the_held_out_fit_is_the_fit_with_the_favorite_as_a_weak_negative(self):
         listings = neighborhood(30)
         for number in (2, 5, 11, 19):
             listings[number]['favorite'] = True
@@ -445,10 +454,51 @@ class HeldOutTests(unittest.TestCase):
         full = fit(data, mean, precision, model_design.dense_count)
         for number in (2, 5, 11, 19):
             favorite = listings[number]['id']
-            rows, weights = held_out_fit(model_design, problem, full, data, unlabeled_weight, mean, precision, favorite)
-            exact = fit(observations(model_design, problem, unlabeled_weight, model_design.rows_without[favorite], leave_out=favorite), mean, precision, model_design.dense_count)
+            rows, weights = held_out_fit(model_design, full, data, unlabeled_weight, mean, precision, favorite)
+            held_out = observations(model_design, problem, unlabeled_weight, model_design.rows_without[favorite], leave_out=favorite)
+            own = held_out.listings.index(favorite)
+            self.assertEqual((held_out.labels[own], held_out.weights[own]), (0, unlabeled_weight))
+            exact = fit(held_out, mean, precision, model_design.dense_count)
             self.assertLess(max(abs(left - right) for left, right in zip(weights, exact.weights)), 1e-5)
             self.assertNotEqual(rows, model_design.likelihood_rows)
+
+    def test_a_weight_of_its_own_for_each_listing_cannot_rank_the_held_out_favorite_first(self):
+        """With its row dropped, the held-out favorite's own weight would stay at its prior while every weak negative
+        pulls the others below it, so it would rank first on no signal."""
+        count = 60
+        listings = [entry(f'listing:{number:03}', traits=[f'own {number}'], station=('Station', 0.2 + number * 37 % count / 50),
+                          favorite=number % 7 == 0) for number in range(count)]
+        settings = {'criteria': {'location': ['Logan Square']}, 'preferences': {'likes': ['Character'], 'dislikes': []}, 'location_priorities': {}}
+        readings = {('like', 'Character'): [{'feature': f'tag:own {number}', 'direction': 'like'} for number in range(count)]}
+        problem = inputs(listings, settings=settings, readings=readings)
+        self.assertEqual(sum(column.name.startswith('tag:own ') for column in design(problem).columns), count)
+        held_out = [item['rank'] for item in rank_listings(problem, seed=1)['summary']['held_out']]
+        others = count - len(held_out)
+        self.assertEqual((len(held_out), others), (9, 51))
+        self.assertGreater(min(held_out), 1, held_out)
+        self.assertGreater(sum(held_out) / len(held_out), 0.4 * others, held_out)
+
+    def test_the_weak_negative_score_solves_its_equation_where_newton_steps_alone_cycle(self):
+        """From start 4 with leverage times weight 20, Newton steps alone alternate between 3.99 and -10.48, and from
+        5.66 with 11.504 they take thousands of steps to leave the cycle."""
+        cases = [(start / 4, weighted_leverage) for weighted_leverage in (0.0, 0.05, 4.0, 11.504, 11.6, 20.0, 100.0, 1000.0)
+                 for start in range(-160, 161)]
+        for start, weighted_leverage in [(4.0, 20.0), (5.25, 11.6), (5.66, 11.504), *cases]:
+            score = weak_negative_score(start, weighted_leverage)
+            self.assertTrue(start - weighted_leverage <= score <= start, (start, weighted_leverage))
+            self.assertLess(abs(score - start + weighted_leverage / (1 + math.exp(-score))), 1e-4, (start, weighted_leverage))
+
+    def test_the_approximate_check_that_chooses_the_hyperparameters_agrees_with_the_converged_one(self):
+        problem = inputs(garden_neighborhood())
+        model_design = design(problem)
+        for scale in PRIOR_SCALES:
+            for unlabeled_weight in UNLABELED_WEIGHTS:
+                mean, precision = prior(model_design, scale)
+                data = observations(model_design, problem, unlabeled_weight)
+                full = fit(data, mean, precision, model_design.dense_count, settle=False)
+                approximate, converged = (summary_of(held_out_ranks(model_design, held_out_scores(
+                    model_design, full, data, unlabeled_weight, mean, precision, converge=converge)))['mean'] for converge in (False, True))
+                self.assertLessEqual(abs(approximate - converged), 0.4, (scale, unlabeled_weight))
 
 
 class LikelihoodTests(unittest.TestCase):

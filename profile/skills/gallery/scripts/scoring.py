@@ -483,15 +483,14 @@ def label(listing, sentiment):
 
 def observations(model_design, inputs, unlabeled_weight, rows=None, leave_out=None, *, weak_labels=None):
     """The likelihood's rows: each listing's label, or a weak negative for a ranked listing without one, and each
-    pairwise answer. leave_out is a listing whose labels and answers are left out, rows the listing rows to use."""
+    pairwise answer. leave_out is a listing whose labels and answers are left out, so it counts as a listing without
+    a label, rows the listing rows to use."""
     rows = model_design.likelihood_rows if rows is None else rows
     position = {identifier: index for index, identifier in enumerate(model_design.ids)}
     result = Observations([], [], [], [], [], {})
     for index, identifier in enumerate(model_design.ids):
-        if identifier == leave_out:
-            continue
         listing = model_design.listings[identifier]
-        labeled_as = label(listing, inputs['sentiments'].get(identifier))
+        labeled_as = None if identifier == leave_out else label(listing, inputs['sentiments'].get(identifier))
         if labeled_as is None and weak_labels:
             labeled_as = weak_labels.get(identifier)
         if labeled_as is None and listing['rankable']:
@@ -512,16 +511,18 @@ def observations(model_design, inputs, unlabeled_weight, rows=None, leave_out=No
     return observed(result.rows, result.labels, result.weights, result.listings, result.pairs)
 
 
-def held_out_observations(model_design, data, favorite):
-    """The full fit's rows with the favorite's rows weighing nothing and the favorites' nearness computed without it.
-    The sparse values do not change, so the rows keep their holders."""
+def held_out_observations(model_design, data, favorite, own_weight):
+    """The full fit's rows with the favorite's own row a negative of own_weight, its answers weighing nothing and the
+    favorites' nearness computed without it. The sparse values do not change, so the rows keep their holders."""
     rows = model_design.rows_without[favorite]
     position = {identifier: index for index, identifier in enumerate(model_design.ids)}
     changed = rows is not model_design.likelihood_rows
     result = [rows[position[listing]] if listing is not None else difference(rows[position[pair[0]]], rows[position[pair[1]]]) if changed else row
               for row, listing, pair in zip(data.rows, data.listings, data.pairs)]
-    weights = [0.0 if listing == favorite or (pair and favorite in pair) else weight for weight, listing, pair in zip(data.weights, data.listings, data.pairs)]
-    return Observations(result, data.labels, weights, data.listings, data.pairs, data.holders)
+    labels = [0 if listing == favorite else value for value, listing in zip(data.labels, data.listings)]
+    weights = [own_weight if listing == favorite else 0.0 if pair and favorite in pair else weight
+               for weight, listing, pair in zip(data.weights, data.listings, data.pairs)]
+    return Observations(result, labels, weights, data.listings, data.pairs, data.holders)
 
 
 def difference(first, second):
@@ -643,30 +644,85 @@ def scores(rows, weights, dense_count):
     return [linear(row, head, sparse) for row in rows]
 
 
-def held_out_fit(model_design, inputs, full, data, unlabeled_weight, mean, precision, favorite, *, steps=None):
-    """The fit without one favorite's labels and answers, warm-started from the full fit. Its steps use the full
-    fit's Hessian with the left-out rows taken out by the Woodbury identity. With steps, it stops after that many,
-    which with one is the usual approximate leave-one-out; otherwise it runs until the change is below
-    HELD_OUT_TOLERANCE and finishes with Newton iterations if that takes longer than HELD_OUT_ITERATIONS."""
+def held_out_fit(model_design, full, data, unlabeled_weight, mean, precision, favorite, *, converge=True):
+    """The fit without one favorite's labels and answers, warm-started from the full fit, in which the favorite counts
+    as a listing without a label does: a weak negative when it is ranked. A held-out favorite stands for an unseen
+    listing, and with its row dropped instead, a model with a weight of its own for each listing would leave that
+    weight at its prior and rank the favorite above every weak negative.
+
+    One step takes out the favorite's rows with the full fit's Hessian less their curvature (the Woodbury identity),
+    the usual approximate leave-one-out. The weak negative then moves the weights along that Hessian's solve of the
+    favorite's row until the row's own score settles. Another step would overshoot instead, because the full fit is
+    confident of a favorite's score, so the row's curvature there is near zero. With converge, steps with that Hessian
+    and the weak negative's curvature where its score settled follow until the change is below HELD_OUT_TOLERANCE,
+    and Newton iterations finish if that takes longer than HELD_OUT_ITERATIONS."""
     dense_count = model_design.dense_count
     rows = model_design.rows_without[favorite]
-    reduced = held_out_observations(model_design, data, favorite)
     removed = [index for index, (listing, pair) in enumerate(zip(data.listings, data.pairs)) if listing == favorite or (pair and favorite in pair)]
-    updates = [[math.sqrt(full.curvature[index]) * value for value in expand(data.rows[index], len(mean))] for index in removed]
-    solved = [full.factor.solve(update) for update in updates]
-    inverse = invert([[(1.0 if row == column else 0.0) - dot(updates[row], solved[column]) for column in range(len(updates))]
-                      for row in range(len(updates))])
-    weights = list(full.weights)
-    for _ in range(steps or HELD_OUT_ITERATIONS):
-        direction, _ = gradient(reduced, weights, mean, precision, dense_count)
-        step = full.factor.solve(direction)
-        if updates:
-            correction = [dot(row, [dot(update, step) for update in updates]) for row in inverse]
-            step = [value + sum(solved[index][position] * correction[index] for index in range(len(updates))) for position, value in enumerate(step)]
+    vectors = [expand(data.rows[index], len(mean)) for index in removed]
+    curvature = [full.curvature[index] for index in removed]
+    solved = [full.factor.solve(vector) for vector in vectors]
+    solved_columns = list(zip(*solved))
+    inverse = invert([[(1.0 if row == column else 0.0) - curvature[row] * dot(vectors[row], solved[column]) for column in range(len(removed))]
+                      for row in range(len(removed))])
+
+    def solve(vector):
+        step = full.factor.solve(vector)
+        correction = [dot(row, [weight * dot(update, step) for weight, update in zip(curvature, vectors)]) for row in inverse]
+        return [value + dot(column, correction) for value, column in zip(step, solved_columns)]
+
+    direction, _ = gradient(held_out_observations(model_design, data, favorite, 0.0), full.weights, mean, precision, dense_count)
+    weights = [weight - change for weight, change in zip(full.weights, solve(direction))]
+    weak = unlabeled_weight if model_design.listings[favorite]['rankable'] else 0.0
+    position = removed.index(data.listings.index(favorite))
+    own = vectors[position]
+    lever = [dot(column, [row[position] for row in inverse]) for column in solved_columns]
+    leverage = dot(own, lever)
+    start = dot(own, weights)
+    settled_score = weak_negative_score(start, weak * leverage)
+    weights = [weight - (start - settled_score) / leverage * value for weight, value in zip(weights, lever)]
+    if not converge:
+        return rows, weights
+    probability = sigmoid(settled_score)
+    weak_curvature = weak * probability * (1 - probability)
+
+    def relabeled_solve(vector):
+        step = solve(vector)
+        coefficient = weak_curvature * dot(own, step) / (1 + weak_curvature * leverage)
+        return [value - coefficient * change for value, change in zip(step, lever)]
+
+    relabeled = held_out_observations(model_design, data, favorite, weak)
+    for _ in range(HELD_OUT_ITERATIONS):
+        step = relabeled_solve(gradient(relabeled, weights, mean, precision, dense_count)[0])
         weights = [weight - change for weight, change in zip(weights, step)]
-        if steps is None and max(map(abs, step), default=0) < HELD_OUT_TOLERANCE:
+        if max(map(abs, step), default=0) < HELD_OUT_TOLERANCE:
             return rows, weights
-    return rows, weights if steps else fit(reduced, mean, precision, dense_count, weights).weights
+    return rows, fit(relabeled, mean, precision, dense_count, weights).weights
+
+
+def weak_negative_score(start, weighted_leverage):
+    """The score z = start - weighted_leverage * sigmoid(z) of a row that joins the fit as a negative, from its score
+    start without it and its leverage times its weight, while the rest of the posterior stays quadratic. The root lies
+    between start - weighted_leverage and start, because the sigmoid lies between 0 and 1. Newton's method can cycle
+    around the sigmoid's bend, so a Newton step that would leave the bracket around the root, or would not halve the
+    step before it, bisects the bracket instead."""
+    low, high = start - weighted_leverage, start
+    score, previous_step = start, weighted_leverage
+    while True:
+        probability = sigmoid(score)
+        residual = score - start + weighted_leverage * probability
+        if residual > 0:
+            high = score
+        else:
+            low = score
+        step = residual / (1 + weighted_leverage * probability * (1 - probability))
+        candidate = score - step
+        if not low < candidate < high or abs(step) > previous_step / 2:
+            candidate = (low + high) / 2
+        previous_step = abs(candidate - score)
+        if previous_step < HELD_OUT_TOLERANCE or high - low < HELD_OUT_TOLERANCE:
+            return candidate
+        score = candidate
 
 
 def invert(matrix):
@@ -685,11 +741,11 @@ def invert(matrix):
     return [row[size:] for row in augmented]
 
 
-def held_out_scores(model_design, inputs, full, data, unlabeled_weight, mean, precision, *, steps=None):
-    """Each listing's score when the model is fitted without one favorite, by favorite."""
+def held_out_scores(model_design, full, data, unlabeled_weight, mean, precision, *, converge=True):
+    """Each listing's score when the model is fitted without one favorite's labels, by favorite."""
     result = {}
     for favorite in model_design.favorites:
-        rows, weights = held_out_fit(model_design, inputs, full, data, unlabeled_weight, mean, precision, favorite, steps=steps)
+        rows, weights = held_out_fit(model_design, full, data, unlabeled_weight, mean, precision, favorite, converge=converge)
         result[favorite] = scores(rows, weights, model_design.dense_count)
     return result
 
@@ -728,8 +784,8 @@ def fit_model(inputs, hyperparameters=None, *, weak_labels=None, warm_start=None
     """The fitted scoring model with the given (prior scale, weak-negative weight). Without them, once there are
     TUNING_FAVORITES favorites, the leave-one-out check chooses them: first the weak-negative weight among
     UNLABELED_WEIGHTS at the first of PRIOR_SCALES, then the prior scale among PRIOR_SCALES at that weight, each time
-    the one whose approximate check, one step from the full fit, gives the favorites the best mean held-out rank, the
-    earlier on a tie. Before that, DEFAULT_HYPERPARAMETERS. The held-out ranks it reports come from converged fits.
+    the one whose approximate check, held_out_fit without converge, gives the favorites the best mean held-out rank,
+    the earlier on a tie. Before that, DEFAULT_HYPERPARAMETERS. The held-out ranks it reports come from converged fits.
     warm_start reuses a model fitted to the same inputs when only diagnostic labels change."""
     model_design = warm_start.design if warm_start else design(inputs)
     dense_count = model_design.dense_count
@@ -742,7 +798,7 @@ def fit_model(inputs, hyperparameters=None, *, weak_labels=None, warm_start=None
             data = observations(model_design, inputs, unlabeled_weight, weak_labels=weak_labels)
             full = fit(data, mean, precision, dense_count, start[0], settle=not tuning)
             start[0] = full.weights
-            check = summary_of(held_out_ranks(model_design, held_out_scores(model_design, inputs, full, data, unlabeled_weight, mean, precision, steps=1)))['mean'] if tuning else None
+            check = summary_of(held_out_ranks(model_design, held_out_scores(model_design, full, data, unlabeled_weight, mean, precision, converge=False)))['mean'] if tuning else None
             fits[scale, unlabeled_weight] = (check, mean, precision, data, full)
         return fits[scale, unlabeled_weight]
 
@@ -754,7 +810,7 @@ def fit_model(inputs, hyperparameters=None, *, weak_labels=None, warm_start=None
     _, mean, precision, data, full = candidate(scale, unlabeled_weight)
     if tuning:
         full = settled(data, full.weights, mean, precision, dense_count)
-    return Model(model_design, full, scale, unlabeled_weight, held_out_scores(model_design, inputs, full, data, unlabeled_weight, mean, precision))
+    return Model(model_design, full, scale, unlabeled_weight, held_out_scores(model_design, full, data, unlabeled_weight, mean, precision))
 
 
 def display(model_design, index, name):
