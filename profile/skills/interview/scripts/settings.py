@@ -7,7 +7,8 @@ Commands:
                           directory, and delete FILE once saved. Saved criteria are applied to every
                           stored listing in the same transaction, from its stored features: listings
                           outside them, and listings still waiting for a model judgment, are hidden. It
-                          prints the totals and how many listings this change hid and showed again.
+                          prints the totals and how many listings this change hid, left waiting for a
+                          judgment and showed again.
                           Each place address without stored coordinates is geocoded first, with
                           OpenStreetMap's Nominatim, one request a second.
 
@@ -81,7 +82,7 @@ def run(argv):
     if 'criteria' in settings:
         verdicts = applied.verdicts
         result['criteria'] = {'outside': verdicts.get(OUTSIDE, 0), 'matching': verdicts.get(INSIDE, 0), 'awaiting_judgment': verdicts.get(PENDING, 0),
-                              'newly_hidden': len(applied.hidden), 'shown_again': len(applied.shown)}
+                              'newly_hidden': len(applied.hidden), 'newly_awaiting_judgment': len(applied.awaiting), 'shown_again': len(applied.shown)}
     if places is not None:
         result['places'] = places
         result['attribution'] = ATTRIBUTION
