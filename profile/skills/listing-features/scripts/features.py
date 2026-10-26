@@ -46,7 +46,7 @@ sys.path.insert(0, str(SKILLS / 'contact' / 'scripts'))
 from contact import NotConnected, tell_user, usable  # noqa: E402
 from geodata import SourceUnavailable, fetch_stations  # noqa: E402
 from record import CATEGORIES, FLAGS, NOT_SHOWN, RATINGS, ROOM_TYPES, UNIT_LEVELS, choices, validate_judgments  # noqa: E402
-from scoring import stated_phrases  # noqa: E402
+from scoring import labeled, stated_phrases  # noqa: E402
 from scratch import read_scratch_object, scratch_directory  # noqa: E402
 from store import READ_ATTEMPTS, ListingStore, extraction_read, store_path  # noqa: E402
 
@@ -103,10 +103,6 @@ def judged_preferences(settings, readings):
     """The stated likes and dislikes judged later for listings extracted before: those read as naming no record
     feature, which the ranking counts through these judgments."""
     return list(dict.fromkeys(phrase for kind, phrase in stated_phrases(settings) if readings.get((kind, phrase)) == []))
-
-
-def labeled(listing):
-    return bool(listing['favorite'] or listing['dismissed'] or listing['contact'] or any(note['role'] == 'user' for note in listing['notes']))
 
 
 def needs_record(listing):

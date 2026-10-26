@@ -65,12 +65,30 @@ def browse(connection, view, page, page_size):
     return {'items': items, 'total': total, 'page': page, 'page_size': page_size}
 
 
+def answered_pairs(connection):
+    """The user's pairwise answers as (chosen, other), oldest first."""
+    return [(row['chosen'], row['other']) for row in connection.execute('SELECT chosen, other FROM pairwise_answers ORDER BY id')]
+
+
+def paired(pairs):
+    """The listings of the pairwise answers, either side."""
+    return {identifier for pair in pairs for identifier in pair}
+
+
+def user_noted(connection):
+    """The listings with a note from the user."""
+    return {row['listing_id'] for row in connection.execute("SELECT DISTINCT listing_id FROM notes WHERE role = 'user'")}
+
+
 def snapshot(connection):
     connection.execute('BEGIN')
+    noted = user_noted(connection)
+    compared = paired(answered_pairs(connection))
     listings = {row['id']: {**json.loads(row['data']), 'content_fingerprint': row['fingerprint'],
                 'matches_criteria': bool(row['matches_criteria']),
                 'favorite': False, 'dismissed': False, 'rank': None, 'reason': None, 'features': None,
-                'contact': None, 'notes': [], 'correspondence': [], 'viewings': []}
+                'contact': None, 'notes': [], 'correspondence': [], 'viewings': [],
+                'user_notes': row['id'] in noted, 'paired': row['id'] in compared}
                 for row in connection.execute('SELECT * FROM listings')}
     for row in connection.execute('SELECT * FROM ranking'):
         listing = listings[row['listing_id']]

@@ -8,7 +8,7 @@ Extraction is the one model read of a listing content that produces the model's 
 
 ### When a listing is read
 
-A listing needs a record when the ranking ranks it, that is when it is shown in Rankings, or when the user labeled it: a favorite, a dismissal, a contact request or a note from the user. A labeled listing keeps needing a record when it is no longer shown, because the ranking learns from it. Labeled listings are read first, then the others in the order they were first seen.
+A listing needs a record when the ranking ranks it, that is when it is shown in Rankings, or when the user labeled it: a favorite, a dismissal, a contact request, a note from the user or a pairwise answer. The features job and the scoring model share one definition of a labeled listing, `labeled` in `scoring.py`. A labeled listing keeps needing a record when it is no longer shown, because the ranking learns from it. Labeled listings are read first, then the others in the order they were first seen.
 
 A record belongs to one listing content, identified by the content fingerprint the store computes. A listing whose content has not changed is never read again, however often the search finds it. A changed listing needs a new record, and its old one no longer counts.
 

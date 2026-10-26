@@ -20,6 +20,7 @@ from test_listing_photos import picture, recompressed, zillow  # noqa: E402
 import features  # noqa: E402
 from features import PHOTO_PATIENCE, READ_ATTEMPTS, SEQUENTIAL_RECORDS, STATION_RETRY, SUBAGENTS_PER_WAKE, Features, PhotosUnavailable, RunState  # noqa: E402
 from geodata import SourceUnavailable  # noqa: E402
+from scoring import design, observations  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'profile/skills/listing-features/scripts/features.py'
@@ -173,6 +174,19 @@ class GateTests(FeaturesTestCase):
         self.add(1, description='Now with a renovated kitchen.')
         [task] = self.tasks(self.run_job()[0])
         self.assertEqual(self.manifest(task)['id'], identifier)
+
+    def test_a_paired_listing_whose_content_changes_while_unavailable_is_extracted_and_its_answer_stays_in_the_fit(self):
+        chosen, other = self.add(1), self.add(2)
+        for task in self.tasks(self.run_job()[0]):
+            self.save(task)
+        self.store.answer_pair(chosen, other)
+        self.add(2, description='Relisted with new carpet.')
+        self.store.set_availability(other, 'unavailable')
+        [task] = self.tasks(self.run_job()[0])
+        self.assertEqual(self.manifest(task)['id'], other)
+        self.save(task)
+        inputs = self.store.ranking_inputs()
+        self.assertIn((chosen, other), observations(design(inputs), inputs, 0.1).pairs)
 
 
 class PreparationTests(FeaturesTestCase):
