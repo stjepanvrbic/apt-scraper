@@ -26,7 +26,7 @@ run_remote_installer() {
     shift
     directory=$(mktemp -d)
     curl -fsSL "$url" -o "$directory/install.sh"
-    bash "$directory/install.sh" "$@"
+    bash "$directory/install.sh" ${1+"$@"}
     rm -rf "$directory"
 }
 

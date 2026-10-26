@@ -6,19 +6,21 @@ An apartment-hunting agent built on [Hermes Agent](https://hermes-agent.nousrese
 
 ## Install
 
-You need Windows 10 1809 or later, or macOS 13 or later on Apple Silicon, plus Git and a Claude Pro or Max subscription. Clone the repository and run the installer from its root.
+You need Windows 10 1809 or later, or macOS 13 or later on Apple Silicon, and a Claude Pro or Max subscription. Paste one line into a terminal.
 
 Windows, in PowerShell:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+irm https://raw.githubusercontent.com/stjepanvrbic/apt-scraper/main/bootstrap.ps1 | iex
 ```
 
-macOS:
+macOS, in Terminal:
 
 ```bash
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/stjepanvrbic/apt-scraper/main/bootstrap.sh | bash
 ```
+
+The line installs Git if it is missing, with winget on Windows. It then downloads apt-scraper to `%LOCALAPPDATA%\apt-scraper\repo` on Windows or `~/Library/Application Support/apt-scraper/repo` on macOS and runs the installer from there. On a Mac without the Xcode command line tools, which include Git, the line opens their installer and stops. Install them and paste the line again. The line works only while this repository is public on GitHub.
 
 The installer:
 
@@ -32,7 +34,23 @@ The installer:
 8. makes the Hermes web dashboard start when you log in, and adds an apt-scraper shortcut: in the Start menu on Windows, in Applications on macOS,
 9. starts the dashboard and opens its chat in your browser. The first start builds the dashboard and takes a few minutes.
 
-Run it again after pulling changes. Your settings, memories, sessions and credentials stay in place.
+To update, paste the same line again. Your settings, memories, sessions and credentials stay in place.
+
+### Development
+
+To install from a clone of your own, run the installer from its root. Windows, in PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+macOS:
+
+```bash
+./install.sh
+```
+
+Run it again after pulling changes.
 
 ## Run
 

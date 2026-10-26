@@ -58,6 +58,19 @@ FAKE_DASHBOARD = textwrap.dedent(f"""\
     """)
 
 
+REPOSITORY_URL = 'https://github.com/stjepanvrbic/apt-scraper.git'
+# Stands in for git: it logs every call except `--version` to the file in argv[1], and `clone` copies the directory in argv[2].
+FAKE_GIT = textwrap.dedent("""\
+    import json, shutil, sys
+    log, template, *arguments = sys.argv[1:]
+    if arguments != ['--version']:
+        with open(log, 'a') as calls:
+            calls.write(json.dumps(arguments) + '\\n')
+    if arguments[0] == 'clone':
+        shutil.copytree(template, arguments[2])
+    """)
+
+
 def steps(installer: str) -> list[str]:
     text = (ROOT / installer).read_text(encoding='utf-8')
     pattern = r"Write-Step '([^']+)'" if installer.endswith('.ps1') else r"^ *step '([^']+)'"
@@ -426,6 +439,180 @@ class DashboardAtLoginTests(unittest.TestCase):
         self.assertEqual(self.calls_made(), [f'bootstrap {domain} {agent}', f'kickstart {domain}/{LAUNCH_AGENT_LABEL}'])
         self.assertIn(f'did not answer at http://127.0.0.1:{self.port}', self.alert.read_text())
         self.assertFalse(self.opened.exists())
+
+
+class BootstrapTests(unittest.TestCase):
+    """Each bootstrap, run as its one line runs it, against a fake git and a fake installer in a temporary directory."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.folder = Path(directory.name)
+        self.tools = self.folder / 'bin'
+        self.tools.mkdir()
+        self.git_calls = self.folder / 'git-calls'
+        self.installer_runs = self.folder / 'installer-runs'
+        self.other_calls = self.folder / 'other-calls'
+        self.template = self.folder / 'template'
+        (self.template / '.git').mkdir(parents=True)
+        (self.folder / 'git.py').write_text(FAKE_GIT)
+        self.git = ' '.join(f'"{Path(path).as_posix()}"' for path in (sys.executable, self.folder / 'git.py', self.git_calls, self.template))
+
+    def git_calls_made(self) -> list[list[str]]:
+        return [json.loads(line) for line in self.git_calls.read_text().splitlines()] if self.git_calls.exists() else []
+
+    def installer_runs_made(self) -> list[str]:
+        return self.installer_runs.read_text().splitlines() if self.installer_runs.exists() else []
+
+    def other_calls_made(self) -> list[str]:
+        return self.other_calls.read_text().splitlines() if self.other_calls.exists() else []
+
+    # macOS: bootstrap.sh piped into bash, with HOME in the temporary directory.
+
+    def shell_tools(self, git: bool = True, installer_exit: int = 0, command_line_tools: bool = False):
+        """`command_line_tools`: whether the Xcode command line tools are installed, so that their installer refuses to run."""
+        fakes = {
+            'git': f'exec {self.git} "$@"\n' if git else 'echo "xcrun: error: invalid active developer path" >&2\nexit 1\n',
+            'xcode-select': f'printf "%s\\n" "xcode-select $*" >> "{self.other_calls.as_posix()}"\n'
+                            + ('echo "xcode-select: error: command line tools are already installed" >&2\nexit 1\n'
+                               if command_line_tools else ''),
+        }
+        for name, body in fakes.items():
+            (self.tools / name).write_text(f'#!/bin/sh\n{body}', newline='\n')
+            (self.tools / name).chmod(0o755)
+        (self.template / 'install.sh').write_text(
+            f'printf "%s|%s\\n" "$0" "$*" >> "{self.installer_runs.as_posix()}"\nexit {installer_exit}\n', newline='\n')
+
+    @property
+    def shell_environment(self) -> dict[str, str]:
+        return {**os.environ, 'HOME': self.folder.as_posix(), 'PATH': f'{self.tools}{os.pathsep}{os.environ["PATH"]}'}
+
+    def run_shell_bootstrap(self, *arguments: str) -> subprocess.CompletedProcess:
+        return subprocess.run([BASH, '-s', '--', *arguments], input=(ROOT / 'bootstrap.sh').read_text(encoding='utf-8'),
+                              env=self.shell_environment, capture_output=True, text=True, timeout=60)
+
+    def test_the_shell_bootstrap_clones_and_runs_the_installer_then_updates_and_runs_it_again(self):
+        self.shell_tools()
+        repository = f'{self.folder.as_posix()}/Library/Application Support/apt-scraper/repo'
+        for _ in range(2):
+            result = self.run_shell_bootstrap('--example', 'two words')
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.git_calls_made(), [['clone', REPOSITORY_URL, repository],
+                                                 ['-C', repository, 'pull', '--ff-only']])
+        # Git Bash spells HOME its own way and converts it back for Windows programs such as the fake git.
+        home = subprocess.run([BASH, '-c', 'printf %s "$HOME"'], env=self.shell_environment, capture_output=True,
+                              text=True, check=True).stdout
+        self.assertEqual(self.installer_runs_made(),
+                         [f'{home}/Library/Application Support/apt-scraper/repo/install.sh|--example two words'] * 2)
+
+    def test_the_shell_bootstrap_stops_with_the_installer_exit_code(self):
+        self.shell_tools(installer_exit=3)
+        result = self.run_shell_bootstrap()
+        self.assertEqual(result.returncode, 3)
+        self.assertEqual(len(self.installer_runs_made()), 1)
+
+    def test_the_shell_bootstrap_without_the_command_line_tools_opens_their_installer_and_stops(self):
+        self.shell_tools(git=False)
+        result = self.run_shell_bootstrap()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('Install them in the dialog that opened, then run this again.', result.stderr)
+        self.assertEqual(self.other_calls_made(), ['xcode-select --install'])
+        self.assertEqual((self.git_calls_made(), self.installer_runs_made()), ([], []))
+
+    def test_the_shell_bootstrap_reports_why_git_does_not_run_when_the_command_line_tools_are_installed(self):
+        self.shell_tools(git=False, command_line_tools=True)
+        result = self.run_shell_bootstrap()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('command line tools are already installed', result.stderr)
+        self.assertIn('Git does not run: xcrun: error: invalid active developer path', result.stderr)
+        self.assertNotIn('dialog', result.stderr)
+        self.assertEqual((self.git_calls_made(), self.installer_runs_made()), ([], []))
+
+    # Windows: bootstrap.ps1 through Invoke-Expression, with its repository in the temporary directory and a PATH
+    # without the machine's git.
+
+    def powershell_tools(self, git: bool = True, installer_exit: int = 0):
+        git_command = f'@{self.git} %*\r\n'
+        if git:
+            (self.tools / 'git.cmd').write_text(git_command)
+        else:
+            (self.folder / 'git.cmd').write_text(git_command)
+            (self.tools / 'winget.cmd').write_text(f'@echo winget %*>>"{self.other_calls}"\r\n'
+                                                   f'@copy /y "{self.folder / "git.cmd"}" "{self.tools}" >nul\r\n')
+        (self.template / 'install.ps1').write_text(
+            f"Add-Content -LiteralPath '{self.installer_runs}' -Value \"$PSScriptRoot|$($args -join ' ')\"\r\n"
+            f"Set-Content -LiteralPath '{self.installer_path}' -Value $env:Path\r\n"
+            f'exit {installer_exit}\r\n')
+
+    @property
+    def installer_path(self) -> Path:
+        """The PATH the fake installer ran with."""
+        return self.folder / 'installer-path'
+
+    @property
+    def session_path(self) -> list[str]:
+        """The PATH of the session the bootstrap runs in: the fakes and System32, without the machine's git."""
+        return [str(self.tools), str(Path(os.environ['SystemRoot']) / 'System32')]
+
+    def run_powershell_bootstrap(self, invocation: str) -> subprocess.CompletedProcess:
+        """Runs the bootstrap through `invocation`, in which `$text` is the script's text."""
+        text = (ROOT / 'bootstrap.ps1').read_text(encoding='utf-8')
+        location = "$Repository = Join-Path $env:LOCALAPPDATA 'apt-scraper\\repo'"
+        self.assertEqual(text.count(location), 1)
+        script = self.folder / 'bootstrap.ps1'
+        script.write_text(text.replace(location, f"$Repository = '{self.windows_repository}'"), encoding='utf-8')
+        command = f"$text = Get-Content -Raw -LiteralPath '{script}'; {invocation}"
+        return subprocess.run([shutil.which('powershell'), '-NoProfile', '-Command', command],
+                              env={**os.environ, 'PATH': os.pathsep.join(self.session_path)},
+                              capture_output=True, text=True, timeout=60)
+
+    @property
+    def windows_repository(self) -> Path:
+        return self.folder / 'LocalAppData' / 'apt-scraper' / 'repo'
+
+    def test_the_powershell_bootstrap_clones_and_runs_the_installer_then_updates_and_runs_it_again(self):
+        self.powershell_tools()
+        repository = str(self.windows_repository)
+        for _ in range(2):
+            result = self.run_powershell_bootstrap('$text | Invoke-Expression')
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.git_calls_made(), [['clone', REPOSITORY_URL, repository],
+                                                 ['-C', repository, 'pull', '--ff-only']])
+        self.assertEqual(self.installer_runs_made(), [f'{repository}|'] * 2)
+
+    def test_the_powershell_bootstrap_passes_its_arguments_to_the_installer(self):
+        self.powershell_tools()
+        result = self.run_powershell_bootstrap("& ([scriptblock]::Create($text)) -Example 'two words'")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.installer_runs_made(), [f'{self.windows_repository}|-Example two words'])
+
+    def test_the_powershell_bootstrap_installs_git_with_winget_when_it_is_missing_and_reads_the_new_path(self):
+        self.powershell_tools(git=False)
+        result = self.run_powershell_bootstrap('$text | Invoke-Expression')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.other_calls_made(), ['winget install --id Git.Git --exact --source winget '
+                                                   '--accept-package-agreements --accept-source-agreements'])
+        self.assertEqual(self.git_calls_made(), [['clone', REPOSITORY_URL, str(self.windows_repository)]])
+        self.assertEqual(len(self.installer_runs_made()), 1)
+        # The Git installer adds Git to the PATH in the registry only. That PATH is read here, not changed.
+        registry = subprocess.run([shutil.which('powershell'), '-NoProfile', '-Command',
+                                   "[Environment]::GetEnvironmentVariable('Path', 'Machine');"
+                                   "[Environment]::GetEnvironmentVariable('Path', 'User')"],
+                                  capture_output=True, text=True, check=True).stdout
+        installer_path = self.installer_path.read_text().strip().split(';')
+        self.assertEqual(installer_path[:len(self.session_path)], self.session_path)
+        self.assertLessEqual({entry for entry in re.split(r'[;\n]', registry) if entry.strip()}, set(installer_path))
+
+    def test_the_powershell_bootstrap_throws_the_installer_failure_and_leaves_the_session_as_it_was(self):
+        self.powershell_tools(installer_exit=3)
+        result = self.run_powershell_bootstrap(
+            'try { $text | Invoke-Expression } catch { "caught: $_" }; "session: $ErrorActionPreference '
+            '$([bool](Get-Command Write-Step -ErrorAction SilentlyContinue)) '
+            '$([bool](Get-Variable Repository -ErrorAction SilentlyContinue))"')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r'caught: .*failed with exit code 3')
+        self.assertIn('session: Continue False False', result.stdout)
+        self.assertEqual(len(self.installer_runs_made()), 1)
 
 
 if __name__ == '__main__':
