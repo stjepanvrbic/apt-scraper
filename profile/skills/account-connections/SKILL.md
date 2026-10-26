@@ -138,14 +138,20 @@ Your questions reach the user here while the gallery is closed, and their replie
    hermes -p apt-scraper config set TELEGRAM_HOME_CHANNEL "<the ID>"
    ```
 
-7. Open the dashboard's Channels page in the user's browser. `hermes dashboard --status` lists the running dashboard. Take the port from the line with `--port`. When no line has one, the port is 9119:
+7. Open the dashboard's Channels page in the user's browser. The installer records the dashboard's address in `$HERMES_HOME/dashboard-address`. Check that Hermes answers there:
 
    ```bash
-   cmd /c start "" "http://127.0.0.1:<port>/channels?profile=apt-scraper"   # Windows
-   open "http://127.0.0.1:<port>/channels?profile=apt-scraper"               # macOS
+   curl -s --max-time 2 -w '\n%{http_code}\n' "$(cat "$HERMES_HOME/dashboard-address")/api/health"
    ```
 
-   If it lists no dashboard, start it without a window, the way it starts at login, and read the status again after a few seconds. If the command fails, ask the user to run the apt-scraper installer again:
+   Hermes answers only when the last line is `200` and the reply above it is JSON with `"ok": true` and a `version`. Any other program on that port answers differently. Then open the page:
+
+   ```bash
+   cmd /c start "" "$(cat "$HERMES_HOME/dashboard-address")/channels?profile=apt-scraper"   # Windows
+   open "$(cat "$HERMES_HOME/dashboard-address")/channels?profile=apt-scraper"               # macOS
+   ```
+
+   If anything else answers, or nothing does, start the dashboard without a window, the way it starts at login, and check again after a few seconds. If the file is missing, a command fails or Hermes still does not answer, ask the user to run the apt-scraper installer again:
 
    ```bash
    cscript //nologo "$LOCALAPPDATA/hermes/profiles/apt-scraper/dashboard.vbs"   # Windows
