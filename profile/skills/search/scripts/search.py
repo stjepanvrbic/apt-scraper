@@ -1,28 +1,37 @@
 """Searches the user's listing sites and keeps the profile's listing store current.
 
 Commands:
-  search.py run          one search pass, as the scheduled job apt-scraper-search runs it, prints a
-                         report whose last line tells Hermes whether the agent has listings to judge
+  search.py run          one search pass, as the scheduled job apt-scraper-search runs it: saves the judgments the
+                         last wake wrote into the job's inbox, searches, writes the judgment task files of the
+                         listings waiting for a judgment of the must-haves and prints a report whose last line tells
+                         Hermes whether the agent has listings to judge
   search.py status       whether the search runs and what needs the user's attention
-  search.py pending      the next listings waiting for a judgment of the must-haves
-  search.py judge FILE   save judgments from a JSON file in the scratch directory, then delete it
+  search.py tasks        in a conversation: save the judgments in the conversation's inbox, then write the judgment
+                         task files of every listing waiting for a judgment of the must-haves
+  search.py apply        in a conversation: save the judgments in the conversation's inbox now
   search.py reported     record that the user was told about the new listings
 
-Exit codes: 0 done (for status: the search runs without problems), 3 the search needs attention,
-1 the input or a step failed, 2 usage error.
+Exit codes: 0 done (for status: the search runs without problems, for apply: every file saved), 3 the search needs
+attention, 1 the input or a step failed or apply rejected a file, 2 usage error.
+
+The agent the job wakes runs with file tools only. It saves its judgments by writing a JSON file into the job's inbox,
+which the next run checks and saves (inbox.py). In a conversation, tasks and apply use an inbox and a task
+directory of their own, so they never change the files of a wake that runs meanwhile.
 """
 
 import argparse
 import json
+import shutil
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from string import Template
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'gallery' / 'scripts'))
 
+from inbox import apply, batches, correction, discard, inbox_directory, load_batches, save_batches  # noqa: E402
 from matching import INSIDE, OUTSIDE, PENDING, evaluate, required, unjudged  # noqa: E402
 from schema import content_fingerprint  # noqa: E402
-from scratch import read_scratch_object  # noqa: E402
 from sites import site_for, site_named  # noqa: E402
 from sites.errors import Blocked, Gone  # noqa: E402
 from state import SearchState  # noqa: E402
@@ -37,6 +46,7 @@ REREADS_PER_RUN = 20
 DESCRIPTION_LIMIT = 2000
 COUNTS = ('new', 'changed', 'unchanged', 'gone', 'deferred', 'unreadable')
 ERRORS_PER_SITE = 10
+JUDGMENT_TEMPLATE = Path(__file__).resolve().parents[1] / 'judgment.md'
 
 
 def site_key(site):
@@ -53,27 +63,64 @@ def note(result, text):
 
 
 class Search:
-    def __init__(self, store, state, client, site_for, site_named, now):
+    def __init__(self, store, state, client, site_for, site_named, now, inbox, workspace):
+        """inbox is the job's inbox, workspace the directory of its judgment task files."""
         self.store, self.state, self.client = store, state, client
         self.site_for, self.site_named, self.now = site_for, site_named, now
+        self.inbox, self.workspace = inbox, workspace
 
     def run(self, budget):
+        """One search pass: searches every listing site, then hands the judgments over as hand_judgments says."""
         started = self.now()
         run_id = self.state.start_run(started)
-        report = {'missing': self.state.missing_settings(self.store), 'sites': [], 'awaiting_judgment': [], 'awaiting_total': 0, 'wake': False, 'error': None}
+        report = {'missing': self.state.missing_settings(self.store), 'sites': [], 'saved': 0, 'rejected': [], 'awaiting_total': 0,
+                  'tasks': [], 'wake': False, 'error': None}
         try:
             if not report['missing']:
                 settings = self.store.settings()
                 for url in settings['listing_sites']:
                     report['sites'].append(self.search_site(url, settings['criteria'], started + budget))
                 self.store.apply_criteria(evaluate)
-                pending = self.pending()
-                report.update(awaiting_judgment=pending[:BATCH], awaiting_total=len(pending), wake=bool(pending))
+                report.update(self.hand_judgments())
         except Exception as error:
             report['error'] = failure(error)
         finally:
-            self.state.finish_run(run_id, self.now(), {key: value for key, value in report.items() if key != 'awaiting_judgment'})
+            self.state.finish_run(run_id, self.now(), {key: value for key, value in report.items() if key != 'tasks'})
         return report
+
+    def hand_judgments(self):
+        """Saves the judgments in the inbox, then writes the task files of every listing waiting for a judgment, the
+        batch of a rejected judgments file first, with the error, and deletes the rejected files whose listings no longer
+        wait. Returns the counts and task files for the report."""
+        saved, rejected = self.save_inbox()
+        pending = self.pending()
+        tasks, handed = self.write_tasks(pending, rejected)
+        discard(self.inbox, rejected, handed)
+        return {'saved': len(saved), 'rejected': sorted(rejected), 'awaiting_total': len(pending), 'tasks': tasks, 'wake': bool(tasks)}
+
+    def save_inbox(self):
+        """Saves the judgments files in the inbox, and returns their results and the errors of those rejected, by name."""
+        return apply(self.inbox, {'judgments': self.judge_file})
+
+    def write_tasks(self, pending, rejected):
+        """Writes one judgment task file per batch of BATCH listings waiting, a batch whose judgments file was rejected
+        first under its name, with the error. Returns the task files in order and the names of their judgments files."""
+        again = [name.removeprefix('judgments-').removesuffix('.json') for name in rejected]
+        named = batches([(item['id'], item) for item in pending], BATCH, load_batches(self.workspace), again)
+        shutil.rmtree(self.workspace, ignore_errors=True)
+        if not named:
+            return [], []
+        save_batches(self.workspace, named, lambda item: item['id'])
+        tasks = []
+        for name, listings in named.items():
+            judgments_file = self.inbox / f'judgments-{name}.json'
+            task_file = self.workspace / f'{name}.md'
+            task_file.write_text(Template(JUDGMENT_TEMPLATE.read_text(encoding='utf-8')).substitute(
+                count=len(listings), listings_json=json.dumps(listings, ensure_ascii=False, indent=1),
+                judgments_file=judgments_file.as_posix(), correction=correction(judgments_file, rejected.get(judgments_file.name))),
+                encoding='utf-8')
+            tasks.append(task_file.as_posix())
+        return tasks, [f'judgments-{name}.json' for name in named]
 
     def search_site(self, url, criteria, deadline):
         result = {'site': url, **dict.fromkeys(COUNTS, 0), 'errors': []}
@@ -240,6 +287,11 @@ class Search:
             })
         return waiting
 
+    def judge_file(self, value):
+        if set(value) != {'judgments'}:
+            raise ValueError('Judgments must be a JSON object with only "judgments", an array.')
+        return self.judge(value['judgments'])
+
     def judge(self, entries):
         criteria = self.store.settings()['criteria']
         if not isinstance(entries, list):
@@ -303,17 +355,21 @@ class Search:
 
 
 def describe(report):
+    """The run's report for the agent. It names files and counts only: listing text stays in the task files."""
     lines = [f'Search finished at {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC.']
     if report['missing']:
         lines.append('The interview is not complete, so nothing was searched. Missing: ' + ', '.join(report['missing']) + '.')
+    if report['saved'] or report['rejected']:
+        lines.append(f'From the last wake: {report["saved"]} files saved, {len(report["rejected"])} rejected'
+                     + (f' ({", ".join(report["rejected"])}).' if report['rejected'] else '.'))
     if report['error']:
         lines.append(f'The run failed. {report["error"]}')
     for site in report['sites']:
         lines.append(f'{site["site"]}: ' + ', '.join(f'{site[key]} {key}' for key in COUNTS) + '.')
         lines += [f'Problem: {error}' for error in site['errors']]
-    if report['awaiting_total']:
-        lines.append(f'{report["awaiting_total"]} listings wait for a judgment of the must-haves. The first {len(report["awaiting_judgment"])}:')
-        lines.append(json.dumps(report['awaiting_judgment'], ensure_ascii=False, indent=1))
+    if report['tasks']:
+        lines.append(f'{report["awaiting_total"]} listings wait for a judgment of the must-haves. Judgment task files, in order:')
+        lines += report['tasks']
     lines.append(json.dumps({'wakeAgent': report['wake']}))
     return '\n'.join(lines)
 
@@ -323,9 +379,8 @@ def main():
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('run')
     commands.add_parser('status')
-    commands.add_parser('pending')
-    judging = commands.add_parser('judge')
-    judging.add_argument('file', type=Path, help='JSON object {"judgments": [{id, fingerprint, must_haves}]} in the scratch directory. Deleted once saved.')
+    commands.add_parser('tasks')
+    commands.add_parser('apply')
     commands.add_parser('reported')
     arguments = parser.parse_args()
     path = store_path()
@@ -339,22 +394,23 @@ def main():
             return 0
         from client import Client
         client = Client()
-    search = Search(ListingStore(path), state, client, site_for, site_named, lambda: datetime.now(timezone.utc))
+    job = arguments.command == 'run'
+    search = Search(ListingStore(path), state, client, site_for, site_named, lambda: datetime.now(timezone.utc),
+                    inbox_directory('search' if job else 'search-conversation'), path.parent / ('must-haves' if job else 'must-haves-conversation'))
     if arguments.command == 'run':
         print(describe(search.run(RUN_BUDGET)))
     elif arguments.command == 'status':
         report = search.status()
         print(json.dumps(report, ensure_ascii=False))
         return ATTENTION if report['problems'] else 0
-    elif arguments.command == 'pending':
-        waiting = search.pending()
-        print(json.dumps({'listings': waiting[:BATCH], 'remaining': max(0, len(waiting) - BATCH)}, ensure_ascii=False, indent=1))
-    elif arguments.command == 'judge':
-        file, value = read_scratch_object(arguments.file, 'Judgments')
-        if set(value) != {'judgments'}:
-            raise ValueError('Judgments must be a JSON object with only "judgments", an array.')
-        print(json.dumps(search.judge(value['judgments'])))
-        file.unlink()
+    elif arguments.command == 'tasks':
+        handed = search.hand_judgments()
+        print(json.dumps({'listings': handed['awaiting_total'], 'tasks': handed['tasks'], 'saved': handed['saved'], 'rejected': handed['rejected']},
+                         ensure_ascii=False, indent=1))
+    elif arguments.command == 'apply':
+        saved, rejected = search.save_inbox()
+        print(json.dumps({'saved': saved, 'rejected': rejected}, ensure_ascii=False, indent=1))
+        return 1 if rejected else 0
     else:
         state.mark_reported(datetime.now(timezone.utc))
     return 0

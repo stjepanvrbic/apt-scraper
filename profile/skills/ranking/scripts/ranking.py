@@ -7,11 +7,10 @@ Commands:
   ranking.py status                  the latest rerank's summary with its review, and the shown listings not ranked since
   ranking.py explain ID              a listing's rank, reason and full explanation
   ranking.py questions [--count N]   the pairwise questions the model is least sure of
-  ranking.py run                     one pass of the scheduled job apt-scraper-review: writes the task of a waiting
-                                     review for the agent and ends with a line that tells Hermes whether to wake it.
-                                     Fails only when it cannot record a failure on the waiting review.
-  ranking.py review-save FILE        the review agent's command: check and apply its review from a JSON file in the
-                                     scratch directory, then delete the file
+  ranking.py run                     one pass of the scheduled job apt-scraper-review: saves the review the agent
+                                     wrote into the job's inbox, writes the task of a waiting review for the agent and
+                                     ends with a line that tells Hermes whether to wake it. Fails only when it cannot
+                                     record a failure on the waiting review.
 
 Exit codes: 0 done, 1 the input or a step failed, 2 usage error.
 
@@ -29,9 +28,9 @@ from string import Template
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'gallery' / 'scripts'))
 
+from inbox import apply, correction, discard, inbox_directory  # noqa: E402
 from rerank import pairwise_questions, pending_review, rerank, save_review  # noqa: E402
 from review import CONNECTING_WORDS, MODEL_WORDS  # noqa: E402
-from scratch import read_scratch_object, scratch_directory  # noqa: E402
 from store import ListingStore, store_path  # noqa: E402
 
 TEMPLATE = Path(__file__).resolve().parents[1] / 'review.md'
@@ -63,30 +62,48 @@ def compact_json(task):
     return '\n'.join(lines)
 
 
-def task_text(task):
-    script = Path(__file__).resolve().as_posix()
-    review_file = scratch_directory() / f'review-{task["rerank"]}.json'
+def review_file(rerank_id):
+    return inbox_directory('review') / f'review-{rerank_id}.json'
+
+
+def task_text(task, rejection):
+    file = review_file(task['rerank'])
     return Template(TEMPLATE.read_text(encoding='utf-8')).substitute(
-        rerank_id=task['rerank'], task_json=compact_json(task), review_file=review_file.as_posix(),
+        rerank_id=task['rerank'], task_json=compact_json(task), review_file=file.as_posix(),
         connecting_words=', '.join(sorted(CONNECTING_WORDS)), model_words=', '.join(sorted(MODEL_WORDS)),
-        save_command=f'python "{script}" review-save "{review_file.as_posix()}"')
+        correction=correction(file, rejection))
+
+
+def saved_line(name, result):
+    return f'Saved {name}: ' + {'kept': 'its moves kept.', 'reverted': 'its moves reverted.', 'no moves': 'no moves.'}[result['outcome']]
 
 
 def review_run(store, workspace):
-    """One pass of the review job: when the latest rerank's review waits, writes its task file in workspace, removing
-    the task files and review files of earlier reranks, and returns the report's lines and whether to wake the agent."""
-    task = pending_review(store)
+    """One pass of the review job: saves the review the agent wrote into the inbox, and when the latest rerank's review
+    still waits, writes its task file in workspace, with the error of a rejected review for the agent to correct, and
+    removes the task files of earlier reranks. Returns the report's lines and whether to wake the agent. A review the
+    store cannot take now, which is no rejection, stays in the inbox for the next run, and nothing is handed meanwhile."""
+    inbox = inbox_directory('review')
+    try:
+        saved, rejected = apply(inbox, {'review': lambda value: save_review(store, value)})
+    except (OSError, sqlite3.Error) as error:
+        return [f'The review in the inbox could not be saved now, so it stays for the next run. {type(error).__name__}: {error}'], False
+    lines = [saved_line(name, result) for name, result in saved.items()]
+    last = store.last_rerank()
+    rejection = rejected.get(review_file(last['id']).name) if last else None
+    task = pending_review(store, rejection)
+    handed = [review_file(task['rerank']).name] if task else []
+    lines += [f'Rejected {name}{", handed again for correction" if name in handed else ""}.' for name in rejected]
+    discard(inbox, rejected, handed)
     if task is None:
-        last = store.last_rerank()
-        return [f'No review waits. The latest review is {last["review"]["state"]}.' if last and last['review'] else 'No review waits.'], False
+        return [*lines, f'No review waits. The latest review is {last["review"]["state"]}.' if last and last['review'] else 'No review waits.'], False
     workspace.mkdir(parents=True, exist_ok=True)
     task_file = workspace / f'review-{task["rerank"]}.md'
-    review_file = scratch_directory() / f'review-{task["rerank"]}.json'
-    for earlier in [*workspace.glob('review-*.md'), *scratch_directory().glob('review-*.json')]:
-        if earlier not in (task_file, review_file):
+    for earlier in workspace.glob('review-*.md'):
+        if earlier != task_file:
             earlier.unlink()
-    task_file.write_text(task_text(task), encoding='utf-8')
-    return [f'The review of rerank {task["rerank"]} waits, over its top {len(task["listings"])} listings.',
+    task_file.write_text(task_text(task, rejected.get(handed[0])), encoding='utf-8')
+    return [*lines, f'The review of rerank {task["rerank"]} waits, over its top {len(task["listings"])} listings.',
             f'Review task file: {task_file.as_posix()}'], True
 
 
@@ -133,8 +150,6 @@ def main(argv):
     asking = commands.add_parser('questions')
     asking.add_argument('--count', type=int, default=8)
     commands.add_parser('run')
-    saving = commands.add_parser('review-save')
-    saving.add_argument('file', type=Path, help='JSON object {"rerank", "reasons", "moves", "flags", "findings"} in the scratch directory. Deleted once saved.')
     arguments = parser.parse_args(argv)
     if arguments.command == 'run':
         return run()
@@ -146,12 +161,8 @@ def main(argv):
             report = status(store)
         elif arguments.command == 'explain':
             report = explain(store, arguments.listing)
-        elif arguments.command == 'questions':
-            report = pairwise_questions(store, arguments.count)
         else:
-            file, value = read_scratch_object(arguments.file, 'The review')
-            report = save_review(store, value)
-            file.unlink()
+            report = pairwise_questions(store, arguments.count)
         print(json.dumps(report, ensure_ascii=False, indent=1))
         return 0
     except (ValueError, KeyError, OSError, sqlite3.Error) as error:

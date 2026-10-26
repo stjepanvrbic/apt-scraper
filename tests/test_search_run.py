@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -8,12 +9,14 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/search/scripts'))
 
 from test_gallery_store import ListingStore  # noqa: E402
 from matching import evaluate  # noqa: E402
-from search import Search, SearchState  # noqa: E402
+import search as search_script  # noqa: E402
+from search import Search, SearchState, describe  # noqa: E402
 from sites.errors import Blocked, Changed, Gone  # noqa: E402
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'profile/skills/search/scripts/search.py'
@@ -121,14 +124,29 @@ class SearchRunTests(unittest.TestCase):
             self.site.read = read
         search = Search(self.store, SearchState(self.directory / 'search.sqlite3'), client=None,
                         site_for=lambda url: self.site if 'fake.example' in url else None,
-                        site_named=lambda name: self.site if name == 'fake' else None, now=clock.now)
+                        site_named=lambda name: self.site if name == 'fake' else None, now=clock.now, **self.places())
         return search.run(budget)
+
+    def places(self):
+        return {'inbox': self.directory / 'inbox', 'workspace': self.directory / 'must-haves'}
+
+    def task_listings(self, report):
+        return [json.loads(Path(task).read_text(encoding='utf-8').split('\n## The listings\n', 1)[1].split('```json\n', 1)[1].split('\n```', 1)[0])
+                for task in report['tasks']]
+
+    def write_judgments(self, name, listings, value=True, phrase='Dogs allowed'):
+        file = self.directory / 'inbox' / name
+        file.parent.mkdir(exist_ok=True)
+        file.write_text(json.dumps({'judgments': [{'id': item['id'], 'fingerprint': item['fingerprint'], 'must_haves': {phrase: value}}
+                                                  for item in listings]}), encoding='utf-8')
+        return file
 
     def shown(self):
         return [item['id'] for item in self.store.browse('Rankings')['items']]
 
     def judge_all(self, value=True):
-        search = Search(self.store, SearchState(self.directory / 'search.sqlite3'), client=None, site_for=None, site_named=None, now=lambda: self.now)
+        search = Search(self.store, SearchState(self.directory / 'search.sqlite3'), client=None, site_for=None, site_named=None, now=lambda: self.now,
+                        **self.places())
         pending = search.pending()
         search.judge([{'id': item['id'], 'fingerprint': item['fingerprint'], 'must_haves': {'Dogs allowed': value}} for item in pending])
         return pending
@@ -162,7 +180,7 @@ class SearchRunTests(unittest.TestCase):
         report = self.search()
         self.assertEqual(self.site.requests, ['page North 1', 'page South 1'])
         self.assertEqual((report['sites'][0]['unchanged'], report['sites'][0]['new']), (2, 0))
-        self.assertEqual(report['awaiting_judgment'], [])
+        self.assertEqual(report['tasks'], [])
         self.assertFalse(report['wake'])
 
     def test_a_changed_listing_is_read_and_judged_again(self):
@@ -173,7 +191,7 @@ class SearchRunTests(unittest.TestCase):
         report = self.search()
         self.assertEqual(report['sites'][0]['changed'], 1)
         self.assertEqual(self.store.listing('fake:1')['price'], 2100)
-        self.assertEqual([item['id'] for item in report['awaiting_judgment']], ['fake:1'])
+        self.assertEqual([[item['id'] for item in listings] for listings in self.task_listings(report)], [['fake:1']])
         self.assertTrue(report['wake'])
         self.assertEqual(self.shown(), [])
 
@@ -288,13 +306,13 @@ class SearchRunTests(unittest.TestCase):
     def test_a_run_that_crashes_is_recorded_for_status(self):
         self.site.results = {'North': [1], 'South': []}
         search = Search(self.store, SearchState(self.directory / 'search.sqlite3'), client=None,
-                        site_for=lambda url: self.site, site_named=lambda name: self.site, now=lambda: self.now)
+                        site_for=lambda url: self.site, site_named=lambda name: self.site, now=lambda: self.now, **self.places())
         search.pending = lambda: (_ for _ in ()).throw(RuntimeError('disk full'))
         report = search.run(timedelta(minutes=20))
         self.assertIn('RuntimeError: disk full', report['error'])
         self.assertFalse(report['wake'])
         status = Search(self.store, SearchState(self.directory / 'search.sqlite3'), client=None, site_for=None, site_named=None,
-                        now=lambda: self.now).status()
+                        now=lambda: self.now, **self.places()).status()
         self.assertTrue(any('disk full' in problem for problem in status['problems']))
 
     def test_criteria_narrowed_during_a_run_hide_every_listing_outside_them_when_the_run_ends(self):
@@ -318,7 +336,7 @@ class SearchRunTests(unittest.TestCase):
                                    'sources': [{'label': 'Elsewhere', 'url': 'https://elsewhere.example/1'}]})
         self.search()
         self.assertEqual(self.shown(), [])
-        search = Search(self.store, SearchState(self.directory / 'search.sqlite3'), client=None, site_for=None, site_named=None, now=lambda: self.now)
+        search = Search(self.store, SearchState(self.directory / 'search.sqlite3'), client=None, site_for=None, site_named=None, now=lambda: self.now, **self.places())
         [item] = search.pending()
         self.assertEqual(item['unjudged'], ['In one of these areas: North; South', 'Price at most 2,400 USD a month', 'Rooms at least 2', 'Dogs allowed'])
         judged = dict.fromkeys(item['unjudged'], True)
@@ -368,7 +386,8 @@ class SearchRunTests(unittest.TestCase):
     def test_judgments_for_changed_content_or_unknown_must_haves_are_refused(self):
         self.site.results = {'North': [1], 'South': []}
         self.search()
-        search = Search(self.store, SearchState(self.directory / 'search.sqlite3'), client=None, site_for=None, site_named=None, now=lambda: self.now)
+        search = Search(self.store, SearchState(self.directory / 'search.sqlite3'), client=None, site_for=None, site_named=None, now=lambda: self.now,
+                        **self.places())
         [item] = search.pending()
         with self.assertRaisesRegex(ValueError, 'Elevator'):
             search.judge([{'id': 'fake:1', 'fingerprint': item['fingerprint'], 'must_haves': {'Elevator': True}}])
@@ -378,6 +397,59 @@ class SearchRunTests(unittest.TestCase):
         self.assertEqual(result, {'saved': 0, 'stale': ['fake:1'], 'shown': 0, 'outside': 0})
         result = search.judge([{'id': 'fake:1', 'fingerprint': item['fingerprint'], 'must_haves': {'Dogs allowed': False}}])
         self.assertEqual(result, {'saved': 1, 'stale': [], 'shown': 0, 'outside': 1})
+
+    def test_the_wake_gets_task_files_and_the_next_run_saves_the_judgments_written_into_the_inbox(self):
+        self.site.results = {'North': [1, 2], 'South': []}
+        report = self.search()
+        self.assertTrue(report['wake'])
+        [task] = report['tasks']
+        [listings] = self.task_listings(report)
+        self.assertEqual([item['id'] for item in listings], ['fake:1', 'fake:2'])
+        self.assertIn('Dogs welcome', listings[0]['description'])
+        text = describe(report)
+        self.assertIn(f'2 listings wait for a judgment of the must-haves. Judgment task files, in order:\n{task}\n', text)
+        self.assertNotIn('Dogs welcome', text)
+        task_text = Path(task).read_text(encoding='utf-8')
+        file = self.directory / 'inbox' / 'judgments-batch-1.json'
+        self.assertIn(f'`write_file` to `{file.as_posix()}`', task_text)
+        self.assertNotIn('terminal', task_text)
+        self.write_judgments(file.name, listings)
+        report = self.search()
+        self.assertEqual((report['saved'], report['rejected'], report['tasks'], report['wake']), (1, [], [], False))
+        self.assertIn('From the last wake: 1 files saved, 0 rejected.', describe(report))
+        self.assertFalse(file.exists())
+        self.assertEqual(sorted(self.shown()), ['fake:1', 'fake:2'])
+
+    def test_a_rejected_judgments_file_stays_and_its_listings_are_handed_again_first_with_the_error(self):
+        self.site.results = {'North': [1, 2], 'South': []}
+        with mock.patch.object(search_script, 'BATCH', 1):
+            report = self.search()
+            first, second = self.task_listings(report)
+            file = self.write_judgments('judgments-batch-2.json', second, phrase='Elevator')
+            report = self.search()
+            self.assertEqual((report['saved'], report['rejected'], report['wake']), (0, ['judgments-batch-2.json'], True))
+            self.assertIn('From the last wake: 0 files saved, 1 rejected (judgments-batch-2.json).', describe(report))
+            self.assertTrue(file.exists())
+            self.assertEqual([Path(task).name for task in report['tasks']], ['batch-2.md', 'batch-1.md'])
+            self.assertEqual([[item['id'] for item in listings] for listings in self.task_listings(report)], [['fake:2'], ['fake:1']])
+            text = Path(report['tasks'][0]).read_text(encoding='utf-8')
+            self.assertIn('```json\n' + json.dumps('"Elevator" is not a phrase to judge for fake:2. Its phrases are: ["Dogs allowed"].') + '\n```', text)
+            self.assertIn(f'The rejected file is still `{file.as_posix()}`', text)
+            self.assertNotIn('The rejected save', Path(report['tasks'][1]).read_text(encoding='utf-8'))
+            self.write_judgments(file.name, second)
+            report = self.search()
+        self.assertEqual((report['saved'], report['rejected']), (1, []))
+        self.assertFalse(file.exists())
+        self.assertEqual(self.shown(), ['fake:2'])
+
+    def test_a_rejected_judgments_file_whose_listings_no_longer_wait_is_deleted(self):
+        self.site.results = {'North': [1], 'South': []}
+        [listings] = self.task_listings(self.search())
+        file = self.write_judgments('judgments-batch-1.json', listings, phrase='Elevator')
+        self.judge_all()
+        report = self.search()
+        self.assertEqual((report['rejected'], report['tasks']), (['judgments-batch-1.json'], []))
+        self.assertFalse(file.exists())
 
 
 class SearchScriptTests(unittest.TestCase):
@@ -432,30 +504,42 @@ class SearchScriptTests(unittest.TestCase):
         self.assertEqual(self.run_script('reported').returncode, 0)
         self.assertEqual(json.loads(self.run_script('status').stdout)['new_since_report'], 0)
 
-    def test_judgments_are_saved_from_a_scratch_file_that_is_deleted(self):
+    def test_in_a_conversation_tasks_writes_the_task_files_and_apply_saves_the_judgments_at_once(self):
         self.store.update_settings(**SETTINGS)
         self.store.upsert_listing({'id': 'fake:1', 'sources': [{'label': 'Fake', 'url': 'https://fake.example/1'}]}, matches_criteria=False)
-        pending = json.loads(self.run_script('pending').stdout)
-        self.assertEqual([item['id'] for item in pending['listings']], ['fake:1'])
-        scratch = self.home / 'cache' / 'scratch'
-        scratch.mkdir(parents=True)
-        outside = self.home / 'judgments.json'
-        judgments = {'judgments': [{'id': 'fake:1', 'fingerprint': pending['listings'][0]['fingerprint'], 'must_haves': dict.fromkeys(pending['listings'][0]['unjudged'])}]}
-        outside.write_text(json.dumps(judgments), encoding='utf-8')
-        result = self.run_script('judge', str(outside))
-        self.assertEqual(result.returncode, 1)
-        self.assertIn('scratch', result.stderr)
-        file = scratch / 'judgments.json'
-        file.write_text(json.dumps(judgments['judgments']), encoding='utf-8')
-        result = self.run_script('judge', str(file))
-        self.assertEqual(result.returncode, 1)
-        self.assertIn('JSON object', result.stderr)
-        file.write_text(json.dumps(judgments), encoding='utf-8')
-        result = self.run_script('judge', str(file))
+        result = self.run_script('tasks')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)['shown'], 1)
+        output = json.loads(result.stdout)
+        self.assertEqual(output['listings'], 1)
+        [task] = output['tasks']
+        text = Path(task).read_text(encoding='utf-8')
+        [item] = json.loads(text.split('```json\n', 1)[1].split('\n```', 1)[0])
+        file = Path(re.search(r'with `write_file` to `([^`]+)`', text).group(1))
+        self.assertEqual(file.parent, (self.home / 'cache' / 'inbox' / 'search-conversation').resolve())
+        job_file = self.home / 'cache' / 'inbox' / 'search' / file.name
+        job_file.parent.mkdir(parents=True)
+        job_file.write_text('[]', encoding='utf-8')
+        judgments = {'judgments': [{'id': 'fake:1', 'fingerprint': item['fingerprint'], 'must_haves': dict.fromkeys(item['unjudged'])}]}
+        file.parent.mkdir(parents=True)
+        file.write_text(json.dumps(judgments['judgments']), encoding='utf-8')
+        result = self.run_script('apply')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('JSON object', json.loads(result.stdout)['rejected'][file.name])
+        self.assertTrue(file.exists())
+        file.write_text(json.dumps(judgments), encoding='utf-8')
+        result = self.run_script('apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['saved'][file.name]['shown'], 1)
         self.assertFalse(file.exists())
         self.assertEqual(self.store.browse('Rankings')['total'], 1)
+        self.assertEqual(json.loads(self.run_script('tasks').stdout), {'listings': 0, 'tasks': [], 'saved': 0, 'rejected': []})
+        self.assertEqual(job_file.read_text(encoding='utf-8'), '[]')
+
+    def test_the_search_session_has_the_file_tools_and_no_terminal(self):
+        jobs = json.loads((SCRIPT.parents[4] / 'profile/cron/jobs.json').read_text(encoding='utf-8'))['jobs']
+        job = next(job for job in jobs if job['id'] == 'apt-scraper-search')
+        self.assertEqual(job['enabled_toolsets'], ['file', 'no_mcp'])
+        self.assertNotIn('terminal', search_script.JUDGMENT_TEMPLATE.read_text(encoding='utf-8'))
 
 
 if __name__ == '__main__':

@@ -3,7 +3,7 @@ on what the listing store holds.
 
 The gallery's Score and rerank and the ranking skill's `ranking.py rerank` both call rerank, so ranks change only
 when the user asks for them. Neither calls a model. Each rerank leaves its review pass waiting, which the ranking
-review job hands to the agent with pending_review and the agent saves with save_review."""
+review job hands to the agent with pending_review and saves from the job's inbox with save_review."""
 
 import random
 import time
@@ -37,15 +37,17 @@ def waiting_review(store):
     return last, store.review_snapshot(last['id'])
 
 
-def pending_review(store):
+def pending_review(store, rejection=None):
     """The task of the review the agent should do now, or None. Each call hands the review to the agent once more, and
-    a review handed REVIEW_ATTEMPTS times without being saved fails."""
+    a review handed REVIEW_ATTEMPTS times without being saved fails, with rejection, the error of the last review the
+    agent wrote, when it was rejected."""
     waiting = waiting_review(store)
     if waiting is None:
         return None
     last, snapshot = waiting
     if last['review']['attempts'] >= REVIEW_ATTEMPTS:
-        store.fail_review(last['id'], f'The review was not saved in {REVIEW_ATTEMPTS} attempts.')
+        store.fail_review(last['id'], f'The review was not saved in {REVIEW_ATTEMPTS} attempts.'
+                                      + (f' The last one was rejected: {rejection}' if rejection else ''))
         return None
     if store.hand_review(last['id']) is None:
         return None

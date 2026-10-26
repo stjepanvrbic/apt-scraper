@@ -2,7 +2,7 @@
 
 You read one apartment listing for a ranking that learns the user's taste, and save what you read as the listing's feature record. Work only from this file, the contact sheets attached to your task and the photo files listed below. Do not search the web or open the listing's site.
 
-## The photos
+$correction## The photos
 
 $photo_overview
 
@@ -33,13 +33,13 @@ $category_lines
 - `summary`: one line of at most 200 characters, such as "Bright vintage two-bedroom garden unit with exposed brick and an updated kitchen".
 - `preferences`: each preference to judge below, exactly as written, as `{"verdict": v, "evidence": "..."}`, where v is "has" when the listing has it, "rules out" when something it shows or says rules it out, and "does not say" otherwise. The evidence, at most 200 characters, names the photo or the words it rests on, and may be empty for "does not say". `{}` when there is none to judge.
 
-Choosing tags: the ranking compares listings by their tags, so the same thing must have the same tag in every listing. After you have looked at the photos and read the text, run this command with the terminal:
+Choosing tags: the ranking compares listings by their tags, so the same thing must have the same tag in every listing. The tag list, most used first, with how many listings use each tag:
 
-```bash
-$tags_command
+```text
+$tags
 ```
 
-It prints the tag list as it is now, most used first, with how many listings use each tag. Other extractions add to it while you work, so run it just before you choose, not earlier. For each trait or concern, use the listed tag that means the same thing, exactly as written, even when your own word differs: "stainless steel appliance" for stainless appliances, "built-in shelf" for built-in bookcases. Write a new tag only for something no listed tag comes close to, in the singular, in 1 to 4 lowercase words, letters, digits, spaces, hyphens, apostrophes, & or /. Never write a tag for what a rating, value or flag already records, such as pets, laundry, utilities, air conditioning, hardwood floors, natural light, high ceilings or a balcony: saving drops it.
+For each trait or concern, use the listed tag that means the same thing, exactly as written, even when your own word differs: "stainless steel appliance" for stainless appliances, "built-in shelf" for built-in bookcases. Write a new tag only for something no listed tag comes close to, in the singular, in 1 to 4 lowercase words, letters, digits, spaces, hyphens, apostrophes, & or /. Never write a tag for what a rating, value or flag already records, such as pets, laundry, utilities, air conditioning, hardwood floors, natural light, high ceilings or a balcony: saving drops it.
 
 The preferences to judge:
 
@@ -53,12 +53,6 @@ Write the record with `write_file` to `$record_file`, as one JSON object:
 {"id": "$listing_id", "fingerprint": "$fingerprint", "record": {"photos": [{"index": 1, "room": "living"}], "ratings": {"natural_light": {"value": 4, "confidence": 0.8}, "view": "not shown"}, "floor": "hardwood", "style": "vintage", "outdoor_space": "not shown", "building_type": "low-rise", "unit_level": {"value": "not shown", "evidence": ""}, "flags": {"dishwasher": true, "parking": null}, "traits": ["exposed brick"], "concerns": [], "summary": "...", "preferences": {}}}
 ```
 
-The example is shortened: your record has every photo, every rating and every flag. Then run this command with the terminal:
+The example is shortened: your record has every photo, every rating and every flag. Writing the file saves the record: the listing features job checks it after the agent that started you stops. A record that breaks the format above is not stored, and the job hands this listing to a subagent again with the error.
 
-```bash
-$save_command
-```
-
-It prints the saved listing when the record is valid. When it exits with code 1, nothing was saved and the error says what is wrong: correct the file and run the command again. Stop after three rejected tries.
-
-Your final answer is one line: "saved", or why the record could not be saved.
+Your final answer is one line: "saved", or why you could not write the record.
