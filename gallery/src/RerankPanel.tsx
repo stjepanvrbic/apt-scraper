@@ -1,4 +1,4 @@
-import { Accordion, Alert, Badge, Button, Divider, Group, Loader, Paper, Stack, Table, Text, Title } from '@mantine/core';
+import { Accordion, Alert, Badge, Button, Divider, Group, Loader, Paper, ScrollArea, Stack, Table, Text, Title } from '@mantine/core';
 import { IconArrowsSort, IconCheck, IconHeart, IconNotes } from '@tabler/icons-react';
 import type { Review, ReviewResult } from './model';
 import { DistanceAttribution } from './RankingExplanation';
@@ -80,13 +80,13 @@ export function RerankPanel({ ranking, open, busy, galleryReadError }: { ranking
               {summary.held_out.length ? <>
                 <Text size="sm" c="dimmed" mb="sm">Each favorite's rank when its own feedback is held out. Lower ranks mean your other choices explain it better.</Text>
                 <Group gap="lg" mb="sm"><Text size="sm">Median <b>{checkValue(summary.held_out_median)}</b></Text><Text size="sm">Mean <b>{checkValue(summary.held_out_mean)}</b></Text></Group>
-                <div className="favorite-check-list" role="region" aria-label="All favorites and held-out ranks" tabIndex={0}>
-                  <Table verticalSpacing="xs"><Table.Thead><Table.Tr><Table.Th>Favorite</Table.Th><Table.Th ta="right">Held-out rank</Table.Th></Table.Tr></Table.Thead>
+                <ScrollArea.Autosize mah={190} type="auto" scrollbars="y" offsetScrollbars="y" viewportProps={{ role: 'region', 'aria-label': 'All favorites and held-out ranks', tabIndex: 0 }}>
+                  <Table stickyHeader verticalSpacing="xs"><Table.Thead><Table.Tr><Table.Th>Favorite</Table.Th><Table.Th ta="right" w={120}>Held-out rank</Table.Th></Table.Tr></Table.Thead>
                     <Table.Tbody>{summary.held_out.map(favorite => <Table.Tr key={favorite.id}>
                       <Table.Td><Button variant="subtle" color="dark" size="compact-sm" className="listing-result-link" onClick={() => open(favorite.id)}>{favorite.title}</Button></Table.Td>
                       <Table.Td ta="right" className="score-number" data-testid="held-out-rank">#{favorite.rank}</Table.Td>
                     </Table.Tr>)}</Table.Tbody></Table>
-                </div>
+                </ScrollArea.Autosize>
               </> : <Text size="sm" c="dimmed">No favorites to check yet. Save a few places you like, then rerank to see how well your choices explain them.</Text>}
             </Accordion.Panel>
           </Accordion.Item>

@@ -12,9 +12,6 @@ body { margin: 0; }
 .ranking-results .mantine-Accordion-control { padding-inline: 0; }
 .ranking-results .mantine-Accordion-content { padding-inline: 0; }
 .ranking-results .mantine-Accordion-item:last-child { border-bottom: 0; }
-.favorite-check-list { max-height: 190px; overflow: auto; scrollbar-gutter: stable; border-top: 1px solid #ebebeb; }
-.favorite-check-list thead { position: sticky; top: 0; background: #fff; z-index: 1; }
-.favorite-check-list th:last-child { width: 120px; }
 .listing-result-link { height: auto; min-height: 32px; padding-block: 4px; text-align: left; max-width: 100%; }
 .listing-result-link .mantine-Button-label { white-space: normal; overflow-wrap: anywhere; }
 .score-number { font-variant-numeric: tabular-nums; white-space: nowrap; }

@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from code_features import FEATURES, configured_transit_feed, store_all_code_features, store_code_features
 from schema import content_fingerprint, migrate
-from queries import RANKABLE, browse, snapshot, validate_page
+from queries import RANKABLE, RANKING_EXCLUSION, browse, snapshot, validate_page
 from record import SEED_TAGS, known_spelling, validate_extraction, validate_judgments
 from scoring import reading_vocabulary, stated_phrases, validate_note_reading, validate_preference_reading
 
@@ -288,14 +288,18 @@ def explain_pending_rankings(connection, listings):
     if not pending:
         return
     placeholders = ','.join('?' for _ in pending)
-    rows = connection.execute(f'''SELECT l.id, l.fingerprint, f.listing_id AS record FROM listings l
-        LEFT JOIN feature_records f ON f.listing_id = l.id AND f.fingerprint = l.fingerprint
+    rows = connection.execute(f'''SELECT l.id, l.fingerprint, records.listing_id AS record,
+        {RANKING_EXCLUSION} AS exclusion FROM listings l
+        LEFT JOIN feedback f ON f.listing_id = l.id
+        LEFT JOIN feature_records records ON records.listing_id = l.id AND records.fingerprint = l.fingerprint
         WHERE l.id IN ({placeholders})''', list(pending)).fetchall()
     reads = [extraction_read(row['id'], row['fingerprint']) for row in rows]
     attempts = dict(connection.execute(f'SELECT read, attempts FROM model_reads WHERE read IN ({placeholders})', reads))
     for row, read in zip(rows, reads):
         listing = pending[row['id']]
-        if row['record']:
+        if row['exclusion']:
+            reason = row['exclusion']
+        elif row['record']:
             reason = 'Not ranked yet: new or changed since the last rerank.'
         elif attempts.get(read, 0) >= READ_ATTEMPTS:
             reason = f'Not ranked yet: extraction failed {READ_ATTEMPTS} times. Score and rerank to use code-derived features.'

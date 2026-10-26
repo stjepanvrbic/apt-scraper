@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "test": "playwright test",
+    "screenshots:docs": "playwright test rerank.spec.ts --grep \"rerank results and full explanations\" --output .gallery-test/docs-screenshots && node scripts/export-doc-screenshots.mjs",
     "lint": "eslint ."
   },
   "dependencies": {

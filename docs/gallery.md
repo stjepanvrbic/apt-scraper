@@ -16,6 +16,8 @@ The review starts through the existing Hermes review job, normally within a minu
 
 Open a listing for its full scoring explanation, including every feature's contribution and the most similar favorite. Contributions describe the scoring model; any later review move is explained in the review result. Place distances carry the credit "© OpenStreetMap contributors". Listings awaiting ranking follow the ranked ones, with a reason distinguishing current features ready for a rerank, features still waiting, and failed extraction. After three extraction failures, the next rerank uses code-derived features alone and says so in the reason.
 
+Unranked listings in other tabs explain when they are unavailable, dismissed or outside the criteria. These listings cannot receive a rank until they are eligible again.
+
 ## Compare
 
 Compare asks "Which of these two?" with the main photo, price, rooms, size and address of each apartment. Open either listing for its full details, choose the one you prefer, or skip. A choice saves immediately and counts at the next rerank; the current ranking stays still. Answered pairs never return. A skipped pair stays out until twenty other questions have been answered or skipped, including across restarts. If every eligible pair is answered or cooling down, Compare shows that there are no questions available. It does not shorten the skip cooldown to fill the screen.
@@ -153,6 +155,8 @@ npm test
 ```
 
 The Python tests use real SQLite files and HTTP servers. Launcher tests start through a virtual environment, exit the caller, and check that the server remains reachable. On Windows they verify the server has no console. On POSIX they verify a separate session. Automated adapter tests execute `run_turn` against a controlled external Hermes interface. Live verification uses the installed gateway. Browser checks run headless with screenshots. The opener is stubbed in its command test. Hermes test launches use `open --no-browser`. Browser tests use isolated stores and the production build, including real server restarts, keyboard navigation, failed saves, missing photos, source navigation and accessibility checks at desktop and mobile sizes.
+
+Screenshots from the test suite stay in the ignored `gallery/test-results/` directory. To refresh the six rerank documentation screenshots explicitly, run `npm run screenshots:docs` from `gallery/` after building. This runs the desktop and mobile screenshot checks in an isolated output directory, then copies their images into `docs/images/` only if both checks pass.
 
 ## Assets and references
 

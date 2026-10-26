@@ -214,7 +214,7 @@ print('null')
 });
 
 for (const viewport of [{ name: 'desktop', width: 1440, height: 1100 }, { name: 'mobile', width: 390, height: 844 }]) {
-  test(`rerank results and full explanations are accessible on ${viewport.name}`, async ({ page, gallery }) => {
+  test(`rerank results and full explanations are accessible on ${viewport.name}`, async ({ page, gallery }, testInfo) => {
     seed(gallery.database);
     const saved = stored(gallery.database, `
 summary = rerank(store, seed=1)
@@ -232,7 +232,16 @@ print(json.dumps({'review': result, 'listing': store.listing(first)}))
     await expect(page.getByRole('article').first().getByRole('link', { name: 'OpenStreetMap contributors', exact: true })).toBeVisible();
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
     if (viewport.name === 'mobile') await page.getByRole('region', { name: 'Ranking controls and results' }).scrollIntoViewIfNeeded();
-    await page.screenshot({ path: resolve(`../docs/images/rerank-${viewport.name}.png`) });
+    await page.screenshot({ path: testInfo.outputPath(`rerank-${viewport.name}.png`) });
+    const favorites = page.getByRole('region', { name: 'All favorites and held-out ranks', exact: true });
+    await favorites.press('End');
+    await expect.poll(() => favorites.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    const viewportBounds = await favorites.boundingBox();
+    const headerBounds = await favorites.getByRole('row').first().boundingBox();
+    expect(viewportBounds!.height).toBeLessThanOrEqual(190);
+    expect(Math.abs(headerBounds!.y - viewportBounds!.y)).toBeLessThan(2);
+    await favorites.press('Home');
+    await expect.poll(() => favorites.evaluate(element => element.scrollTop)).toBe(0);
     await page.getByRole('button', { name: 'Favorite check', exact: false }).click();
     await page.getByRole('button', { name: 'Review complete', exact: true }).click();
     await expect(page.getByText('Review moves reverted', { exact: true })).toBeVisible();
@@ -243,7 +252,7 @@ print(json.dumps({'review': result, 'listing': store.listing(first)}))
     }
     await page.getByRole('region', { name: 'Ranking controls and results' }).scrollIntoViewIfNeeded();
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
-    await page.screenshot({ path: resolve(`../docs/images/rerank-review-${viewport.name}.png`) });
+    await page.screenshot({ path: testInfo.outputPath(`rerank-review-${viewport.name}.png`) });
     await page.getByRole('button', { name: `View ${saved.listing.title}`, exact: true }).click();
     const details = page.getByRole('dialog');
     await expect(details.getByText(saved.listing.explanation.similar_favorite.title, { exact: true })).toBeVisible();
@@ -259,6 +268,6 @@ print(json.dumps({'review': result, 'listing': store.listing(first)}))
     await details.evaluate(element => { element.scrollTop -= 100; });
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({ path: resolve(`../docs/images/explanation-${viewport.name}.png`) });
+    await page.screenshot({ path: testInfo.outputPath(`explanation-${viewport.name}.png`) });
   });
 }

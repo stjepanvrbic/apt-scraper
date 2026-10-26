@@ -127,3 +127,43 @@ class RerankServerTests(GalleryServerCase):
         self.assertIn('new or changed since the last rerank', reasons[identifiers[0]])
         self.assertIn('extraction failed 3 times', reasons['example:failed'])
         self.assertIn('waiting for its feature record', reasons['example:100'])
+
+    def assert_excluded_reason(self, identifier, view, reason):
+        for _ in range(2):
+            self.request('/api/rerank', {})
+            self.assertNotIn(identifier, [item['id'] for item in self.request('/api/listings')['items']])
+            detail = self.request('/api/listings/' + identifier)
+            card = next(item for item in self.request('/api/listings?view=' + view)['items'] if item['id'] == identifier)
+            for item in (detail, card):
+                self.assertIsNone(item['rank'])
+                self.assertEqual(item['reason'], reason)
+                self.assertFalse(item['exploration'])
+            self.assertIsNone(detail['explanation'])
+
+    def test_unavailable_favorite_explains_why_reranking_cannot_rank_it(self):
+        identifier = fill(self.store, 2, 1)[0]
+        self.request('/api/rerank', {})
+        self.store.set_availability(identifier, 'unavailable')
+        self.assert_excluded_reason(identifier, 'Favorites', 'Not ranked: unavailable.')
+
+    def test_dismissed_listing_explains_why_reranking_cannot_rank_it(self):
+        identifier = fill(self.store, 2, 1)[0]
+        self.request('/api/rerank', {})
+        self.store.feedback(identifier, dismissed=True)
+        self.assert_excluded_reason(identifier, 'Dismissed', 'Not ranked: dismissed.')
+
+    def test_contacted_listing_outside_criteria_explains_why_reranking_cannot_rank_it(self):
+        identifier = fill(self.store, 2, 1)[0]
+        self.request('/api/rerank', {})
+        self.store.request_contact(identifier)
+        self.store.set_matches_criteria(identifier, False)
+        self.assert_excluded_reason(identifier, 'Contacted', 'Not ranked: outside the criteria.')
+
+    def test_rankable_listing_with_features_waits_for_a_rerank_then_gets_ranked(self):
+        identifier = fill(self.store, 1, 0)[0]
+        for item in (self.request('/api/listings/' + identifier),
+                     next(item for item in self.request('/api/listings')['items'] if item['id'] == identifier)):
+            self.assertIsNone(item['rank'])
+            self.assertEqual(item['reason'], 'Not ranked yet: new or changed since the last rerank.')
+        self.request('/api/rerank', {})
+        self.assertEqual(self.request('/api/listings/' + identifier)['rank'], 1)
