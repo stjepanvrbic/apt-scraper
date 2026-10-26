@@ -1,9 +1,9 @@
 ---
 title: A criteria change reports how many listings it hid
 type: Bug
-state: Backlog
+state: In Progress
 priority: 3
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []

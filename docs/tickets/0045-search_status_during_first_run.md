@@ -1,9 +1,9 @@
 ---
 title: The search status reports a first run in progress
 type: Bug
-state: Backlog
+state: In Progress
 priority: 4
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []
