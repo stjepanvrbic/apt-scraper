@@ -3,6 +3,7 @@ import random
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
 
@@ -171,6 +172,13 @@ class PairwiseTests(unittest.TestCase):
         settings = {**SETTINGS, 'preferences': {'likes': ['Skylight'], 'dislikes': []}}
         readings = {('like', 'Skylight'): [{'feature': 'tag:skylight', 'direction': 'like'}]}
         self.assertEqual(len(questions(inputs(neighborhood(30), settings=settings, readings=readings), DEFAULT_HYPERPARAMETERS, 6, [])), 6)
+
+    def test_questions_cost_a_fit_without_the_leave_one_out_check(self):
+        listings = neighborhood(30)
+        for number in (2, 9, 17, 23):
+            listings[number]['favorite'] = True
+        with mock.patch('scoring.held_out_fit', side_effect=AssertionError('questions ran the leave-one-out check')):
+            self.assertEqual(len(questions(inputs(listings), DEFAULT_HYPERPARAMETERS, 3, [])), 3)
 
 
 class ExplanationTests(unittest.TestCase):

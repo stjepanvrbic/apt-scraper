@@ -3,7 +3,7 @@
 from collections import defaultdict
 from statistics import median
 
-from scoring import fit_model, in_fit, labeled, summary_of, title
+from scoring import fit_model, in_fit, labeled, leave_one_out, summary_of, title
 
 
 def weak_labels(inputs):
@@ -19,12 +19,14 @@ def weak_labels(inputs):
 
 
 def diagnostic(inputs, baseline, ordinary_model):
+    """The leave-one-out check of the model fitted with the weak labels as well, against baseline, the rerank's summary
+    of the ordinary check. ordinary_model is the rerank's fit, which the diagnostic starts from."""
     labels = weak_labels(inputs)
     if labels:
         model = fit_model(inputs, (baseline['prior_scale'], baseline['unlabeled_weight']), weak_labels=labels, warm_start=ordinary_model)
-        held_out = [{'id': identifier, 'title': title(model.design.listings[identifier]), 'rank': rank}
-                    for identifier, rank in model.held_out.items()]
-        summary = {f'held_out_{key}': value for key, value in summary_of(model.held_out).items()}
+        ranks = leave_one_out(model).ranks
+        held_out = [{'id': identifier, 'title': title(model.design.listings[identifier]), 'rank': rank} for identifier, rank in ranks.items()]
+        summary = {f'held_out_{key}': value for key, value in summary_of(ranks).items()}
     else:
         held_out = baseline['held_out']
         summary = {key: baseline[key] for key in ('held_out_mean', 'held_out_median')}
