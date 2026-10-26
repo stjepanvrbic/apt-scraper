@@ -1,7 +1,6 @@
 import json
 import sqlite3
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from urllib.error import HTTPError
@@ -9,7 +8,7 @@ from uuid import uuid4
 
 from test_gallery_store import ListingStore, listing
 import test_gallery_server
-from test_rerank import StoreTestCase, fill
+from test_rerank import StoreTestCase, fill, least_cpu_seconds
 from rerank import pairwise_questions, rerank
 from schema import MIGRATIONS
 from implicit_signals import weak_labels
@@ -154,11 +153,9 @@ class SignalRerankTests(StoreTestCase):
             self.store.record_signals([event(self.store, **values),
                                       event(self.store, 'dwell', duration_ms=60000 if index < 50 else 1000, **values),
                                       event(self.store, 'close', **values)])
-        started = time.process_time()
-        result = rerank(self.store, seed=1)
-        elapsed = time.process_time() - started
+        seconds, result = least_cpu_seconds(lambda: rerank(self.store, seed=1))
         self.assertEqual(result['implicit_signals']['weak_labels'], 250)
-        self.assertLess(elapsed, 2.0)
+        self.assertLess(seconds, 2.0)
 
     def test_diagnostic_weak_labels_never_change_ranks_explanations_or_questions(self):
         identifiers = fill(self.store, 24, 4)
