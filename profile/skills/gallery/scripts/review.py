@@ -9,7 +9,10 @@ its moves independently.
 The review may rewrite the reasons, flag listings whose rank conflicts with a stated preference, report what looks
 wrong in the ranking state, and move listings, each move with a reason and a verbalized confidence. A rewritten reason
 cites the listing's record in square brackets, each citation exactly one of the values its record states, and outside
-the brackets uses only CONNECTING_WORDS, so every feature it names is one the record has.
+the brackets uses only CONNECTING_WORDS, so every feature it names is one the record has. A move's reason cites the
+same way and a finding may, each citation a value of the task's listings, a tag or a feature's column name, and outside
+the brackets they use only CONNECTING_WORDS and MODEL_WORDS. A flag is a listing and a stated preference, without
+text. The review is written after reading listing text, so it holds no free text that could carry an instruction.
 
 Moves become per-listing score adjustments that place each moved listing at its new rank, so they apply to the full
 fit and to every held-out fit alike. The leave-one-out check reads the scores the rerank stored and runs before and
@@ -44,6 +47,12 @@ CONNECTING_WORDS = frozenset('''
     that the then there these this those though to too top two under unit upside upsides very weak well while with
     without worse worst worth yet
 '''.split())
+MODEL_WORDS = frozenset('''
+    above against below count counts dislike dislikes extraction favorites feature features held label labels like
+    likes little listings mean means model out overrules poorly preference rank ranked ranks rests run runs same should
+    single stated tag tags thing user wait waiting weighs weight weights when wrong
+'''.split())
+REVIEW_WORDS = CONNECTING_WORDS | MODEL_WORDS
 
 
 def citable_values(explanation, record):
@@ -55,20 +64,20 @@ def citable_values(explanation, record):
     return list(dict.fromkeys(values))
 
 
-def checked_reason(text, values):
-    """The reason as the listing shows it, with its citations unbracketed, or a ValueError saying why it is rejected:
-    no citation, a citation that is not one of the listing's values, or outside the citations a word that is not one
-    of CONNECTING_WORDS, a number, or a sign other than plain punctuation."""
+def checked_text(text, values, words=CONNECTING_WORDS, *, source='the record', require_citation=True):
+    """The text as the user sees it, with its citations unbracketed, or a ValueError saying why it is rejected: no
+    citation when one is required, a citation that is not one of values, which source states, or outside the
+    citations a word that is not one of words, a number, or a sign other than plain punctuation."""
     cited = CITATION.findall(text)
-    if not cited:
-        raise ValueError('it cites nothing from the record')
+    if require_citation and not cited:
+        raise ValueError('it cites nothing')
     unknown = [citation for citation in cited if citation not in values]
     if unknown:
-        raise ValueError(f'the record does not state {", ".join(json.dumps(citation, ensure_ascii=False) for citation in unknown)}')
+        raise ValueError(f'{source} does not state {", ".join(json.dumps(citation, ensure_ascii=False) for citation in unknown)}')
     rest = CITATION.sub(' ', text).lower()
     if '[' in rest or ']' in rest:
         raise ValueError('it has an unmatched bracket')
-    uncited = sorted({token for token in TOKEN.findall(rest) if token not in CONNECTING_WORDS and token not in PUNCTUATION})
+    uncited = sorted({token for token in TOKEN.findall(rest) if token not in words and token not in PUNCTUATION})
     if uncited:
         raise ValueError(f'it uses {", ".join(json.dumps(word, ensure_ascii=False) for word in uncited)} outside a citation')
     return ' '.join(CITATION.sub(lambda match: match.group(1), text).split())
@@ -163,13 +172,14 @@ def require_entries(value, name, keys):
     return value
 
 
-def validated_review(value, rerank_id, snapshot, citable, stated):
+def validated_review(value, rerank_id, snapshot, citable, terms, stated):
     """The review's file, checked against the rerank it reviews: reasons, moves and flags only for the top REVIEWED of
     the rerank's order in snapshot, each reason citing only the values in citable for its listing, which holds the
-    listings that have not changed since the rerank; no exploration listing moved and none moved onto an exploration
-    listing's rank; each listing moved at most once and each to a rank of its own; and flags only for stated, the
-    stated preferences as (kind, phrase). Raises ValueError naming every problem with the reasons, or the first other
-    problem."""
+    listings that have not changed since the rerank; each move's reason and each finding citing only the values of
+    those listings and terms, the tags and column names the task may name; no exploration listing moved and none moved
+    onto an exploration listing's rank; each listing moved at most once and each to a rank of its own; and flags only
+    for stated, the stated preferences as (kind, phrase). Raises ValueError naming every rejected text, or the first
+    other problem."""
     if not isinstance(value, dict) or set(value) != set(REVIEW_FIELDS):
         raise ValueError(f'The review is a JSON object with exactly {", ".join(REVIEW_FIELDS)}.')
     if type(value['rerank']) is int and value['rerank'] < rerank_id:
@@ -180,28 +190,32 @@ def validated_review(value, rerank_id, snapshot, citable, stated):
     rank_of = {identifier: position for position, identifier in enumerate(order, 1)}
     top = set(order[:REVIEWED])
     exploration = set(snapshot['exploration'])
+    task_values = {*terms, *(cited for identifier in top for cited in citable.get(identifier, ()))}
+    problems = []
 
     def require_top(identifier, name):
         if not isinstance(identifier, str) or identifier not in top:
             raise ValueError(f'{name}: {json.dumps(identifier, ensure_ascii=False)} is not one of the listings of the task.')
         return identifier
 
-    reasons, problems, seen = {}, [], set()
+    def checked(text, name, values, words, source, *, require_citation=True):
+        text = require_review_text(text, name)
+        try:
+            return checked_text(text, values, words, source=source, require_citation=require_citation)
+        except ValueError as error:
+            problems.append(f'{name} is rejected: {error}.')
+            return None
+
+    reasons, seen = {}, set()
     for entry in require_entries(value['reasons'], 'reasons', ('id', 'reason')):
         identifier = require_top(entry['id'], 'reasons')
         if identifier in seen:
             raise ValueError(f'reasons: {identifier} has two reasons.')
         seen.add(identifier)
-        text = require_review_text(entry['reason'], f'The reason of {identifier}')
         if identifier not in citable:
             problems.append(f'{identifier} changed since the rerank, so leave its reason out.')
             continue
-        try:
-            reasons[identifier] = checked_reason(text, citable[identifier])
-        except ValueError as error:
-            problems.append(f'The reason of {identifier} is rejected: {error}.')
-    if problems:
-        raise ValueError(' '.join(problems) + ' Correct these reasons or leave them out.')
+        reasons[identifier] = checked(entry['reason'], f'The reason of {identifier}', citable[identifier], CONNECTING_WORDS, 'the record')
     moves, targets = {}, set()
     for entry in require_entries(value['moves'], 'moves', ('id', 'to_rank', 'reason', 'confidence')):
         identifier = require_top(entry['id'], 'moves')
@@ -222,20 +236,28 @@ def validated_review(value, rerank_id, snapshot, citable, stated):
         if type(confidence) not in (int, float) or not 0 <= confidence <= 1:
             raise ValueError(f'moves: the confidence of {identifier} must be a number from 0 to 1.')
         targets.add(target)
-        moves[identifier] = {'to': target, 'reason': require_review_text(entry['reason'], f'The reason for moving {identifier}'),
+        moves[identifier] = {'to': target, 'reason': checked(entry['reason'], f'The reason for moving {identifier}', task_values, REVIEW_WORDS, 'the task'),
                              'confidence': float(confidence)}
     flags = []
-    for entry in require_entries(value['flags'], 'flags', ('id', 'kind', 'preference', 'note')):
+    for entry in require_entries(value['flags'], 'flags', ('id', 'kind', 'preference')):
         identifier = require_top(entry['id'], 'flags')
         if not isinstance(entry['kind'], str) or not isinstance(entry['preference'], str) or (entry['kind'], entry['preference']) not in stated:
             raise ValueError(f'flags: {json.dumps(entry["preference"], ensure_ascii=False)} is not a stated {entry["kind"]}. '
                              'Use a kind and phrase from the task\'s preferences.')
-        flags.append({'id': identifier, 'kind': entry['kind'], 'preference': entry['preference'],
-                      'note': require_review_text(entry['note'], f'The note of the flag on {identifier}')})
+        flags.append({'id': identifier, 'kind': entry['kind'], 'preference': entry['preference']})
     if not isinstance(value['findings'], list) or len(value['findings']) > FINDINGS_LIMIT:
         raise ValueError(f'findings must be an array of at most {FINDINGS_LIMIT} texts.')
-    findings = [require_review_text(finding, 'Each finding') for finding in value['findings']]
+    findings = [checked(finding, f'Finding {number}', task_values, REVIEW_WORDS, 'the task', require_citation=False)
+                for number, finding in enumerate(value['findings'], 1)]
+    if problems:
+        raise ValueError(' '.join(problems) + ' Correct these texts or leave them out.')
     return {'reasons': reasons, 'moves': moves, 'flags': flags, 'findings': findings}
+
+
+def review_terms(tags, weights):
+    """What a move's reason or a finding may cite besides the values of the task's listings: every tag of the tag list
+    and the column name of every feature the task weighs."""
+    return {*tags, *(name for name in weights if name not in HIDDEN_FEATURES)}
 
 
 def reviewed_order(snapshot, moves):

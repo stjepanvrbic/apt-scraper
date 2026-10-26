@@ -12,7 +12,7 @@ from test_rerank import StoreTestCase, fill, least_cpu_seconds
 from rerank import pairwise_questions, rerank
 from schema import MIGRATIONS
 from implicit_signals import weak_labels
-from scoring import fit_model
+from scoring import fit_model, leave_one_out
 
 
 def event(store, kind='open', **values):
@@ -209,12 +209,12 @@ class SignalRerankTests(StoreTestCase):
         full = fit_model(inputs, (1, 0.05), weak_labels=weak_labels(inputs))
         self.assertNotEqual(full.fit.weights, fit_model(inputs, (1, 0.05)).fit.weights)
         reused = fit_model(inputs, (1, 0.05), weak_labels=weak_labels(inputs), warm_start=fit_model(inputs, (1, 0.05)))
-        self.assertEqual(full.held_out, reused.held_out)
+        self.assertEqual(leave_one_out(full).ranks, leave_one_out(reused).ranks)
         for cold, warm in zip(full.fit.weights, reused.fit.weights):
             self.assertAlmostEqual(cold, warm, places=5)
         without_favorite_signals = {**inputs, 'implicit_visits': [visit for visit in inputs['implicit_visits'] if visit['listing_id'] != identifiers[0]]}
         other = fit_model(without_favorite_signals, (1, 0.05), weak_labels=weak_labels(without_favorite_signals))
-        self.assertEqual(full.held_out, other.held_out)
+        self.assertEqual(leave_one_out(full).ranks, leave_one_out(other).ranks)
 
     def test_empty_signals_and_no_favorites_have_explicit_reports(self):
         fill(self.store, 4, 0)

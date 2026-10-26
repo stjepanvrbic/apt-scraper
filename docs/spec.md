@@ -69,7 +69,7 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 - Location counts through the areas of the criteria, nearness to the favorites' locations, distance to the nearest rapid-transit station and distance to each place, each weighted by the location priorities.
 - A listing's reason names the features that moved its score most and the favorite it most resembles, citing only its feature record. Its details show the full explanation: each feature's contribution to its score, computed from the scoring model, and that favorite.
 - Each rerank runs the leave-one-out check.
-- When more than 20 listings are ranked, two of the top 20 are exploration listings, marked as shown to learn the user's taste. An exploration listing has no label from the user.
+- When more than 20 listings are ranked, up to two of the top 20 are exploration listings, marked as shown to learn the user's taste. They are drawn from the listings outside the top 18 that have no label from the user, and are fewer when fewer such listings exist. The rerank reports how many it placed, and the agent tells the user that number.
 - Pairwise questions pair real listings whose order the scoring model is least sure of. After the interview, once the first listings have feature records, the agent asks the user to answer 5 to 8 of them.
 - After each rerank, the review pass reads the top 50 and the state of the whole ranking. It rewrites their reasons from their feature records, flags ranks that conflict with a stated preference, may move listings, giving a reason for each move, and reports anything in the ranking state that looks wrong. The leave-one-out check runs before and after the review. When the review's moves make the favorites rank worse, all of them are reverted.
 - Implicit signals are recorded in the listing store. The scoring model does not use them, and each rerank reports whether they would raise the favorites' held-out ranks.
@@ -111,7 +111,7 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 - Rerank: with 300 listings and 50 favorites, pressing Score and rerank shows the new order and the leave-one-out check within 2 seconds, and Hermes's session usage shows no model call before the review pass.
 - Overruled preference: with the stated dislike "Carpet" and five carpeted favorites, carpet does not count against an unseen carpeted listing in its explanation.
 - Location: of two test listings alike except for the distance to a place, the closer one ranks higher.
-- Exploration: with more than 20 ranked listings, exactly two of the top 20 are marked as exploration listings, and neither has a label from the user.
+- Exploration: with more than 20 ranked listings and at least two listings without a label from the user outside the top 18, exactly two of the top 20 are marked as exploration listings, and neither has a label from the user. With 21 listings alike and notes on the three ranked last, none is marked and the rerank reports none.
 - Pairwise questions: on a fresh profile, the agent asks for 5 to 8 pairwise answers once the first feature records exist, and a single answer ranks the chosen listing above the other at the next rerank.
 - Review pass: a review whose moves make the favorites' held-out ranks worse is reverted, and the gallery shows the reverted moves.
 - Gallery: Rankings shows a photo grid, each listing field above is shown, and each source link opens the original listing.
@@ -131,5 +131,5 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 - Listing sites' terms of use don't limit the search. Avoiding blocks does, because a blocked search finds nothing.
 - Ranks change only when the user asks for a rerank, so the order holds still while the user browses, and fitting the scoring model in code costs no model call ([preference learning research](research/preference_learning_for_listing_ranking.md)).
 - The review pass may move listings, but its moves stand only when the leave-one-out check after the review is no worse than before it, because language-model rankers show position and popularity bias.
-- Two of the top 20 are exploration listings, because a model that sees labels only on the listings it already ranks high cannot learn where it is wrong.
+- Up to two of the top 20 are exploration listings, drawn only from outside the top 18, because a model that sees labels only on the listings it already ranks high cannot learn where it is wrong.
 - Pairwise questions have their own tab, because a choice between two real listings is a label the scoring model uses at once, also before the user has any favorites.

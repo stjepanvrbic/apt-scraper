@@ -134,7 +134,7 @@ print(json.dumps(store.listing(identifier)))
   const result = stored(gallery.database, `
 identifier = ${JSON.stringify(chosen.id)}
 value = next(part['value'] for part in store.listing(identifier)['explanation']['contributions'] if part['feature'] == 'place:Work')
-result = save_review(store, {'rerank': store.last_rerank()['id'], 'moves': [{'id': identifier, 'to_rank': 30, 'reason': 'Has what the user dislikes.', 'confidence': 0.8}], 'reasons': [{'id': identifier, 'reason': f'Strong on [{value}].'}], 'flags': [{'id': identifier, 'kind': 'dislike', 'preference': 'Carpet', 'note': 'Check the flooring before deciding.'}], 'findings': ['Two traits may describe the same feature.']})
+result = save_review(store, {'rerank': store.last_rerank()['id'], 'moves': [{'id': identifier, 'to_rank': 30, 'reason': f'The model weighs [{value}] too much.', 'confidence': 0.8}], 'reasons': [{'id': identifier, 'reason': f'Strong on [{value}].'}], 'flags': [{'id': identifier, 'kind': 'dislike', 'preference': 'Carpet'}], 'findings': ['[vaulted ceiling] and [sloped ceiling] mean the same thing.']})
 print(json.dumps({'review': result, 'listing': store.listing(identifier), 'order': [item['title'] for item in store.browse('Rankings')['items']]}))
 `);
   expect(result.review.outcome).toBe('kept');
@@ -148,8 +148,9 @@ print(json.dumps({'review': result, 'listing': store.listing(identifier), 'order
   expect(await page.getByRole('article').getByRole('heading').allTextContents()).toEqual(result.order);
   await page.getByRole('button', { name: 'Review complete', exact: true }).click();
   await expect(page.getByText('Review moves kept', { exact: true })).toBeVisible();
-  await expect(page.getByText('Check the flooring before deciding.', { exact: true })).toBeVisible();
-  await expect(page.getByText('Two traits may describe the same feature.', { exact: true })).toBeVisible();
+  await expect(page.getByText(result.review.moves[0].reason, { exact: true })).toBeVisible();
+  await expect(page.getByText('Ranks against what you dislike: Carpet', { exact: true })).toBeVisible();
+  await expect(page.getByText('vaulted ceiling and sloped ceiling mean the same thing.', { exact: true })).toBeVisible();
   await page.route('**/api/rerank', route => route.abort());
   await page.getByRole('button', { name: 'Refresh listings', exact: true }).click();
   await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
@@ -222,7 +223,7 @@ ranked = store.ranked_listings()
 favorite = min([f'zillow:{n:04}' for n in range(5)], key=lambda identifier: ranked[identifier]['rank'])
 first = min(ranked, key=lambda identifier: ranked[identifier]['rank'])
 value = next(part['value'] for part in ranked[first]['explanation']['contributions'] if part['feature'] == 'place:Work')
-result = save_review(store, {'rerank': summary['id'], 'moves': [{'id': favorite, 'to_rank': 30, 'reason': 'Weaker than it looks.', 'confidence': 0.7}], 'reasons': [{'id': first, 'reason': f'Strong on [{value}].'}], 'flags': [], 'findings': ['Check whether similar traits overlap.']})
+result = save_review(store, {'rerank': summary['id'], 'moves': [{'id': favorite, 'to_rank': 30, 'reason': 'The model weighs [price] too little.', 'confidence': 0.7}], 'reasons': [{'id': first, 'reason': f'Strong on [{value}].'}], 'flags': [], 'findings': ['Favorites rank poorly when held out.']})
 print(json.dumps({'review': result, 'listing': store.listing(first)}))
 `);
     expect(saved.review.outcome).toBe('reverted');
@@ -245,7 +246,7 @@ print(json.dumps({'review': result, 'listing': store.listing(first)}))
     await page.getByRole('button', { name: 'Favorite check', exact: false }).click();
     await page.getByRole('button', { name: 'Review complete', exact: true }).click();
     await expect(page.getByText('Review moves reverted', { exact: true })).toBeVisible();
-    await expect(page.getByText('Weaker than it looks.', { exact: true })).toBeVisible();
+    await expect(page.getByText('The model weighs price too little.', { exact: true })).toBeVisible();
     for (const metric of ['mean', 'median'] as const) {
       const row = page.getByRole('row').filter({ has: page.getByRole('rowheader', { name: metric === 'mean' ? 'Mean' : 'Median', exact: true }) });
       await expect(row.getByRole('cell')).toHaveText([saved.review.check.before[metric], saved.review.check.after[metric]].map(value => new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value)));
