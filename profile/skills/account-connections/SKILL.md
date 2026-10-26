@@ -145,11 +145,13 @@ Your questions reach the user here while the gallery is closed, and their replie
    open "http://127.0.0.1:<port>/channels?profile=apt-scraper"               # macOS
    ```
 
-   If it lists no dashboard, start one in a window of its own, then read the status again:
+   If it lists no dashboard, start it without a window, the way it starts at login, and read the status again after a few seconds. If the command fails, ask the user to run the apt-scraper installer again:
 
    ```bash
-   cmd /c start "Hermes dashboard" hermes -p apt-scraper dashboard --no-open                               # Windows
-   osascript -e 'tell application "Terminal" to do script "hermes -p apt-scraper dashboard --no-open"'   # macOS
+   cscript //nologo "$LOCALAPPDATA/hermes/profiles/apt-scraper/dashboard.vbs"   # Windows
+   # macOS
+   launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/io.github.stjepanvrbic.apt-scraper.dashboard.plist 2>/dev/null ||
+       launchctl kickstart "gui/$(id -u)/io.github.stjepanvrbic.apt-scraper.dashboard"
    ```
 
    On the Telegram card press **Manual setup**. Never press **Create with QR**: it creates the bot through a Nous-hosted service. The form shows the ID from step 6 under **Allowed Telegram user IDs**. Ask the user to click the **Telegram bot token** field and paste the token from step 3. The field shows dots, and you never type into it. Leave **Webhook secret** empty and press **Save & enable**. The running gateway connects the bot within seconds, without a restart, and the Telegram card shows its state.

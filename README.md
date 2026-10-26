@@ -29,19 +29,14 @@ The installer:
 5. prepares the computer-use driver, and on macOS asks for Accessibility and Screen Recording access,
 6. installs the Hermes gateway as a service that starts when you log in. It runs the search and your conversations with the agent. Windows may ask for administrator approval,
 7. sends one test message through your subscription,
-8. starts the Hermes web dashboard and opens its chat in your browser. The first start builds the dashboard and takes a few minutes.
+8. makes the Hermes web dashboard start when you log in, and adds an apt-scraper shortcut: in the Start menu on Windows, in Applications on macOS,
+9. starts the dashboard and opens its chat in your browser. The first start builds the dashboard and takes a few minutes.
 
 Run it again after pulling changes. Your settings, memories, sessions and credentials stay in place.
 
 ## Run
 
-You talk to the agent in the chat of the Hermes web dashboard, which the installer opens in your browser. Say hello to start. The dashboard keeps running in the background until you restart your computer. To open it again, run this in a terminal:
-
-```bash
-hermes -p apt-scraper dashboard
-```
-
-While the dashboard runs, the command opens it in your browser and returns. After a restart it starts the dashboard and keeps running, so leave that terminal open while you use the dashboard.
+You talk to the agent in the chat of the Hermes web dashboard, which the installer opens in your browser. Say hello to start. The dashboard runs in the background, without a window, and starts again when you log in. To open its chat again, choose apt-scraper in the Start menu on Windows, or open apt-scraper in Applications on macOS. If the dashboard is not running, the shortcut starts it first.
 
 Ask the agent to open the apartment gallery. It opens a local browser app with listings, favorites and notes. Until search results exist, it opens a separate sample gallery. See [the gallery guide](docs/gallery.md) for direct launch commands, development and the shared listing store.
 
