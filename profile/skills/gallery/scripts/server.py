@@ -2,8 +2,10 @@ import json
 import mimetypes
 import os
 import secrets
+import socket
 import threading
 import sqlite3
+import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -13,6 +15,9 @@ from rerank import pairwise_questions, rerank
 
 
 STATIC = Path(__file__).resolve().parents[1] / 'web'
+BODY_LIMIT = 100000
+DISCARD_LIMIT = 1000000
+CLOSE_SECONDS = 5
 
 
 def comparison(store):
@@ -104,16 +109,38 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                 content_type = {'.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html'}.get(target.suffix)
                 self.send_bytes(200, target.read_bytes(), content_type or mimetypes.guess_type(target)[0] or 'application/octet-stream')
 
-        def do_POST(self):
-            if not self.allowed():
-                return
+        def read_body(self):
+            if 'Transfer-Encoding' in self.headers:
+                return None
             try:
+                length = int(self.headers.get('Content-Length', '0'))
+            except ValueError:
+                return None
+            return self.rfile.read(length) if 0 <= length <= DISCARD_LIMIT else None
+
+        def close_unread(self):
+            deadline = time.monotonic() + CLOSE_SECONDS
+            try:
+                self.connection.shutdown(socket.SHUT_WR)
+                while (remaining := deadline - time.monotonic()) > 0:
+                    self.connection.settimeout(remaining)
+                    if not self.connection.recv(65536):
+                        return
+            except OSError:
+                pass
+
+        def do_POST(self):
+            # Closing a socket with unread data resets the connection and the client loses the reply, so the
+            # body is read before any check, and a body of unknown or excessive length is drained after the reply.
+            content = self.read_body()
+            try:
+                if not self.allowed():
+                    return
                 if self.headers.get_content_type() != 'application/json':
                     raise ValueError('Request must use application/json.')
-                length = int(self.headers.get('Content-Length', '0'))
-                if not 0 < length <= 100000:
-                    raise ValueError('Request must contain at most 100000 bytes.')
-                body = json.loads(self.rfile.read(length))
+                if content is None or not 0 < len(content) <= BODY_LIMIT:
+                    raise ValueError(f'Request must declare a Content-Length from 1 to {BODY_LIMIT} bytes.')
+                body = json.loads(content)
                 if not isinstance(body, dict):
                     raise ValueError('Request must be an object.')
                 parts = unquote(urlsplit(self.path).path).strip('/').split('/')
@@ -183,6 +210,9 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
             except sqlite3.Error:
                 self.reply(500, {'error': 'Could not save changes. Try again. Check the gallery log if this continues.'})
                 raise
+            finally:
+                if content is None:
+                    self.close_unread()
 
         @staticmethod
         def require_fields(body, fields):

@@ -1,9 +1,9 @@
 ---
 title: A rejected gallery request can reset the connection instead of answering
 type: Bug
-state: Todo
+state: In Progress
 priority: 3
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []
@@ -16,8 +16,8 @@ The gallery server answers every `POST` it rejects with the rejection's status a
 
 ## Acceptance
 
-- [ ] A test opens a raw socket, sends a `POST` the server rejects, sends its whole body, then reads. It gets the full status line and error, without a connection reset, 200 times for each of: missing token (401), foreign origin (403) and wrong content type (400), each with a 99,000-byte body; and a body of 200,000 bytes, declared and sent in full (400).
-- [ ] `test_rerank_requires_authentication_same_origin_and_an_empty_json_object` in `tests/test_rerank_server.py` uses that method, and the pull request shows it failing on the unfixed server and passing on the fixed one.
+- [x] A test opens a raw socket, sends a `POST` the server rejects, sends its whole body, then reads. It gets the full status line and error, without a connection reset, 200 times for each of: missing token (401), foreign origin (403) and wrong content type (400), each with a 99,000-byte body; and a body of 200,000 bytes, declared and sent in full (400).
+- [x] `test_rerank_requires_authentication_same_origin_and_an_empty_json_object` in `tests/test_rerank_server.py` uses that method, and the pull request shows it failing on the unfixed server and passing on the fixed one.
 - [ ] Merged to `main` through a reviewed pull request.
 
 ## Spec
@@ -34,7 +34,19 @@ Read and discard the declared body before replying to a rejected request, includ
 
 ## Deviations
 
+The body is read before every check rather than only on the rejection paths, so one reply path serves every rejection and the original order (origin, token, content type, length) holds for every body. A `Transfer-Encoding` body is treated like a non-numeric `Content-Length`. The length error now reads "Request must declare a Content-Length from 1 to 100000 bytes."
+
 ## Result
+
+`do_POST` in `profile/skills/gallery/scripts/server.py` reads the declared body with `read_body()` before `allowed()` and the content type and length checks. A body of unknown length, a negative or non-numeric `Content-Length`, or more than 1,000,000 bytes is left unread; whichever rejection is sent, a `finally` then calls `close_unread()`, which shuts down the sending side and discards input until the client closes or 5 seconds pass.
+
+`GalleryServerCase.raw_post` in `tests/test_gallery_server.py` sends a `POST` over a raw socket with its whole body and reads the full reply. `test_rerank_requires_authentication_same_origin_and_an_empty_json_object` runs each acceptance row 200 times (401, 403 and wrong-content-type 400 with 99,000 bytes, and 400 with 200,000 bytes), plus the empty, `{}` and `{"seed": 1}` rows, and a `GET` without a token. `test_a_body_of_unknown_or_oversized_length_gets_its_answer_before_the_close` covers 2 MB, `Content-Length: many` and chunked bodies, alone and with a 401, 403 or content-type rejection taking precedence.
+
+Verification: with the final tests on the unfixed `server.py` from `4d0a8cb`, the two tests had 8 errors (`ConnectionAbortedError: [WinError 10053]` on all four acceptance rows and four of the unread-body rows) and 2 failures. At `a816eb8` they passed in every run, and `python -m unittest discover -s tests` passed 509 tests with 0 skipped. `1e69ef6` only renames a test variable; `tests/test_gallery_server.py` and `ruff check profile tests` passed on it. The spec's Gallery section has no transport requirements and the repository has no separate ADR register. An independent review found the unread-body path answering 400 before the 401 and 403 checks; that is fixed, and its reassessment found nothing material.
+
+Not fixed and out of scope: the server has no request timeout, so a client that declares a length and sends less, like one sending partial headers, holds a handler thread until it closes. An unauthenticated client of that kind now gets its 401 only when it closes.
+
+Delivered as [PR #31](https://github.com/stjepanvrbic/apt-scraper/pull/31), branch `fix/rejected_post_reset`. Review by the owner and merge remain pending.
 
 ## Comments
 

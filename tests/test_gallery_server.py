@@ -1,4 +1,5 @@
 import json
+import socket
 import tempfile
 import threading
 import unittest
@@ -33,6 +34,19 @@ class GalleryServerCase(unittest.TestCase):
                           headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + self.server.access_token, **(headers or {})})
         with urlopen(request, timeout=3) as response:
             return json.load(response)
+
+    def raw_post(self, path, content, headers=None):
+        fields = {'Host': f'127.0.0.1:{self.server.server_port}', 'Content-Type': 'application/json',
+                  'Authorization': 'Bearer ' + self.server.access_token, 'Content-Length': str(len(content)),
+                  'Connection': 'close', **(headers or {})}
+        head = ''.join(f'{name}: {value}\r\n' for name, value in fields.items() if value is not None)
+        with socket.create_connection(('127.0.0.1', self.server.server_port), timeout=10) as connection:
+            connection.sendall(f'POST {path} HTTP/1.1\r\n{head}\r\n'.encode() + content)
+            response = b''
+            while chunk := connection.recv(65536):
+                response += chunk
+        status_line, _, rest = response.partition(b'\r\n')
+        return status_line.decode(), json.loads(rest.partition(b'\r\n\r\n')[2])
 
 
 class GalleryServerTests(GalleryServerCase):
@@ -89,3 +103,18 @@ class GalleryServerTests(GalleryServerCase):
         response = self.request('/api/chat')
         self.assertNotIn('session_id', response)
         self.assertNotIn('admission_id', response['messages'][-1])
+
+    def test_a_body_of_unknown_or_oversized_length_gets_its_answer_before_the_close(self):
+        oversized, padded = b'{}'.ljust(2000000), b'{}'.ljust(99000)
+        chunked = (b'10000\r\n' + b' ' * 65536 + b'\r\n') * 4 + b'0\r\n\r\n'
+        chunked_headers = {'Content-Length': None, 'Transfer-Encoding': 'chunked'}
+        length = ('400 Bad Request', 'Request must declare a Content-Length from 1 to 100000 bytes.')
+        for content, headers, (status, error) in [
+                (oversized, {}, length), (padded, {'Content-Length': 'many'}, length), (chunked, chunked_headers, length),
+                (oversized, {'Authorization': ''}, ('401 Unauthorized', 'Gallery access is missing or expired. Open the gallery again through Hermes.')),
+                (chunked, {**chunked_headers, 'Origin': 'https://evil.example'}, ('403 Forbidden', 'Only requests from this local gallery are accepted.')),
+                (padded, {'Content-Length': 'many', 'Content-Type': 'text/plain'}, ('400 Bad Request', 'Request must use application/json.'))]:
+            with self.subTest(length=len(content), headers=headers):
+                for _ in range(20):
+                    self.assertEqual(self.raw_post('/api/chat', content, headers), ('HTTP/1.0 ' + status, {'error': error}))
+        self.assertEqual(self.store.chat_state()['messages'], [])
