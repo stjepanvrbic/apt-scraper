@@ -1,12 +1,12 @@
 ---
 title: "Verify: ranking that learns the user's taste from listing features"
 type: Chore
-state: Todo
+state: In Progress
 priority: 2
-assignee:
+assignee: agent
 milestone:
 parent: 0015
-blocked_by: [0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026]
+blocked_by: []
 related: [0014]
 ---
 

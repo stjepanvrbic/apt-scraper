@@ -1,9 +1,9 @@
 ---
 title: The rerank timing test fails on a busy machine
 type: Bug
-state: In Progress
+state: Done
 priority: 3
-assignee: agent
+assignee:
 milestone:
 parent:
 blocked_by: []
@@ -18,7 +18,7 @@ The 2-second rerank check in the tests measures the rerank, not the machine's lo
 
 - [x] The test measures CPU time of the rerank, or runs it several times and takes the best, so that a loaded machine does not fail it while a real slowdown still does.
 - [x] Pushed `fix/held_out_check` and opened a pull request to `main`, without merging.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 

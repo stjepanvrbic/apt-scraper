@@ -1,9 +1,9 @@
 ---
 title: The leave-one-out check refits the held-out favorite as a weak negative
 type: Bug
-state: In Progress
+state: Done
 priority: 2
-assignee: agent
+assignee:
 milestone:
 parent: 0015
 blocked_by: []
@@ -20,7 +20,7 @@ The rerank's leave-one-out check treats the held-out favorite the way it treats 
 - [x] A test shows a model with a free parameter per listing cannot rank the held-out favorite first under the check.
 - [x] `docs/ranking.md` describes the check as it now works.
 - [x] Pushed `fix/held_out_check` and opened a pull request to `main`, without merging.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
