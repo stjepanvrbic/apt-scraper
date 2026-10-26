@@ -1,9 +1,9 @@
 ---
 title: Notes chat shares one Hermes session across gallery databases
 type: Bug
-state: Todo
+state: In Progress
 priority: 3
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []
