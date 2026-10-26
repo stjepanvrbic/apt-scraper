@@ -1,9 +1,9 @@
 ---
 title: The gallery launcher test writes into the real secrets directory
 type: Bug
-state: In Progress
+state: Done
 priority: 2
-assignee: agent
+assignee:
 milestone:
 parent:
 blocked_by: []
@@ -18,7 +18,7 @@ No test touches `~/.secrets/`. `tests/test_gallery_launcher.py` runs against a t
 
 - [x] `tests/test_gallery_launcher.py` creates nothing under the real `~/.secrets/apt-scraper/gallery/`, and two test runs at once do not collide.
 - [x] The launcher's secrets location is resolved in one function, used by the code and overridden by the tests.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
