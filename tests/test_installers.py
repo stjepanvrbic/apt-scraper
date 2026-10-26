@@ -358,7 +358,7 @@ class DashboardAtLoginTests(unittest.TestCase):
             (tools / name).chmod(0o755)
         script = self.folder / 'login.sh'
         script.write_text(f"set -euo pipefail\nPROFILE_NAME=apt-scraper\nprofile_home='{self.profile.as_posix()}'\n"
-                          'step() { :; }\n' + section('install.sh', LOGIN_STEP_SHELL, CLOSING_SHELL), newline='\n')
+                          f"dashboard_url='http://127.0.0.1:{self.port}'\nstep() {{ :; }}\n" + section('install.sh', LOGIN_STEP_SHELL, CLOSING_SHELL), newline='\n')
         self.environment = {**os.environ, 'HOME': self.folder.as_posix(),
                             'PATH': f'{tools}{os.pathsep}{os.environ["PATH"]}'}
         written = None
@@ -389,12 +389,9 @@ class DashboardAtLoginTests(unittest.TestCase):
         agent = plistlib.loads((self.folder / LAUNCH_AGENT).read_bytes())
         self.assertEqual(agent['Label'], LAUNCH_AGENT_LABEL)
         self.assertIs(agent['RunAtLoad'], True)
-        shell, option, command, hermes, address = agent['ProgramArguments']
-        self.assertEqual((shell, option, Path(hermes).name), ('/bin/sh', '-c', 'hermes'))
-        self.assertEqual(address, f'{self.profile.as_posix()}/dashboard-address')
-        started = subprocess.run([BASH, '-c', command, hermes, address], env=self.environment, capture_output=True,
-                                 text=True, timeout=60)
-        self.assertEqual((started.returncode, started.stdout, started.stderr), (0, f'{self.command}\n', ''))
+        # Hermes counts a launchd job as the dashboard's only when its arguments start with hermes.
+        self.assertEqual(Path(agent['ProgramArguments'][0]).name, 'hermes')
+        self.assertEqual(' '.join(agent['ProgramArguments'][1:]), self.command)
 
     def test_the_macos_app_starts_a_stopped_dashboard_through_its_launch_agent_and_opens_its_chat(self):
         domain, agent = self.install_macos_entries(bootstraps=True)

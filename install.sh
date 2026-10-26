@@ -162,9 +162,9 @@ if [ "$(uname -s)" = Darwin ]; then open "$chat_url"; else xdg-open "$chat_url";
 # The dashboard starts at login, and the apt-scraper app in Applications opens its chat, starting the
 # dashboard first when Hermes does not answer at the recorded address. Any listener answers HTTP, so
 # only Hermes's health reply, "ok" with its version, counts. Both start the dashboard through one
-# LaunchAgent, which reads the recorded port at each start and execs hermes, so launchd owns the
-# dashboard and `hermes update` restarts it. `hermes update` rebuilds the web UI, so these starts skip
-# the build.
+# LaunchAgent on the recorded port, so launchd owns it and `hermes update` restarts it. Hermes finds
+# that job only when its arguments start with hermes, so the port is written into them rather than
+# read from the file. `hermes update` rebuilds the web UI, so these starts skip the build.
 if [ "$(uname -s)" = Darwin ]; then
     step 'Dashboard at login and the apt-scraper shortcut'
     dashboard_label=io.github.stjepanvrbic.apt-scraper.dashboard
@@ -180,11 +180,14 @@ if [ "$(uname -s)" = Darwin ]; then
     <string>$dashboard_label</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/sh</string>
-        <string>-c</string>
-        <string>address=\$(cat "\$1") &amp;&amp; exec "\$0" -p $PROFILE_NAME dashboard --no-open --skip-build --port "\${address##*:}"</string>
         <string>$(command -v hermes)</string>
-        <string>$dashboard_address</string>
+        <string>-p</string>
+        <string>$PROFILE_NAME</string>
+        <string>dashboard</string>
+        <string>--no-open</string>
+        <string>--skip-build</string>
+        <string>--port</string>
+        <string>${dashboard_url##*:}</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -219,7 +222,7 @@ address=\$(cat '$dashboard_address')
 hermes_answers() {
     local health
     health=\$(curl -s --max-time 1 -w '\n%{http_code}' "\$address/api/health") || return 1
-    [ "\${health##*\$'\n'}" = 200 ] && grep -Eq '^\{.*"ok": *true[,}]' <<<"\$health" && grep -Eq '"version": *"' <<<"\$health"
+    [ "\$(printf '%s\n' "\$health" | tail -n 1)" = 200 ] && grep -Eq '^\{.*"ok": *true[,}]' <<<"\$health" && grep -Eq '"version": *"' <<<"\$health"
 }
 if ! hermes_answers; then
     launchctl bootstrap "gui/\$(id -u)" '$dashboard_agent' 2>/dev/null || launchctl kickstart "gui/\$(id -u)/$dashboard_label"
