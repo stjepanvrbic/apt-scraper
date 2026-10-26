@@ -34,7 +34,7 @@
         ) -join ';'
     }
 
-    if (Test-Path (Join-Path $Repository '.git')) {
+    if (Test-Path -LiteralPath (Join-Path $Repository '.git')) {
         Write-Step "Updating $Repository"
         Invoke-Native git @('-C', $Repository, 'pull', '--ff-only')
     } else {
@@ -42,6 +42,7 @@
         Invoke-Native git @('clone', $RepositoryUrl, $Repository)
     }
 
-    $powershell = (Get-Process -Id $PID).Path
+    # The installer is written for and tested with Windows PowerShell, whichever shell the line was pasted into.
+    $powershell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     Invoke-Native $powershell (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Repository 'install.ps1')) + $args)
 } @args

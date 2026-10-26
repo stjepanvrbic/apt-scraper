@@ -13,13 +13,13 @@ step() { printf '\033[36m==> %s\033[0m\n' "$1"; }
 # bash runs a piped script while it reads it, so everything happens in main, called on the last line:
 # a cut-off download runs nothing.
 main() {
-    if ! git --version >/dev/null 2>&1; then
-        if [ "$(uname -s)" != Darwin ]; then
-            echo 'Install Git and run this again.' >&2
-            exit 1
+    local git_error
+    if ! git_error=$(git --version 2>&1); then
+        if xcode-select --install; then
+            echo 'Git comes with the Xcode command line tools. Install them in the dialog that opened, then run this again.' >&2
+        else
+            printf 'Git does not run: %s\n' "$git_error" >&2
         fi
-        xcode-select --install || true
-        echo 'Git comes with the Xcode command line tools. Install them in the dialog that opened, then run this again.' >&2
         exit 1
     fi
 

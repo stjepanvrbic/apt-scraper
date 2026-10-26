@@ -59,7 +59,7 @@ FAKE_DASHBOARD = textwrap.dedent(f"""\
 
 
 REPOSITORY_URL = 'https://github.com/stjepanvrbic/apt-scraper.git'
-# Stands in for git: argv[1] logs each call but `--version`, and `clone` copies the directory in argv[2].
+# Stands in for git: it logs every call except `--version` to the file in argv[1], and `clone` copies the directory in argv[2].
 FAKE_GIT = textwrap.dedent("""\
     import json, shutil, sys
     log, template, *arguments = sys.argv[1:]
@@ -469,11 +469,13 @@ class BootstrapTests(unittest.TestCase):
 
     # macOS: bootstrap.sh piped into bash, with HOME in the temporary directory.
 
-    def shell_tools(self, git: bool = True, installer_exit: int = 0, system: str = 'Darwin'):
+    def shell_tools(self, git: bool = True, installer_exit: int = 0, command_line_tools: bool = False):
+        """`command_line_tools`: whether the Xcode command line tools are installed, so that their installer refuses to run."""
         fakes = {
-            'git': f'exec {self.git} "$@"\n' if git else 'exit 1\n',
-            'uname': f'echo {system}\n',
-            'xcode-select': f'printf "%s\\n" "xcode-select $*" >> "{self.other_calls.as_posix()}"\n',
+            'git': f'exec {self.git} "$@"\n' if git else 'echo "xcrun: error: invalid active developer path" >&2\nexit 1\n',
+            'xcode-select': f'printf "%s\\n" "xcode-select $*" >> "{self.other_calls.as_posix()}"\n'
+                            + ('echo "xcode-select: error: command line tools are already installed" >&2\nexit 1\n'
+                               if command_line_tools else ''),
         }
         for name, body in fakes.items():
             (self.tools / name).write_text(f'#!/bin/sh\n{body}', newline='\n')
@@ -509,7 +511,7 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(result.returncode, 3)
         self.assertEqual(len(self.installer_runs_made()), 1)
 
-    def test_the_shell_bootstrap_without_git_on_macos_opens_the_command_line_tools_installer_and_stops(self):
+    def test_the_shell_bootstrap_without_the_command_line_tools_opens_their_installer_and_stops(self):
         self.shell_tools(git=False)
         result = self.run_shell_bootstrap()
         self.assertEqual(result.returncode, 1)
@@ -517,12 +519,14 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(self.other_calls_made(), ['xcode-select --install'])
         self.assertEqual((self.git_calls_made(), self.installer_runs_made()), ([], []))
 
-    def test_the_shell_bootstrap_without_git_elsewhere_asks_for_git_and_stops(self):
-        self.shell_tools(git=False, system='Linux')
+    def test_the_shell_bootstrap_reports_why_git_does_not_run_when_the_command_line_tools_are_installed(self):
+        self.shell_tools(git=False, command_line_tools=True)
         result = self.run_shell_bootstrap()
         self.assertEqual(result.returncode, 1)
-        self.assertIn('Install Git and run this again.', result.stderr)
-        self.assertEqual((self.other_calls_made(), self.git_calls_made(), self.installer_runs_made()), ([], [], []))
+        self.assertIn('command line tools are already installed', result.stderr)
+        self.assertIn('Git does not run: xcrun: error: invalid active developer path', result.stderr)
+        self.assertNotIn('dialog', result.stderr)
+        self.assertEqual((self.git_calls_made(), self.installer_runs_made()), ([], []))
 
     # Windows: bootstrap.ps1 through Invoke-Expression, with its repository in the temporary directory and a PATH
     # without the machine's git.
@@ -537,7 +541,18 @@ class BootstrapTests(unittest.TestCase):
                                                    f'@copy /y "{self.folder / "git.cmd"}" "{self.tools}" >nul\r\n')
         (self.template / 'install.ps1').write_text(
             f"Add-Content -LiteralPath '{self.installer_runs}' -Value \"$PSScriptRoot|$($args -join ' ')\"\r\n"
+            f"Set-Content -LiteralPath '{self.installer_path}' -Value $env:Path\r\n"
             f'exit {installer_exit}\r\n')
+
+    @property
+    def installer_path(self) -> Path:
+        """The PATH the fake installer ran with."""
+        return self.folder / 'installer-path'
+
+    @property
+    def session_path(self) -> list[str]:
+        """The PATH of the session the bootstrap runs in: the fakes and System32, without the machine's git."""
+        return [str(self.tools), str(Path(os.environ['SystemRoot']) / 'System32')]
 
     def run_powershell_bootstrap(self, invocation: str) -> subprocess.CompletedProcess:
         """Runs the bootstrap through `invocation`, in which `$text` is the script's text."""
@@ -546,11 +561,9 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(text.count(location), 1)
         script = self.folder / 'bootstrap.ps1'
         script.write_text(text.replace(location, f"$Repository = '{self.windows_repository}'"), encoding='utf-8')
-        powershell = shutil.which('powershell')
-        path = os.pathsep.join([str(self.tools), str(Path(os.environ['SystemRoot']) / 'System32'),
-                                str(Path(powershell).parent)])
         command = f"$text = Get-Content -Raw -LiteralPath '{script}'; {invocation}"
-        return subprocess.run([powershell, '-NoProfile', '-Command', command], env={**os.environ, 'PATH': path},
+        return subprocess.run([shutil.which('powershell'), '-NoProfile', '-Command', command],
+                              env={**os.environ, 'PATH': os.pathsep.join(self.session_path)},
                               capture_output=True, text=True, timeout=60)
 
     @property
@@ -573,7 +586,7 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.installer_runs_made(), [f'{self.windows_repository}|-Example two words'])
 
-    def test_the_powershell_bootstrap_installs_git_with_winget_when_it_is_missing(self):
+    def test_the_powershell_bootstrap_installs_git_with_winget_when_it_is_missing_and_reads_the_new_path(self):
         self.powershell_tools(git=False)
         result = self.run_powershell_bootstrap('$text | Invoke-Expression')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -581,12 +594,24 @@ class BootstrapTests(unittest.TestCase):
                                                    '--accept-package-agreements --accept-source-agreements'])
         self.assertEqual(self.git_calls_made(), [['clone', REPOSITORY_URL, str(self.windows_repository)]])
         self.assertEqual(len(self.installer_runs_made()), 1)
+        # The Git installer adds Git to the PATH in the registry only. That PATH is read here, not changed.
+        registry = subprocess.run([shutil.which('powershell'), '-NoProfile', '-Command',
+                                   "[Environment]::GetEnvironmentVariable('Path', 'Machine');"
+                                   "[Environment]::GetEnvironmentVariable('Path', 'User')"],
+                                  capture_output=True, text=True, check=True).stdout
+        installer_path = self.installer_path.read_text().strip().split(';')
+        self.assertEqual(installer_path[:len(self.session_path)], self.session_path)
+        self.assertLessEqual({entry for entry in re.split(r'[;\n]', registry) if entry.strip()}, set(installer_path))
 
-    def test_the_powershell_bootstrap_stops_with_the_installer_failure(self):
+    def test_the_powershell_bootstrap_throws_the_installer_failure_and_leaves_the_session_as_it_was(self):
         self.powershell_tools(installer_exit=3)
-        result = self.run_powershell_bootstrap('$text | Invoke-Expression')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('failed with exit code 3', result.stdout + result.stderr)
+        result = self.run_powershell_bootstrap(
+            'try { $text | Invoke-Expression } catch { "caught: $_" }; "session: $ErrorActionPreference '
+            '$([bool](Get-Command Write-Step -ErrorAction SilentlyContinue)) '
+            '$([bool](Get-Variable Repository -ErrorAction SilentlyContinue))"')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r'caught: .*failed with exit code 3')
+        self.assertIn('session: Continue False False', result.stdout)
         self.assertEqual(len(self.installer_runs_made()), 1)
 
 
