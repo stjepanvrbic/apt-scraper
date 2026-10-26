@@ -30,11 +30,11 @@ class RerankServerTests(GalleryServerCase):
         self.assertAlmostEqual(sum(part['contribution'] for part in details['explanation']['contributions']), details['explanation']['score'])
         self.store.hand_review(summary['id'])
         self.assertEqual(self.request('/api/rerank')['last_rerank']['review']['state'], 'running')
-        result = save_review(self.store, {'rerank': summary['id'], 'reasons': [], 'moves': [], 'flags': [], 'findings': ['Check the feature coverage.']})
+        result = save_review(self.store, {'rerank': summary['id'], 'reasons': [], 'moves': [], 'flags': [], 'findings': ['[rating:natural_light] weighs too little.']})
         review = self.request('/api/rerank')['last_rerank']['review']
         self.assertEqual(review['state'], 'done')
         self.assertEqual(review['result'], result)
-        self.assertEqual(result['findings'], ['Check the feature coverage.'])
+        self.assertEqual(result['findings'], ['rating:natural_light weighs too little.'])
         self.assertIn('before', result['check'])
         self.assertIn('after', result['check'])
 
@@ -54,9 +54,9 @@ class RerankServerTests(GalleryServerCase):
         ranked = self.store.ranked_listings()
         favorite = min(identifiers[:5], key=lambda identifier: ranked[identifier]['rank'])
         result = save_review(self.store, {'rerank': summary['id'], 'reasons': [],
-            'moves': [{'id': favorite, 'to_rank': 30, 'reason': 'The record leaves light uncertain.', 'confidence': 0.7}],
-            'flags': [{'id': favorite, 'kind': 'like', 'preference': 'Lots of daylight', 'note': 'Check the light.'}],
-            'findings': ['Some records leave the light unknown.']})
+            'moves': [{'id': favorite, 'to_rank': 30, 'reason': 'The model weighs [rating:natural_light] too much.', 'confidence': 0.7}],
+            'flags': [{'id': favorite, 'kind': 'like', 'preference': 'Lots of daylight'}],
+            'findings': ['[price] weighs too little.']})
         self.assertEqual(result['outcome'], 'reverted')
         self.assertGreater(result['check']['after']['mean'], result['check']['before']['mean'])
         revision = self.store.revision()

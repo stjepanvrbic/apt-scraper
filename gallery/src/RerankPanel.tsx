@@ -31,7 +31,7 @@ function ReviewDetails({ result, open }: { result: ReviewResult; open: (id: stri
     {!!result.flags.length && <Stack gap="sm"><Text size="sm" fw={600}>Preference conflicts</Text>
       {result.flags.map((flag, index) => <Paper key={`${flag.id}-${index}`} p="sm" withBorder>
         <Button variant="subtle" size="compact-sm" className="listing-result-link" onClick={() => open(flag.id)}>{flag.title ?? flag.id}</Button>
-        <Text size="xs" fw={600} my={4}>{flag.kind === 'like' ? 'You like' : 'You dislike'}: {flag.preference}</Text><ReviewText text={flag.note} />
+        <Text size="sm" mt={4}>Ranks against what you {flag.kind === 'like' ? 'like' : 'dislike'}: {flag.preference}</Text>
       </Paper>)}</Stack>}
     {!!result.findings.length && <div><Text size="sm" fw={600} mb="xs">Review findings</Text><Stack gap="xs">{result.findings.map((finding, index) => <ReviewText key={index} text={finding} />)}</Stack></div>}
   </Stack>;

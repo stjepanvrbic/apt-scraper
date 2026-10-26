@@ -30,7 +30,7 @@ from string import Template
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'gallery' / 'scripts'))
 
 from rerank import pairwise_questions, pending_review, rerank, save_review  # noqa: E402
-from review import CONNECTING_WORDS  # noqa: E402
+from review import CONNECTING_WORDS, MODEL_WORDS  # noqa: E402
 from scratch import read_scratch_object, scratch_directory  # noqa: E402
 from store import ListingStore, store_path  # noqa: E402
 
@@ -68,7 +68,7 @@ def task_text(task):
     review_file = scratch_directory() / f'review-{task["rerank"]}.json'
     return Template(TEMPLATE.read_text(encoding='utf-8')).substitute(
         rerank_id=task['rerank'], task_json=compact_json(task), review_file=review_file.as_posix(),
-        connecting_words=', '.join(sorted(CONNECTING_WORDS)),
+        connecting_words=', '.join(sorted(CONNECTING_WORDS)), model_words=', '.join(sorted(MODEL_WORDS)),
         save_command=f'python "{script}" review-save "{review_file.as_posix()}"')
 
 
