@@ -77,7 +77,8 @@ async def run_turn(store, message_id, text, controls):
         from hermes_constants import get_hermes_home
     except ImportError as error:
         raise RuntimeError('Notes needs the Hermes Python environment. Open this gallery through hermes -p apt-scraper.') from error
-    if Path(get_hermes_home()).name != 'apt-scraper':
+    profile_home = Path(get_hermes_home())
+    if profile_home.name != 'apt-scraper':
         raise RuntimeError('Notes must use the apt-scraper Hermes profile.')
 
     class Events:
@@ -125,8 +126,9 @@ async def run_turn(store, message_id, text, controls):
         if session_id:
             snapshot = await client.rpc('session.resume', session_id=session_id)
         else:
-            snapshot = await client.rpc('session.create', request_id=uuid4().hex, source='cli',
-                                        title='Apartment preferences', cwd=str(store.path.parent))
+            # Untitled: a titled create resumes whichever session already holds the title. The profile home
+            # outlives every gallery database's folder, and a session runs turns only in the folder it was created with.
+            snapshot = await client.rpc('session.create', request_id=uuid4().hex, source='cli', cwd=str(profile_home))
         store.update_chat(message_id, session_id=snapshot['stored_session_id'])
         if text is not None and snapshot.get('pending'):
             raise RuntimeError('This Hermes session still has unfinished work. Wait for it to finish before sending another message.')

@@ -13,7 +13,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from code_features import FEATURES, configured_transit_feed, store_all_code_features, store_code_features
-from schema import content_fingerprint, migrate
+from schema import MIGRATIONS, content_fingerprint, migrate
 from queries import RANKABLE, RANKING_EXCLUSION, answered_pairs, browse, paired, snapshot, user_noted, validate_page
 from record import SEED_TAGS, known_spelling, validate_extraction, validate_judgments
 from scoring import reading_vocabulary, stated_phrases, validate_note_reading, validate_preference_reading
@@ -325,29 +325,37 @@ class ListingStore:
     def __init__(self, path):
         self.path = Path(path).resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as connection:
+        with self._open() as connection:
             migrate(connection)
 
     @property
     def schema_version(self):
-        with self.connect() as connection:
+        with self._open() as connection:
             return connection.execute('PRAGMA user_version').fetchone()[0]
 
     @contextmanager
-    def connect(self, write=False):
+    def _open(self):
         connection = sqlite3.connect(self.path, timeout=10)
         connection.row_factory = sqlite3.Row
         connection.execute('PRAGMA foreign_keys = ON')
         try:
             with connection:
-                if write:
-                    connection.execute('BEGIN IMMEDIATE')
-                before = connection.total_changes
                 yield connection
-                if write and connection.total_changes != before:
-                    connection.execute('UPDATE changes SET revision = revision + 1 WHERE id = 1')
         finally:
             connection.close()
+
+    @contextmanager
+    def connect(self, write=False):
+        with self._open() as connection:
+            if write:
+                connection.execute('BEGIN IMMEDIATE')
+            # A process that opened the store before another process migrated it would write in a schema it does not know.
+            if connection.execute('PRAGMA user_version').fetchone()[0] != len(MIGRATIONS):
+                raise ValueError('This database was migrated to another schema after the gallery opened it. Open the gallery again.')
+            before = connection.total_changes
+            yield connection
+            if write and connection.total_changes != before:
+                connection.execute('UPDATE changes SET revision = revision + 1 WHERE id = 1')
 
     def upsert_listing(self, listing, *, matches_criteria=None):
         listing = validate_listing(listing)
@@ -999,7 +1007,7 @@ class ListingStore:
                  prompt is not UNCHANGED, json.dumps(prompt) if prompt is not UNCHANGED and prompt is not None else None,
                  error is not UNCHANGED, error if error is not UNCHANGED else None, admission_id, message_id))
             if session_id:
-                connection.execute('UPDATE chat_session SET session_id = ? WHERE id = 1', (session_id,))
+                connection.execute('UPDATE notes_session SET session_id = ? WHERE id = 1', (session_id,))
 
     def chat_state(self, page=1):
         validate_page(page, 20)
@@ -1008,7 +1016,7 @@ class ListingStore:
             messages = [{**dict(row), 'events': json.loads(row['events']), 'prompt': json.loads(row['prompt']) if row['prompt'] else None} for row in rows]
             return {'messages': list(reversed(messages)), 'total': connection.execute('SELECT COUNT(*) FROM chat_messages').fetchone()[0],
                     'active': bool(connection.execute("SELECT 1 FROM chat_messages WHERE status = 'running'").fetchone()),
-                    'session_id': connection.execute('SELECT session_id FROM chat_session WHERE id = 1').fetchone()[0]}
+                    'session_id': connection.execute('SELECT session_id FROM notes_session WHERE id = 1').fetchone()[0]}
 
     def browse(self, view='Rankings', *, page=1, page_size=24):
         with self.connect() as connection:
