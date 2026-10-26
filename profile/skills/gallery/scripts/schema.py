@@ -118,7 +118,14 @@ def implicit_signals(connection):
     connection.execute('CREATE INDEX implicit_signals_listing_visit ON implicit_signals(listing_id, fingerprint, visit_id)')
 
 
-MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals)
+def notes_session_per_database(connection):
+    """A stored Notes session may be one that other databases share, bound to a working folder that no longer exists.
+    Each database starts a Hermes session of its own and keeps its messages."""
+    connection.execute('UPDATE chat_session SET session_id = NULL')
+
+
+MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals,
+              notes_session_per_database)
 
 
 def migrate(connection):

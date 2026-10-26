@@ -100,7 +100,7 @@ class SignalStoreTests(unittest.TestCase):
                 place_distances_km = '{"Work": 1.5}' WHERE listing_id = 'example:100' ''')
         before = old.code_features()
         migrated = ListingStore(path)
-        self.assertEqual(migrated.schema_version, 9)
+        self.assertEqual(migrated.schema_version, len(MIGRATIONS))
         with migrated.connect() as connection:
             self.assertEqual(connection.execute('SELECT count(*) FROM reviews').fetchone()[0], 0)
         self.assertEqual(migrated.code_features(), before)
@@ -119,7 +119,7 @@ class SignalStoreTests(unittest.TestCase):
                                (json.dumps(snapshot),))
         connection.close()
         migrated = ListingStore(path)
-        self.assertEqual(migrated.schema_version, 9)
+        self.assertEqual(migrated.schema_version, len(MIGRATIONS))
         self.assertEqual(migrated.last_rerank()['review']['state'], 'waiting')
         self.assertEqual(migrated.review_snapshot(1), snapshot)
         migrated.upsert_listing(listing())

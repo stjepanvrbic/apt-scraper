@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 import tempfile
 import types
 import unittest
@@ -72,3 +73,74 @@ class HermesAdapterTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(commands, ['/approve approval deny'])
             self.assertIn('interview skill', submitted[0])
             self.assertNotIn('update_settings', submitted[0])
+
+    async def test_each_database_has_its_own_session_that_outlives_its_folder(self):
+        sessions = {}
+
+        class Client:
+            async def rpc(self, method, **arguments):
+                if method == 'session.create':
+                    # Hermes 0.22.5 resumes the session that holds a requested title instead of creating one.
+                    titled = next((identity for identity, session in sessions.items()
+                                   if arguments.get('title') and session['title'] == arguments['title']), None)
+                    identity = titled or f'session-{len(sessions)}'
+                    sessions.setdefault(identity, {'title': arguments.get('title'), 'cwd': arguments['cwd']})
+                    return {'stored_session_id': identity, 'pending': []}
+                if method == 'session.resume':
+                    return {'stored_session_id': arguments['session_id'], 'pending': []}
+                return {'result': {'error': sessions[arguments['session_id']].get('error')}}
+
+        @asynccontextmanager
+        async def connect():
+            yield Client()
+
+        class View:
+            def __init__(self, client, snapshot, quiet, emitter):
+                self.session_id = snapshot['stored_session_id']
+                self.changed = asyncio.Event()
+                self.completions = {}
+                self.prompts = {}
+                self.failure = None
+
+            async def submit(self, text):
+                session = sessions[self.session_id]
+                # A session runs turns only in the working folder it was created with.
+                session['error'] = None if Path(session['cwd']).is_dir() else 'gateway.errors.workspace_unavailable'
+                self.completions['admission'] = {'outcome': 'failed' if session['error'] else 'completed', 'text': 'OK'}
+                return {'admission_id': 'admission'}
+
+            async def render(self):
+                await asyncio.Event().wait()
+
+        async def turn(store):
+            identity = store.start_chat('Hello', f'request-{store.chat_state()["total"]}')
+            await run_turn(store, identity, 'Hello', Controls())
+            return store.chat_state()['messages'][-1]
+
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / 'profiles' / 'apt-scraper'
+            profile.mkdir(parents=True)
+            modules = {
+                'hermes_cli.gateway_client': types.SimpleNamespace(connect_gateway=connect),
+                'hermes_cli.gateway_chat_view': types.SimpleNamespace(GatewayChatView=View),
+                'hermes_constants': types.SimpleNamespace(get_hermes_home=lambda: profile),
+            }
+            first_folder = Path(directory) / 'first'
+            other_folder = Path(directory) / 'other'
+            first_folder.mkdir()
+            other_folder.mkdir()
+            sample = ListingStore(first_folder / 'sample.sqlite3')
+            real = ListingStore(other_folder / 'listings.sqlite3')
+            with patch.dict('sys.modules', modules):
+                await turn(sample)
+                await turn(real)
+                self.assertNotEqual(sample.chat_state()['session_id'], real.chat_state()['session_id'])
+                moved_folder = Path(directory) / 'moved'
+                moved_folder.mkdir()
+                shutil.copy2(sample.path, moved_folder / 'sample.sqlite3')
+                shutil.rmtree(first_folder)
+                moved = ListingStore(moved_folder / 'sample.sqlite3')
+                for store in (moved, real):
+                    message = await turn(store)
+                    self.assertEqual((message['status'], message['error'], message['content']), ('complete', None, 'OK'))
+            self.assertEqual(len(sessions), 2)
