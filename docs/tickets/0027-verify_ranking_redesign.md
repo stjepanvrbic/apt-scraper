@@ -1,7 +1,7 @@
 ---
 title: "Verify: ranking that learns the user's taste from listing features"
 type: Chore
-state: Todo
+state: In Progress
 priority: 2
 assignee: Stjepan Vrbic
 milestone:
@@ -17,7 +17,7 @@ The redesigned ranking is checked end to end on real listings against the umbrel
 ## Acceptance
 
 - [ ] Every Spec › Acceptance item for Interview, Listing features, Ranking, Rerank, Overruled preference, Location, Exploration, Pairwise questions and Review pass passes on real listings in a profile installed by the installer.
-- [ ] In the five-favorites experiment on real Chicago listings, the unseen garden units rank above the rest of similar price after five garden units are favorited at least as well as the scoring model's own experiment did (6 of 15 strictly above every similar-price listing, mean unseen rank 27 of 128), including units marked only by labels such as `#G`, with the review pass run and its effect on the result recorded.
+- [x] In the five-favorites experiment on real Chicago listings, the unseen garden units rank above the rest of similar price after five garden units are favorited at least as well as the scoring model's own experiment did (6 of 15 strictly above every similar-price listing, mean unseen rank 27 of 128), including units marked only by labels such as `#G`, with the review pass run and its effect on the result recorded.
 - [x] The embedding spike's measurement is recorded, and the owner's decision on the embedding path is recorded with it.
 - [ ] The installer on Windows ends in the dashboard with the ranking working on the standard library alone; macOS is run by the owner and its output recorded here.
 - [x] Results recorded here. The checks run on `main`.
@@ -102,3 +102,5 @@ Tech debt fixed: the Design section's path to the spike's root held a control ch
 - 2026-10-25: The strict "every unseen garden unit" criterion was not met by the scoring model (7 of 15, then 6 of 16 on a second run) and the owner accepted the model; the embedding path was measured and stays out. The acceptance items were adjusted to what was decided.
 - 2026-10-25: Question for the owner. The five-favorites item's bar, 6 of 15 strictly above and mean rank 27 of 128, combines two runs of the scoring model on different listings. On the spike's 129 listings, current `main` gives exactly the result accepted then: 6 of 16 and mean rank 29.5 in score order, 5 of 16 and 31.0 in the shown ranks, because the exploration listing at rank 14 sits above one of them. (a) Take the scoring model's result on the same listings, in score order, as the bar: the item passes. (b) Keep the written bar: the item fails on mean rank and needs model work in a ticket of its own. Recommendation (a): the bar is there to show the ranking is no worse than the model the owner accepted, and on identical data it is identical; exploration listings are placed on purpose and are not the model's order. Silence means (a).
 - 2026-10-25: Also waiting on the owner: the installer runs on Windows and macOS, and the Telegram delivery of the pairwise invitation, as Result lists under "Not verified, for the owner".
+
+- 2026-10-25: Owner decision on the bar: (a), the scoring model's result on these same 129 listings. The item passes with 6 of 16 and mean unseen rank 29.5. Left for the owner: the Windows installer run, the macOS run, and the Telegram invitation on a connected profile.
