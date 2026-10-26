@@ -36,15 +36,15 @@ The subagent reads its task file, looks at every photo on the sheets, and may op
 
 The subagent runs on the model `delegation.model` names in the profile's `config.yaml`, `sonnet` as shipped. Without a provider, `delegation.model` keeps the parent's provider (`_resolve_delegation_credentials` in `tools/delegate_tool_config.py`). The installers set it when a kept `config.yaml` names no subagent model.
 
-Listing text and photos are data. The task file carries the listing as one JSON object in a code block, so no line of a title, an amenity or a description can pass for a line of the instructions around it, and tells the subagent never to follow instructions in it. The batches of `features.py preferences` carry it the same way. Listing text stays out of the cron job's prompt, which Hermes scans for prompt injection.
+Listing text and photos are data. The task file carries the listing as one JSON object in a code block, so no line of a title, an amenity or a description can pass for a line of the instructions around it, and tells the subagent never to follow instructions in it. Both model reads of a listing, its extraction and the judgments of preferences stated later, run in subagents from task files, so listing text and photos never enter the job agent's conversation, which has the terminal, file, vision and delegation tools. The agent sees only the task goals, which name a listing id and a file, and each subagent's one-line answer. Listing text also stays out of the cron job's prompt, which Hermes scans for prompt injection.
 
 ### Failures
 
-Each run records in `features.json` the reads it handed to the agent: its extraction tasks and the preference judgments waiting. It records them once the report that hands them over is complete, and forgets the previous run's before counting them, so a run that fails or never wakes the agent counts nothing twice. The next run counts a failed attempt for each of them that still waits, in the store's `model_reads` table, so an attempt counts only once the wake that had it has ended. A saved record ends the count. After 3 attempts without a record, the job stops handing the listing over, `given_up_extractions` in `features.py` names it so the ranking can rank it from its code-derived features alone, and `features.py status` reports it, which the agent passes on to the user at the start of a conversation. A changed listing starts again from zero, and `features.py retry` clears every count.
+Each run records in `features.json` the reads it handed to the agent: its extraction tasks, the notes and stated preferences waiting for a reading, and the preference judgments its wake has subagents for. It records them once the report that hands them over is complete, and forgets the previous run's before counting them, so a run that fails or never wakes the agent counts nothing twice. The next run counts a failed attempt for each of them that still waits, in the store's `model_reads` table, so an attempt counts only once the wake that had it has ended. A saved record ends the count. After 3 attempts without a record, the job stops handing the listing over, `given_up_extractions` in `features.py` names it so the ranking can rank it from its code-derived features alone, and `features.py status` reports it, which the agent passes on to the user at the start of a conversation. A changed listing starts again from zero, and `features.py retry` clears every count.
 
 ### Preferences
 
-Each stated like and dislike is judged for each listing as "has", "rules out" or "does not say", with its evidence. A listing's extraction judges the preferences stated at the time. A preference stated later is judged for every listing that has a record, from its record and text, without the photos: the job's report counts the listings waiting, and the agent judges them in batches of 25 with `features.py preferences` and `features.py judge`. Until then, the listing counts as not saying.
+Each stated like and dislike is judged for each listing as "has", "rules out" or "does not say", with its evidence. A listing's extraction judges the preferences stated at the time. A preference stated later is judged for every listing that has a record, from its record and text, without the photos. The job's report counts the listings waiting. After the readings, the agent runs `features.py preferences`, which writes one task file per batch of 25 listings into `extraction/judgments/`, from `profile/skills/listing-features/judgment.md`, and prints one `delegate_task` task per batch, 10 to a call. Each subagent reads its task file, judges its listings and saves the judgments with `features.py judge`, which checks that each listing gets exactly its unjudged preferences. The run reserves for the judgments the subagents its extractions leave of the wake's 50, hands over the judgments of the listings those batches hold, and `features.py preferences` writes those batches first, so an attempt counts only for a listing a subagent was given. The rest wait for a later run. Until then, the listing counts as not saying.
 
 ## The feature record
 
@@ -202,7 +202,7 @@ A review handed to the agent 3 times without being saved ends as `failed`, and s
 python "$HERMES_HOME/skills/listing-features/scripts/features.py" status
 python "$HERMES_HOME/skills/listing-features/scripts/features.py" tags
 python "$HERMES_HOME/skills/listing-features/scripts/features.py" preferences
-python "$HERMES_HOME/skills/listing-features/scripts/features.py" judge "$HERMES_HOME/cache/scratch/judgments.json"
+python "$HERMES_HOME/skills/listing-features/scripts/features.py" judge "$HERMES_HOME/cache/scratch/judgments-batch-<number>.json"
 python "$HERMES_HOME/skills/listing-features/scripts/features.py" save "$HERMES_HOME/cache/scratch/extraction-<listing>.json"
 python "$HERMES_HOME/skills/listing-features/scripts/features.py" readings
 python "$HERMES_HOME/skills/listing-features/scripts/features.py" read "$HERMES_HOME/cache/scratch/readings.json"
@@ -215,7 +215,7 @@ python "$HERMES_HOME/skills/ranking/scripts/ranking.py" run
 python "$HERMES_HOME/skills/ranking/scripts/ranking.py" review-save "$HERMES_HOME/cache/scratch/review-<rerank id>.json"
 ```
 
-`features.py run` and `ranking.py run` are the cron jobs' commands. `save` is the extraction subagent's and `review-save` the review agent's. Every command but `run` needs only the Python standard library, and so does `ranking.py`.
+`features.py run` and `ranking.py run` are the cron jobs' commands. `save` is the extraction subagent's, `judge` the judgment subagent's and `review-save` the review agent's. Every command but `run` needs only the Python standard library, and so does `ranking.py`.
 
 ## Checks
 

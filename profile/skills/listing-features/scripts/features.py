@@ -8,8 +8,10 @@ Commands:
   features.py save FILE     the extraction child's command: save one record from a JSON file in the scratch directory,
                             then delete the file
   features.py tags          the tag list, most used first, which the extraction child reads before choosing tags
-  features.py preferences   the next listings waiting for judgments of preferences stated after their extraction
-  features.py judge FILE    save those judgments from a JSON file in the scratch directory, then delete it
+  features.py preferences   write the judgment subagents' task files for the listings waiting for judgments of
+                            preferences stated after their extraction, and print their delegate_task calls
+  features.py judge FILE    the judgment child's command: save its judgments from a JSON file in the scratch
+                            directory, then delete it
   features.py readings      the user's notes and stated preferences waiting to be read into record features
   features.py read FILE     save those readings from a JSON file in the scratch directory, then delete it
   features.py status        whether extraction needs the user's attention
@@ -62,7 +64,8 @@ JUDGMENT_BATCH = 25
 NOTE_BATCH = 25
 TASK_DESCRIPTION_LIMIT = 6000
 JUDGMENT_DESCRIPTION_LIMIT = 2000
-TEMPLATE = Path(__file__).resolve().parents[1] / 'extraction.md'
+EXTRACTION_TEMPLATE = Path(__file__).resolve().parents[1] / 'extraction.md'
+JUDGMENT_TEMPLATE = Path(__file__).resolve().parents[1] / 'judgment.md'
 MEDIA = SKILLS / 'gallery' / 'web' / 'media'
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36'
 EXTENSIONS = {'JPEG': 'jpg', 'PNG': 'png', 'WEBP': 'webp', 'GIF': 'gif'}
@@ -142,6 +145,10 @@ def listing_fields(listing, limit):
             'size': listing.get('size'), 'amenities': listing.get('amenities') or [], 'description': description}
 
 
+def chunks(items, size):
+    return [items[start:start + size] for start in range(0, len(items), size)]
+
+
 def bullet_lines(items):
     return '\n'.join(f'  - {item}' for item in items)
 
@@ -157,15 +164,15 @@ def photo_overview(count):
 class RunState:
     """The job's records next to the listing store: the last run's problems, the listings whose photos could not be
     downloaded, since when and why, the transit feed whose stations could not be fetched, since when, when last tried
-    and why, the model reads the last run handed to the agent, and when the Compare invitation was sent. A read handed
-    over that still waits at the next run counts as a failed attempt then, so an attempt counts only once its wake has
-    ended."""
+    and why, the model reads the last run handed to the agent, how many judgment subagents its wake may start, and
+    when the Compare invitation was sent. A read handed over that still waits at the next run counts as a failed attempt
+    then, so an attempt counts only once its wake has ended."""
 
     def __init__(self, path):
         self.path = path
 
     def load(self):
-        return {'problems': [], 'photos_unavailable': {}, 'stations_unavailable': None, 'handed': [],
+        return {'problems': [], 'photos_unavailable': {}, 'stations_unavailable': None, 'handed': [], 'judgment_batches': SUBAGENTS_PER_WAKE,
                 **(json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {})}
 
     def update(self, **values):
@@ -224,9 +231,10 @@ class Features:
         work = self.count_attempts()
         extraction = self.step(problems, 'Preparing the extraction tasks', lambda: self.prepare_extractions(work))
         extraction_lines, tasks = extraction or ([], [])
-        reading_lines, readings = self.reading_report(work)
+        judgment_batches = SUBAGENTS_PER_WAKE - len(tasks)
+        reading_lines, readings = self.reading_report(work, judgment_batches)
         handed = [extraction_read(listing['id'], listing['content_fingerprint']) for listing in tasks] + readings
-        self.state.update(problems=problems, handed=handed)
+        self.state.update(problems=problems, handed=handed, judgment_batches=judgment_batches)
         problems += self.send_compare_invitation(problems)
         return [*lines, *extraction_lines, *reading_lines, *problems], bool(handed)
 
@@ -281,14 +289,15 @@ class Features:
         return lines, [listing for listing, _ in tasks]
 
     @staticmethod
-    def reading_report(work):
-        """The report's lines about the notes, stated preferences and judgments waiting, and their reads."""
+    def reading_report(work, judgment_batches):
+        """The report's lines about the notes, stated preferences and judgments waiting, and the reads the wake hands
+        over: every note and stated preference, and the judgments of the listings in its first judgment_batches batches."""
         lines = []
         if work['notes'] or work['unread']:
             lines.append(f'{len(work["notes"])} notes and {len(work["unread"])} stated preferences wait for a reading.')
         if work['judge']:
             lines.append(f'{len(work["judge"])} listings wait for judgments of preferences stated after their extraction.')
-        reads = [judgment_read(listing, phrase) for listing, phrases in work['judge'] for phrase in phrases]
+        reads = [judgment_read(listing, phrase) for listing, phrases in work['judge'][:judgment_batches * JUDGMENT_BATCH] for phrase in phrases]
         reads += [note_read(note) for note in work['notes']] + [preference_read(*item) for item in work['unread']]
         return lines, reads
 
@@ -357,7 +366,7 @@ class Features:
         same tag list, so while the store has fewer than SEQUENTIAL_RECORDS records, each call runs one task and the next
         sees the tags it added. The rest run PARALLEL_TASKS at a time, Hermes's default delegation.max_concurrent_children."""
         single = max(0, SEQUENTIAL_RECORDS - records)
-        return [[task] for task in tasks[:single]] + [tasks[start:start + PARALLEL_TASKS] for start in range(single, len(tasks), PARALLEL_TASKS)]
+        return [[task] for task in tasks[:single]] + chunks(tasks[single:], PARALLEL_TASKS)
 
     def tag_lines(self):
         """The tag list, most used first, as the extraction subagent reads it."""
@@ -437,7 +446,7 @@ class Features:
     @staticmethod
     def task_text(listing, phrases, files, record_file):
         script = Path(__file__).resolve().as_posix()
-        return Template(TEMPLATE.read_text(encoding='utf-8')).substitute(
+        return Template(EXTRACTION_TEMPLATE.read_text(encoding='utf-8')).substitute(
             listing_id=listing['id'], fingerprint=listing['content_fingerprint'], photo_count=len(files),
             photo_overview=photo_overview(len(files)),
             photo_files='\n'.join(f'- Photo {number}: `{file.as_posix()}`' for number, file in enumerate(files, 1)),
@@ -474,12 +483,32 @@ class Features:
         return {'saved': value['id'], **result}
 
     def preferences(self):
+        """Writes the task file of one judgment subagent per batch of JUDGMENT_BATCH listings waiting for judgments, for
+        as many batches as the last run left its wake, and returns their delegate_task calls and how many listings wait
+        for a later wake. The listings whose judgments the run handed over come first, so the batches hold the reads
+        it counts. Listing text stays in the task files, out of the agent's conversation."""
+        state = self.state.load()
         work = self.outstanding()
-        batch = work['judge'][:JUDGMENT_BATCH]
-        return {'listings': [{'id': listing['id'], 'fingerprint': listing['content_fingerprint'], 'unjudged': phrases,
-                              'listing': listing_fields(listing, JUDGMENT_DESCRIPTION_LIMIT), 'record': self.digest(work['records'][listing['id']])}
-                             for listing, phrases in batch],
-                'remaining': len(work['judge']) - len(batch)}
+        handed = set(state['handed'])
+        waiting = sorted(work['judge'], key=lambda item: not any(judgment_read(item[0], phrase) in handed for phrase in item[1]))
+        batches = chunks(waiting, JUDGMENT_BATCH)[:state['judgment_batches']]
+        directory = self.workspace / 'judgments'
+        shutil.rmtree(directory, ignore_errors=True)
+        directory.mkdir(parents=True)
+        tasks = [self.judgment_task(directory / f'batch-{number}.md', batch, work['records']) for number, batch in enumerate(batches, 1)]
+        return {'calls': chunks(tasks, PARALLEL_TASKS), 'remaining': len(waiting) - sum(len(batch) for batch in batches)}
+
+    def judgment_task(self, task_file, batch, records):
+        judgments_file = scratch_directory() / f'judgments-{task_file.stem}.json'
+        listings = [{'id': listing['id'], 'fingerprint': listing['content_fingerprint'], 'unjudged': phrases,
+                     'listing': listing_fields(listing, JUDGMENT_DESCRIPTION_LIMIT), 'record': self.digest(records[listing['id']])}
+                    for listing, phrases in batch]
+        script = Path(__file__).resolve().as_posix()
+        task_file.write_text(Template(JUDGMENT_TEMPLATE.read_text(encoding='utf-8')).substitute(
+            count=len(batch), listings_json=json.dumps(listings, ensure_ascii=False, indent=1), judgments_file=judgments_file.as_posix(),
+            judge_command=f'python "{script}" judge "{judgments_file.as_posix()}"'), encoding='utf-8')
+        return {'goal': f'Judge stated preferences for {len(batch)} listings. Read your task file {task_file.as_posix()} with read_file '
+                        'first and follow it exactly.'}
 
     @staticmethod
     def digest(record):
@@ -518,7 +547,7 @@ class Features:
         batch = work['notes'][:NOTE_BATCH]
         return {'vocabulary': self.store.reading_vocabulary(),
                 'preferences': [{'kind': kind, 'phrase': phrase} for kind, phrase in work['unread']],
-                'notes': [{'id': note['id'], 'listing': note['listing'], 'text': note['text']} for note in batch],
+                'notes': [{'id': note['id'], 'listing': note['listing_id'], 'text': note['text']} for note in batch],
                 'remaining': len(work['notes']) - len(batch)}
 
     def read(self, value):

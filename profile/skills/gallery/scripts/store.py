@@ -729,11 +729,10 @@ class ListingStore:
                                   [place['name'] for place in settings.get('places', [])])
 
     def unread_notes(self):
-        """The user's notes without a reading, oldest first, with the title of their listing."""
+        """The user's notes without a reading, oldest first."""
         with self.connect() as connection:
-            return [dict(row) for row in connection.execute('''SELECT n.id, n.listing_id, n.text, n.created_at,
-                COALESCE(json_extract(l.data, '$.title'), json_extract(l.data, '$.address'), l.id) AS listing
-                FROM notes n JOIN listings l ON l.id = n.listing_id LEFT JOIN note_readings r ON r.note_id = n.id
+            return [dict(row) for row in connection.execute('''SELECT n.id, n.listing_id, n.text, n.created_at
+                FROM notes n LEFT JOIN note_readings r ON r.note_id = n.id
                 WHERE n.role = 'user' AND r.note_id IS NULL ORDER BY n.id''')]
 
     def unread_preferences(self):
