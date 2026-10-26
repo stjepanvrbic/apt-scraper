@@ -42,7 +42,8 @@
         Invoke-Native git @('clone', $RepositoryUrl, $Repository)
     }
 
-    # The installer is written for and tested with Windows PowerShell, whichever shell the line was pasted into.
+    # The installer is written for and tested with Windows PowerShell, so it runs there whichever shell the line
+    # was pasted into.
     $powershell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     Invoke-Native $powershell (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Repository 'install.ps1')) + $args)
 } @args
