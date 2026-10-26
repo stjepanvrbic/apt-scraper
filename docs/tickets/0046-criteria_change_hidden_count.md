@@ -1,9 +1,9 @@
 ---
 title: A criteria change reports how many listings it hid
 type: Bug
-state: In Progress
+state: Done
 priority: 3
-assignee: agent
+assignee:
 milestone:
 parent:
 blocked_by: []
@@ -19,7 +19,7 @@ After the user changes a criterion, the agent tells them how many listings the c
 - [x] `settings.py save` prints, for a criteria change, the number of listings it hid and the number it showed again, next to the totals it prints now.
 - [x] The interview skill tells the agent to report those two numbers.
 - [x] A test covers a change that hides listings while others were already hidden.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 

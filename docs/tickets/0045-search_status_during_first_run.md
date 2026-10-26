@@ -1,9 +1,9 @@
 ---
 title: The search status reports a first run in progress
 type: Bug
-state: In Progress
+state: Done
 priority: 4
-assignee: agent
+assignee:
 milestone:
 parent:
 blocked_by: []
@@ -20,7 +20,7 @@ While the first search runs, `search.py status` says it is running and reports n
 - [x] A run in progress that has gone on longer than twice the run budget still counts as a problem.
 - [x] The search skill's list of states matches.
 - [x] A test covers both cases.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
