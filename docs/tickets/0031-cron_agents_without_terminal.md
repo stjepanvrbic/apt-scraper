@@ -1,9 +1,9 @@
 ---
 title: Scheduled agents save their results through file tools, not the terminal
 type: Chore
-state: Todo
+state: In Progress
 priority: 3
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: [0021]
