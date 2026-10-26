@@ -1,9 +1,9 @@
 ---
 title: Score and rerank in the gallery, with exploration marks and review results
 type: Feature
-state: In Progress
+state: Done
 priority: 2
-assignee: agent
+assignee:
 milestone:
 parent: 0015
 blocked_by: []
