@@ -1,9 +1,9 @@
 ---
 title: The dashboard launchers verify they reached Hermes before opening the chat
 type: Bug
-state: In Progress
+state: Done
 priority: 3
-assignee: agent
+assignee:
 milestone:
 parent:
 blocked_by: []
@@ -18,7 +18,7 @@ The login launcher and the shortcut on both platforms open the chat only when He
 
 - [x] Both launchers probe `GET /api/health` and accept only a 200 whose JSON has `"ok": true` and a `version`; anything else starts Hermes or reports failure.
 - [x] The installer writes the dashboard address it learned from Hermes's log to a file the launchers read, instead of a fixed port 9119. `tests/test_installers.py` covers a foreign 404 listener and a moved port.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
@@ -56,3 +56,5 @@ Delivered on `fix/launcher_health` in [PR #34](https://github.com/stjepanvrbic/a
 ## Comments
 
 - 2026-10-25: Found by the deep review: `install.ps1` and `install.sh` launchers treat any HTTP response on port 9119 as readiness; a foreign 404 opened the chat path without Hermes.
+
+- 2026-10-25: Known limit, not fixed: Hermes exits 75 on a busy port instead of moving, so a foreign program on the recorded port blocks the dashboard until it is freed.
