@@ -31,9 +31,11 @@ python "${HERMES_SKILL_DIR}/scripts/search.py" judge "<scratch directory>/judgme
 python "${HERMES_SKILL_DIR}/scripts/search.py" reported
 ```
 
-`status` prints JSON and exits 0 when the search runs without problems, 3 when something needs attention. `state` is `waiting for the interview`, `not started`, `stopped` or `running`. `problems` says what is wrong, in sentences you can pass on. `shown` counts the listings in the gallery, `awaiting_judgment` those waiting for you, and `new_since_report` the shown listings found since the user was last told. Any other exit code means the script failed: show the user its output.
+`status` prints JSON and exits 0 when the search runs without problems, 3 when something needs attention. `state` is `waiting for the interview` until the interview is complete. Then it follows the latest run: `not started` before the first, `running` while a run goes on, since `running_since`, and `finished` or `failed` once it ended. It is `stopped` when no run has started or ended for three hours. `problems` says what is wrong, in sentences you can pass on. `shown` counts the listings in the gallery, `awaiting_judgment` those waiting for you, and `new_since_report` the shown listings found since the user was last told. Any other exit code means the script failed: show the user its output.
 
 ## Running the search now
+
+When `status` says `running`, a run is under way: tell the user it started at `running_since` and is still going, and do not run the job again.
 
 Use the `cronjob_manage` tool. List the jobs and find the one with the id `apt-scraper-search`. If it is paused, resume it. Then run it, so the first listings come within minutes instead of at the next hourly run. It runs in the background and reports back when done. Tell the user in one sentence that the search runs every hour and new listings show in the gallery.
 
@@ -42,6 +44,7 @@ If no job has that id, the profile was not installed by the apt-scraper installe
 ## Problems `status` reports
 
 - `not started`: run the search now as above.
+- A run that has not finished long after it started: tell the user the run seems stuck and that the next hourly run starts a new one. If it repeats, apt-scraper needs an update.
 - `stopped`: scheduled jobs run only while the Hermes gateway runs. List the jobs: if `apt-scraper-search` is paused, resume it. Otherwise tell the user the gateway is not running, and with their agreement load the account-connections skill and start the gateway as its gateway section says.
 - A site that blocked the search: the search leaves that site alone and tries again later, waiting longer after each block. Tell the user when it tries again. Do not try to reach the site another way.
 - A site the search has no reader for: tell the user the search cannot read this site yet, and offer to replace it with a site it can read.

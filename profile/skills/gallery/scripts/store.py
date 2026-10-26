@@ -8,6 +8,7 @@ import sys
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
@@ -308,17 +309,28 @@ def explain_pending_rankings(connection, listings):
         listing.update(rank=None, reason=reason, exploration=False)
 
 
+class CriteriaApplied(NamedTuple):
+    """The count of each verdict over every stored listing, and the ids, in store order, of the listings this application
+    of the criteria changed: shown ones it put outside (hidden) or left waiting for a judgment (awaiting), and hidden ones
+    it showed (shown)."""
+    verdicts: dict
+    hidden: list
+    awaiting: list
+    shown: list
+
+
 def apply_criteria(connection, judge):
     row = connection.execute("SELECT value FROM settings WHERE name = 'criteria'").fetchone()
     if not row:
         return None
     criteria = json.loads(row['value'])
-    rows = connection.execute('SELECT l.id, CASE WHEN r.fingerprint = l.fingerprint THEN r.features END AS features '
+    rows = connection.execute('SELECT l.id, l.matches_criteria, CASE WHEN r.fingerprint = l.fingerprint THEN r.features END AS features '
                               'FROM listings l LEFT JOIN ranking r ON r.listing_id = l.id ORDER BY l.rowid').fetchall()
     verdicts = {row['id']: judge(criteria, json.loads(row['features']) if row['features'] else None) for row in rows}
-    connection.executemany('UPDATE listings SET matches_criteria = ? WHERE id = ? AND matches_criteria != ?',
-                           [(verdict == 'inside', identifier, verdict == 'inside') for identifier, verdict in verdicts.items()])
-    return dict(Counter(verdicts.values()))
+    flipped = [row['id'] for row in rows if (verdicts[row['id']] == 'inside') != bool(row['matches_criteria'])]
+    connection.executemany('UPDATE listings SET matches_criteria = ? WHERE id = ?', [(verdicts[identifier] == 'inside', identifier) for identifier in flipped])
+    return CriteriaApplied(dict(Counter(verdicts.values())), *([identifier for identifier in flipped if verdicts[identifier] == verdict]
+                                                               for verdict in ('outside', 'pending', 'inside')))
 
 
 class ListingStore:
@@ -427,7 +439,7 @@ class ListingStore:
 
     def apply_criteria(self, judge):
         """Shows each listing that judge(criteria, features) finds 'inside' the stored criteria and hides every other one.
-        features is the listing's current analysis or None. Returns the count of each verdict, or None without criteria."""
+        features is the listing's current analysis or None. Returns a CriteriaApplied, or None without criteria."""
         with self.connect(write=True) as connection:
             return apply_criteria(connection, judge)
 
