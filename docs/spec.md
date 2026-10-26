@@ -34,6 +34,7 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 
 ### Installation and setup
 
+- The user installs with one line pasted into a terminal, with nothing cloned by hand: `irm <bootstrap.ps1 URL> | iex` in PowerShell on Windows, `curl -fsSL <bootstrap.sh URL> | bash` on macOS. The line installs Git when it is missing, clones the repository into a fixed per-user location or updates the clone there, and runs the installer from it. On a Mac without the Xcode command line tools, it opens their installer and stops, and the user runs the line again once they are installed. Running the line again updates the repository and the profile and keeps the user's `config.yaml`, data and credentials.
 - `install.ps1` and `install.sh` install everything the agent needs, check that every Python environment the profile's scripts run in loads its packages, send a test message that must succeed, and finish with the agent's chat open in the Hermes web dashboard in the user's browser.
 - The dashboard starts without a window when the user logs in. A shortcut named apt-scraper, in the Start menu on Windows and in Applications on macOS, opens its chat and starts the dashboard first when it is not running.
 - On first run the agent connects Gmail, Google Calendar, a Hermes messaging gateway such as Telegram, and iMessage on macOS, and checks each connection. It runs every command and does every step in the browser and in Telegram itself; the user only signs in, approves consent screens and macOS permissions, types their Mac password when an installer asks, and pastes the Telegram bot token into the dashboard. A connection that fails its check is reported, and its channel is unused until it passes.
@@ -103,7 +104,7 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 
 ## Acceptance
 
-- Installer: a fresh Windows machine and a fresh Mac each finish `install` with the test message passing and the dashboard's chat for `apt-scraper` open in the browser.
+- Installer: a fresh Windows machine and a fresh Mac each finish the one-line install with the test message passing and the dashboard's chat for `apt-scraper` open in the browser.
 - Search: of the matching listings a manual search of the listing sites finds that were posted more than a day earlier, the agent has already found at least 90%.
 - Interview: a first interview stores places and the location priorities.
 - Listing features: every unique photo of a test listing has a room type in its feature record, the agent's main conversation holds no image, and searching the unchanged listing again makes no extraction.
