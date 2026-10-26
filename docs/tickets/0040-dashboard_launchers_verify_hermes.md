@@ -1,9 +1,9 @@
 ---
 title: The dashboard launchers verify they reached Hermes before opening the chat
 type: Bug
-state: Todo
+state: In Progress
 priority: 3
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []
