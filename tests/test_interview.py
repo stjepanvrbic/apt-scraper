@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from test_gallery_store import ListingStore, listing
-from store import TimeZoneDataMissing
+from store import CriteriaApplied, TimeZoneDataMissing
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'profile/skills/interview/scripts/settings.py'
 sys.path.insert(0, str(SCRIPT.parent))
@@ -187,14 +187,18 @@ class SettingsStoreTests(unittest.TestCase):
         revision = self.store.revision()
         criteria = copy.deepcopy(COMPLETE['criteria'])
         result = self.store.update_settings(criteria=criteria, judge=self.judge_by_price)
-        self.assertEqual(result, {'inside': 1, 'outside': 1, 'pending': 1})
+        self.assertEqual(result, CriteriaApplied({'inside': 1, 'outside': 1, 'pending': 1}, hidden=['example:200', 'example:300'], shown=[]))
         self.assertEqual(self.judged, [{'price': 2100}, {'price': 2900}, None])
         self.assertGreater(self.store.revision(), revision)
         self.assertEqual([item['id'] for item in self.store.browse('Rankings')['items']], ['example:100'])
         self.assertEqual(ListingStore(self.path).settings()['criteria'], criteria)
         criteria['price']['max'] = 3000
-        self.assertEqual(self.store.update_settings(criteria=criteria, judge=self.judge_by_price), {'inside': 2, 'pending': 1})
+        self.assertEqual(self.store.update_settings(criteria=criteria, judge=self.judge_by_price),
+                         CriteriaApplied({'inside': 2, 'pending': 1}, hidden=[], shown=['example:200']))
         self.assertEqual(self.store.browse('Rankings')['total'], 2)
+        revision = self.store.revision()
+        self.assertEqual(self.store.apply_criteria(self.judge_by_price), CriteriaApplied({'inside': 2, 'pending': 1}, hidden=[], shown=[]))
+        self.assertEqual(self.store.revision(), revision)
 
     def test_stored_criteria_can_be_applied_again_and_nothing_is_judged_without_criteria(self):
         self.judged = []
@@ -204,7 +208,7 @@ class SettingsStoreTests(unittest.TestCase):
         self.store.update_settings(criteria=COMPLETE['criteria'], judge=self.judge_by_price)
         self.store.analyze('example:100', fingerprint, {'price': 2900})
         self.assertEqual(self.store.browse('Rankings')['total'], 1)
-        self.assertEqual(self.store.apply_criteria(self.judge_by_price), {'outside': 1})
+        self.assertEqual(self.store.apply_criteria(self.judge_by_price), CriteriaApplied({'outside': 1}, hidden=['example:100'], shown=[]))
         self.assertEqual(self.store.browse('Rankings')['total'], 0)
 
     def test_criteria_with_stored_listings_are_saved_only_with_a_judge(self):
@@ -391,12 +395,33 @@ class SettingsScriptTests(unittest.TestCase):
         store.upsert_listing(listing(id='example:400', price=9000, rooms='1 bedroom'))
         result = self.save({'criteria': COMPLETE['criteria']})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)['criteria'], {'outside': 1, 'matching': 1, 'awaiting_judgment': 2})
+        self.assertEqual(json.loads(result.stdout)['criteria'], {'outside': 1, 'matching': 1, 'awaiting_judgment': 2, 'newly_hidden': 3, 'shown_again': 0})
         self.assertEqual([item['id'] for item in store.browse('Rankings')['items']], ['example:100'])
         open_criteria = {**COMPLETE['criteria'], 'price': {'min': None, 'max': None}, 'other': []}
         result = self.save({'criteria': open_criteria})
-        self.assertEqual(json.loads(result.stdout)['criteria'], {'outside': 0, 'matching': 3, 'awaiting_judgment': 1})
+        self.assertEqual(json.loads(result.stdout)['criteria'], {'outside': 0, 'matching': 3, 'awaiting_judgment': 1, 'newly_hidden': 0, 'shown_again': 2})
         self.assertNotIn('example:400', [item['id'] for item in store.browse('Rankings')['items']])
+
+    def test_a_criteria_change_counts_the_listings_it_hid_apart_from_those_already_hidden(self):
+        store = ListingStore(self.path)
+        for identifier, price, cats in [('example:100', 2000, True), ('example:200', 2200, False), ('example:300', 2500, True), ('example:400', 2500, None)]:
+            fingerprint = store.upsert_listing(listing(id=identifier, price=price))['content_fingerprint']
+            facts = {'areas': ['Logan Square, Chicago'], 'currency': 'USD',
+                     'units': [{'price': price, 'period': 'month', 'bedrooms': 2, 'size_sqft': 850, 'available_on': None}]}
+            store.analyze(identifier, fingerprint, {'facts': facts, 'must_haves': {'Cats allowed': cats}})
+        criteria = {**COMPLETE['criteria'], 'price': {'min': None, 'max': 2600, 'currency': 'USD', 'period': 'month'}, 'other': ['Cats allowed']}
+        result = self.save({'criteria': criteria})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['criteria'],
+                         {'outside': 1, 'matching': 3, 'awaiting_judgment': 0, 'newly_hidden': 1, 'shown_again': 0})
+        lower = {**criteria, 'price': {**criteria['price'], 'max': 2300}}
+        result = self.save({'criteria': lower})
+        self.assertEqual(json.loads(result.stdout)['criteria'],
+                         {'outside': 3, 'matching': 1, 'awaiting_judgment': 0, 'newly_hidden': 2, 'shown_again': 0})
+        result = self.save({'criteria': criteria})
+        self.assertEqual(json.loads(result.stdout)['criteria'],
+                         {'outside': 1, 'matching': 3, 'awaiting_judgment': 0, 'newly_hidden': 0, 'shown_again': 2})
+        self.assertEqual(sorted(item['id'] for item in store.browse('Rankings')['items']), ['example:100', 'example:300', 'example:400'])
 
     def test_criteria_without_stored_listings_need_no_judgment(self):
         result = self.save({'criteria': COMPLETE['criteria']})
