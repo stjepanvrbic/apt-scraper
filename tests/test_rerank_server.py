@@ -39,6 +39,9 @@ class RerankServerTests(GalleryServerCase):
         self.assertIn('after', result['check'])
 
     def test_rerank_requires_authentication_same_origin_and_an_empty_json_object(self):
+        with self.assertRaises(HTTPError) as raised:
+            self.request('/api/rerank', headers={'Authorization': ''})
+        self.assertEqual(raised.exception.code, 401)
         padded = b'{}'.ljust(99000)
         for content, headers, status in [(b'', {'Authorization': ''}, '401 Unauthorized'),
                                          (b'{}', {'Authorization': ''}, '401 Unauthorized'),

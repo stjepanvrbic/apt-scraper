@@ -16,10 +16,6 @@ from rerank import pairwise_questions, rerank
 
 STATIC = Path(__file__).resolve().parents[1] / 'web'
 BODY_LIMIT = 100000
-BODY_ERROR = f'Request must contain at most {BODY_LIMIT} bytes.'
-# Every request body is read before any reply: closing a socket with unread data resets the
-# connection, and the client then loses the reply. Bodies past DISCARD_LIMIT or of unknown
-# length are left unread, so their reply is followed by a half-close and a bounded wait for the client's close.
 DISCARD_LIMIT = 1000000
 CLOSE_SECONDS = 5
 
@@ -134,18 +130,16 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                 pass
 
         def do_POST(self):
+            # Closing a socket with unread data resets the connection and the client loses the reply, so the
+            # body is read before any check, and a body of unknown or excessive length is drained after the reply.
             content = self.read_body()
-            if content is None:
-                self.reply(400, {'error': BODY_ERROR})
-                self.close_unread()
-                return
-            if not self.allowed():
-                return
             try:
+                if not self.allowed():
+                    return
                 if self.headers.get_content_type() != 'application/json':
                     raise ValueError('Request must use application/json.')
-                if not 0 < len(content) <= BODY_LIMIT:
-                    raise ValueError(BODY_ERROR)
+                if content is None or not 0 < len(content) <= BODY_LIMIT:
+                    raise ValueError(f'Request must declare a Content-Length from 1 to {BODY_LIMIT} bytes.')
                 body = json.loads(content)
                 if not isinstance(body, dict):
                     raise ValueError('Request must be an object.')
@@ -216,6 +210,9 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
             except sqlite3.Error:
                 self.reply(500, {'error': 'Could not save changes. Try again. Check the gallery log if this continues.'})
                 raise
+            finally:
+                if content is None:
+                    self.close_unread()
 
         @staticmethod
         def require_fields(body, fields):

@@ -105,11 +105,16 @@ class GalleryServerTests(GalleryServerCase):
         self.assertNotIn('admission_id', response['messages'][-1])
 
     def test_a_body_of_unknown_or_oversized_length_gets_its_answer_before_the_close(self):
-        chunked = b'10000\r\n' + b' ' * 65536 + b'\r\n'
-        for content, headers in [(b'{}'.ljust(2000000), {}), (b'{}'.ljust(99000), {'Content-Length': 'many'}),
-                                 (chunked * 4 + b'0\r\n\r\n', {'Content-Length': None, 'Transfer-Encoding': 'chunked'})]:
+        oversized, padded = b'{}'.ljust(2000000), b'{}'.ljust(99000)
+        chunked = (b'10000\r\n' + b' ' * 65536 + b'\r\n') * 4 + b'0\r\n\r\n'
+        unchunked = {'Content-Length': None, 'Transfer-Encoding': 'chunked'}
+        length = ('400 Bad Request', 'Request must declare a Content-Length from 1 to 100000 bytes.')
+        for content, headers, (status, error) in [
+                (oversized, {}, length), (padded, {'Content-Length': 'many'}, length), (chunked, unchunked, length),
+                (oversized, {'Authorization': ''}, ('401 Unauthorized', 'Gallery access is missing or expired. Open the gallery again through Hermes.')),
+                (chunked, {**unchunked, 'Origin': 'https://evil.example'}, ('403 Forbidden', 'Only requests from this local gallery are accepted.')),
+                (padded, {'Content-Length': 'many', 'Content-Type': 'text/plain'}, ('400 Bad Request', 'Request must use application/json.'))]:
             with self.subTest(length=len(content), headers=headers):
                 for _ in range(20):
-                    self.assertEqual(self.raw_post('/api/chat', content, headers),
-                                     ('HTTP/1.0 400 Bad Request', {'error': 'Request must contain at most 100000 bytes.'}))
+                    self.assertEqual(self.raw_post('/api/chat', content, headers), ('HTTP/1.0 ' + status, {'error': error}))
         self.assertEqual(self.store.chat_state()['messages'], [])
