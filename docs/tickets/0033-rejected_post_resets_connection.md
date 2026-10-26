@@ -1,9 +1,9 @@
 ---
 title: A rejected gallery request can reset the connection instead of answering
 type: Bug
-state: In Progress
+state: Done
 priority: 3
-assignee: agent
+assignee:
 milestone:
 parent:
 blocked_by: []
@@ -18,7 +18,7 @@ The gallery server answers every `POST` it rejects with the rejection's status a
 
 - [x] A test opens a raw socket, sends a `POST` the server rejects, sends its whole body, then reads. It gets the full status line and error, without a connection reset, 200 times for each of: missing token (401), foreign origin (403) and wrong content type (400), each with a 99,000-byte body; and a body of 200,000 bytes, declared and sent in full (400).
 - [x] `test_rerank_requires_authentication_same_origin_and_an_empty_json_object` in `tests/test_rerank_server.py` uses that method, and the pull request shows it failing on the unfixed server and passing on the fixed one.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
