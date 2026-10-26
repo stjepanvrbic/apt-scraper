@@ -3,6 +3,7 @@ import random
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
 
@@ -171,6 +172,13 @@ class PairwiseTests(unittest.TestCase):
         settings = {**SETTINGS, 'preferences': {'likes': ['Skylight'], 'dislikes': []}}
         readings = {('like', 'Skylight'): [{'feature': 'tag:skylight', 'direction': 'like'}]}
         self.assertEqual(len(questions(inputs(neighborhood(30), settings=settings, readings=readings), DEFAULT_HYPERPARAMETERS, 6, [])), 6)
+
+    def test_questions_cost_a_fit_without_the_leave_one_out_check(self):
+        listings = neighborhood(30)
+        for number in (2, 9, 17, 23):
+            listings[number]['favorite'] = True
+        with mock.patch('scoring.held_out_fit', side_effect=AssertionError('questions ran the leave-one-out check')):
+            self.assertEqual(len(questions(inputs(listings), DEFAULT_HYPERPARAMETERS, 3, [])), 3)
 
 
 class ExplanationTests(unittest.TestCase):
@@ -380,6 +388,21 @@ class ExplorationTests(unittest.TestCase):
         for identifier in marked:
             self.assertGreaterEqual(mean_order.index(identifier), TOP - 2)
             self.assertTrue(result['ranked'][identifier]['reason'].startswith('Shown to learn your taste.'))
+
+    def test_without_unlabeled_listings_outside_the_top_18_none_explores(self):
+        listings = [entry(f'listing:{number:02}', user_notes=number >= 18) for number in range(21)]
+        result = rank_listings(inputs(listings), seed=3)
+        self.assertEqual(result['summary']['exploration'], [])
+        self.assertFalse(any(ranked['exploration'] for ranked in result['ranked'].values()))
+        self.assertEqual(ranks(result), {listing['id']: number for number, listing in enumerate(listings, 1)})
+
+    def test_one_unlabeled_listing_outside_the_top_18_explores_at_the_first_exploration_rank(self):
+        listings = [entry(f'listing:{number:02}', user_notes=number >= 19) for number in range(21)]
+        result = rank_listings(inputs(listings), seed=3)
+        self.assertEqual(result['summary']['exploration'], ['listing:18'])
+        self.assertEqual(result['ranked']['listing:18']['rank'], EXPLORATION_RANKS[0])
+        self.assertTrue(result['ranked']['listing:18']['reason'].startswith('Shown to learn your taste.'))
+        self.assertEqual([identifier for identifier, ranked in result['ranked'].items() if ranked['exploration']], ['listing:18'])
 
     def test_no_listing_explores_with_20_or_fewer_ranked(self):
         result = rank_listings(inputs(neighborhood(20)), seed=3)

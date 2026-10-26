@@ -30,7 +30,7 @@ export type ReviewResult = {
   check: { before: Check; after: Check };
   moves: { id: string; title: string | null; from: number; to: number; reason: string; confidence: number }[];
   reasons: number;
-  flags: { id: string; title: string | null; kind: 'like' | 'dislike'; preference: string; note: string }[];
+  flags: { id: string; title: string | null; kind: 'like' | 'dislike'; preference: string }[];
   findings: string[];
 };
 export type Review = { attempts: number; updated_at: string } & (

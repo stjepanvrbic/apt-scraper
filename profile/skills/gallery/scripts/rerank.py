@@ -9,7 +9,7 @@ import random
 import time
 
 from implicit_signals import diagnostic
-from review import citable_values, review_outcome, review_task, validated_review
+from review import citable_values, review_outcome, review_task, review_terms, validated_review
 from scoring import DEFAULT_HYPERPARAMETERS, fit_model, questions, rank_listings, stated_phrases
 
 REVIEW_ATTEMPTS = 3
@@ -66,7 +66,8 @@ def save_review(store, value):
     inputs, ranked = store.ranking_inputs(), store.ranked_listings()
     records = {listing['id']: listing['record'] for listing in inputs['listings']}
     citable = {identifier: citable_values(entry['explanation'], records[identifier]) for identifier, entry in ranked.items()}
-    review = validated_review(value, last['id'], snapshot, citable, set(stated_phrases(inputs['settings'])))
+    review = validated_review(value, last['id'], snapshot, citable, review_terms(store.tags(), last['weights']),
+                              set(stated_phrases(inputs['settings'])))
     ranks, reasons, result = review_outcome(inputs, snapshot, ranked, review)
     store.save_review(last['id'], ranks, reasons, result)
     return result

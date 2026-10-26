@@ -30,21 +30,31 @@ class RerankServerTests(GalleryServerCase):
         self.assertAlmostEqual(sum(part['contribution'] for part in details['explanation']['contributions']), details['explanation']['score'])
         self.store.hand_review(summary['id'])
         self.assertEqual(self.request('/api/rerank')['last_rerank']['review']['state'], 'running')
-        result = save_review(self.store, {'rerank': summary['id'], 'reasons': [], 'moves': [], 'flags': [], 'findings': ['Check the feature coverage.']})
+        result = save_review(self.store, {'rerank': summary['id'], 'reasons': [], 'moves': [], 'flags': [], 'findings': ['[rating:natural_light] weighs too little.']})
         review = self.request('/api/rerank')['last_rerank']['review']
         self.assertEqual(review['state'], 'done')
         self.assertEqual(review['result'], result)
-        self.assertEqual(result['findings'], ['Check the feature coverage.'])
+        self.assertEqual(result['findings'], ['rating:natural_light weighs too little.'])
         self.assertIn('before', result['check'])
         self.assertIn('after', result['check'])
 
     def test_rerank_requires_authentication_same_origin_and_an_empty_json_object(self):
-        for body, headers, code in [(None, {'Authorization': ''}, 401), ({}, {'Authorization': ''}, 401),
-                                    ({}, {'Origin': 'https://evil.example'}, 403),
-                                    ({}, {'Content-Type': 'text/plain'}, 400), ({'seed': 1}, {}, 400)]:
-            with self.subTest(body=body, headers=headers), self.assertRaises(HTTPError) as raised:
-                self.request('/api/rerank', body, headers)
-            self.assertEqual(raised.exception.code, code)
+        with self.assertRaises(HTTPError) as raised:
+            self.request('/api/rerank', headers={'Authorization': ''})
+        self.assertEqual(raised.exception.code, 401)
+        padded = b'{}'.ljust(99000)
+        for content, headers, status in [(b'', {'Authorization': ''}, '401 Unauthorized'),
+                                         (b'{}', {'Authorization': ''}, '401 Unauthorized'),
+                                         (padded, {'Authorization': ''}, '401 Unauthorized'),
+                                         (padded, {'Origin': 'https://evil.example'}, '403 Forbidden'),
+                                         (padded, {'Content-Type': 'text/plain'}, '400 Bad Request'),
+                                         (b'{}'.ljust(200000), {}, '400 Bad Request'),
+                                         (b'{"seed": 1}', {}, '400 Bad Request')]:
+            with self.subTest(length=len(content), headers=headers):
+                for _ in range(200):
+                    status_line, reply = self.raw_post('/api/rerank', content, headers)
+                    self.assertEqual(status_line, 'HTTP/1.0 ' + status)
+                    self.assertEqual(list(reply), ['error'])
         self.assertIsNone(self.store.last_rerank())
 
     def test_polling_preserves_reverted_moves_flags_and_both_check_values_without_starting_work(self):
@@ -54,9 +64,9 @@ class RerankServerTests(GalleryServerCase):
         ranked = self.store.ranked_listings()
         favorite = min(identifiers[:5], key=lambda identifier: ranked[identifier]['rank'])
         result = save_review(self.store, {'rerank': summary['id'], 'reasons': [],
-            'moves': [{'id': favorite, 'to_rank': 30, 'reason': 'The record leaves light uncertain.', 'confidence': 0.7}],
-            'flags': [{'id': favorite, 'kind': 'like', 'preference': 'Lots of daylight', 'note': 'Check the light.'}],
-            'findings': ['Some records leave the light unknown.']})
+            'moves': [{'id': favorite, 'to_rank': 30, 'reason': 'The model weighs [rating:natural_light] too much.', 'confidence': 0.7}],
+            'flags': [{'id': favorite, 'kind': 'like', 'preference': 'Lots of daylight'}],
+            'findings': ['[price] weighs too little.']})
         self.assertEqual(result['outcome'], 'reverted')
         self.assertGreater(result['check']['after']['mean'], result['check']['before']['mean'])
         revision = self.store.revision()

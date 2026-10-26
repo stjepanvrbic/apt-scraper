@@ -764,15 +764,32 @@ def held_out_ranks(model_design, held_out):
 
 @dataclass(frozen=True)
 class Model:
+    """The scoring model fitted at its (prior scale, weak-negative weight): the design, the fit, and the likelihood's
+    rows and the prior it was fitted on, from which the leave-one-out check refits."""
     design: Design
     fit: Fit
     scale: float
     unlabeled_weight: float
-    held_out_scores: dict
+    observations: Observations
+    prior: tuple
+
+
+@dataclass(frozen=True)
+class Check:
+    """The leave-one-out check of a model: each listing's score in the fit without one favorite's labels, by
+    favorite."""
+    design: Design
+    scores: dict
 
     @cached_property
-    def held_out(self):
-        return held_out_ranks(self.design, self.held_out_scores)
+    def ranks(self):
+        return held_out_ranks(self.design, self.scores)
+
+
+def leave_one_out(model):
+    """The converged leave-one-out check of a fitted model."""
+    mean, precision = model.prior
+    return Check(model.design, held_out_scores(model.design, model.fit, model.observations, model.unlabeled_weight, mean, precision))
 
 
 def summary_of(held_out):
@@ -785,7 +802,7 @@ def fit_model(inputs, hyperparameters=None, *, weak_labels=None, warm_start=None
     TUNING_FAVORITES favorites, the leave-one-out check chooses them: first the weak-negative weight among
     UNLABELED_WEIGHTS at the first of PRIOR_SCALES, then the prior scale among PRIOR_SCALES at that weight, each time
     the one whose approximate check, held_out_fit without converge, gives the favorites the best mean held-out rank,
-    the earlier on a tie. Before that, DEFAULT_HYPERPARAMETERS. The held-out ranks it reports come from converged fits.
+    the earlier on a tie. Before that, DEFAULT_HYPERPARAMETERS. The converged check is leave_one_out on the result.
     warm_start reuses a model fitted to the same inputs when only diagnostic labels change."""
     model_design = warm_start.design if warm_start else design(inputs)
     dense_count = model_design.dense_count
@@ -810,7 +827,7 @@ def fit_model(inputs, hyperparameters=None, *, weak_labels=None, warm_start=None
     _, mean, precision, data, full = candidate(scale, unlabeled_weight)
     if tuning:
         full = settled(data, full.weights, mean, precision, dense_count)
-    return Model(model_design, full, scale, unlabeled_weight, held_out_scores(model_design, full, data, unlabeled_weight, mean, precision))
+    return Model(model_design, full, scale, unlabeled_weight, data, (mean, precision))
 
 
 def display(model_design, index, name):
@@ -924,8 +941,9 @@ def reason(model_design, details, index, *, exploration):
 
 
 def explore(model_design, fit_result, order, seed):
-    """Two listings for EXPLORATION_RANKS, by posterior sampling: each draw of the weights from the Laplace posterior
-    picks the unlabeled ranked listing outside the mean's top that scores highest under it."""
+    """Up to one listing for each of EXPLORATION_RANKS, by posterior sampling: each draw of the weights from the Laplace
+    posterior picks the unlabeled ranked listing outside the mean's top that scores highest under it and is not drawn
+    yet. Fewer such listings give fewer exploration listings."""
     keep = TOP - len(EXPLORATION_RANKS)
     candidates = [index for index in order[keep:] if not labeled(model_design.listings[model_design.ids[index]])]
     generator = random.Random(seed)
@@ -948,9 +966,10 @@ def ranked_order(model_design, weights):
 
 def rank_listings(inputs, seed, *, model=None):
     """The rerank's result: each ranked listing's rank, reason, explanation and exploration mark, the reason each
-    other listing shown in Rankings is not ranked, and the summary with each favorite's held-out rank.
-    model, when supplied, is already fitted to these inputs."""
+    other listing shown in Rankings is not ranked, and the summary with each favorite's held-out rank from the
+    leave-one-out check. model, when supplied, is already fitted to these inputs."""
     model = model or fit_model(inputs)
+    check = leave_one_out(model)
     model_design, weights = model.design, model.fit.weights
     order = ranked_order(model_design, weights)
     exploring = explore(model_design, model.fit, order, seed) if len(order) > TOP else []
@@ -967,17 +986,17 @@ def rank_listings(inputs, seed, *, model=None):
                               'explanation': details, 'exploration': index in exploring}
     unranked = {listing['id']: {'fingerprint': listing['fingerprint'], 'reason': 'Not ranked yet: waiting for its feature record.'}
                 for listing in inputs['listings'] if listing['rankable'] and listing['id'] not in ranked}
-    held_out = [{'id': identifier, 'title': title(model_design.listings[identifier]), 'rank': rank} for identifier, rank in model.held_out.items()]
+    held_out = [{'id': identifier, 'title': title(model_design.listings[identifier]), 'rank': rank} for identifier, rank in check.ranks.items()]
     values = scores(model_design.likelihood_rows, weights, model_design.dense_count)
     position = {identifier: index for index, identifier in enumerate(model_design.ids)}
     return {'ranked': ranked, 'unranked': unranked, 'check': {
         'order': [model_design.ids[index] for index in rest], 'exploration': [model_design.ids[index] for index in exploring],
         'scores': [values[index] for index in rest],
         'held_out': {favorite: {'own': held[position[favorite]], 'scores': [held[index] for index in rest]}
-                     for favorite, held in model.held_out_scores.items()},
+                     for favorite, held in check.scores.items()},
     }, 'summary': {
         'ranked': len(ranked), 'waiting_for_features': len(unranked),
-        'favorites': len(model_design.favorites), 'held_out': held_out, **{f'held_out_{key}': value for key, value in summary_of(model.held_out).items()},
+        'favorites': len(model_design.favorites), 'held_out': held_out, **{f'held_out_{key}': value for key, value in summary_of(check.ranks).items()},
         'exploration': [model_design.ids[index] for index in exploring], 'seed': seed,
         'prior_scale': model.scale, 'unlabeled_weight': model.unlabeled_weight,
         'weights': {column.name: weight for column, weight in zip(model_design.columns, weights[1:])},
