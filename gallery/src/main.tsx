@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client';
-import { createTheme, MantineProvider } from '@mantine/core';
+import { createTheme, MantineProvider, Pagination } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import '@mantine/core/styles.css';
 import '@fontsource-variable/inter';
@@ -13,6 +13,9 @@ const theme = createTheme({
   primaryColor: 'blue',
   defaultRadius: 'md',
   headings: { fontWeight: '600' },
+  components: { Pagination: Pagination.extend({ defaultProps: {
+    getControlProps: control => ({ 'aria-label': `${control} page` }),
+  } }) },
   colors: { blue: ['#eef6ff', '#dbeaff', '#b6d3fc', '#8abbfa', '#63a7f8', '#479af8', '#0f68ea', '#0a5ed4', '#0653bd', '#0049a8'] },
 });
 const client = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false } } });

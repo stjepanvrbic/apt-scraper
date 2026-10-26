@@ -1,8 +1,9 @@
 """The scoring model: a Bayesian logistic regression over the listings' feature records, fitted in code.
 
 The features are the columns `design` builds from each listing's feature record (record.py), its code-derived
-features (code_features.py), the criteria areas whose search found it, its nearness to the favorites and its
-judgments of the stated preferences no other feature expresses. Numeric columns are centered and scaled to standard
+features (code_features.py) with its distances to the nearest rapid-transit station and to each place, the criteria
+areas whose search found it, its nearness to the favorites and its judgments of the stated preferences no other
+feature expresses. Numeric columns are centered and scaled to standard
 deviation 0.5 and binary columns centered (Gelman et al. 2008, "A weakly informative default prior distribution for
 logistic and other regression models"). A value the listing does not state is the column mean, so it counts neither
 way.
@@ -27,9 +28,11 @@ import math
 import random
 from dataclasses import dataclass
 from functools import cached_property
+from math import sumprod as dot
 from operator import mul
 from statistics import fmean, median, pstdev
 
+from code_features import distance_km
 from record import CATEGORIES, RATINGS
 
 STATED_WEIGHT = 1.0
@@ -43,7 +46,6 @@ DEFAULT_HYPERPARAMETERS = (PRIOR_SCALES[0], UNLABELED_WEIGHTS[0])
 TUNING_FAVORITES = 3
 IMPORTANCE = {'low': 0.25, 'medium': 0.5, 'high': 1.0}
 LOCATION_BANDWIDTH_KM = 1.0
-EARTH_RADIUS_KM = 6371.0
 TOP = 20
 EXPLORATION_RANKS = (7, 14)
 QUESTION_CANDIDATES = 40
@@ -55,6 +57,8 @@ HELD_OUT_ITERATIONS = 30
 REASON_UP = 3
 REASON_DOWN = 2
 REASON_THRESHOLD = 0.05
+REASON_LIMIT = 500
+SINGLE_LABEL_WEIGHT = 0.25
 SENTIMENTS = ('positive', 'negative', 'mixed', 'neutral')
 DIRECTIONS = ('like', 'dislike')
 CODE_NUMBERS = {
@@ -74,10 +78,6 @@ FLAG_WORDS = {
 CATEGORY_WORDS = {'floor': '{} floor', 'style': '{} style', 'outdoor_space': 'outdoor space: {}', 'building_type': '{} building'}
 
 
-def dot(left, right):
-    return sum(map(mul, left, right))
-
-
 def sigmoid(value):
     if value >= 0:
         return 1 / (1 + math.exp(-value))
@@ -92,11 +92,12 @@ def softplus(value):
 def cholesky(matrix):
     """The rows of the lower triangular L with L L^T = matrix, for a symmetric positive definite matrix, each up to its
     diagonal."""
-    lower = []
+    lower, prefixes = [], []
     for row, values in enumerate(matrix):
         current = []
         for column in range(row):
-            current.append((values[column] - dot(current, lower[column])) / lower[column][column])
+            current.append((values[column] - dot(current, prefixes[column])) / lower[column][column])
+        prefixes.append(current[:])
         current.append(math.sqrt(values[row] - dot(current, current)))
         lower.append(current)
     return lower
@@ -118,9 +119,13 @@ class Factor:
     def forward(self, vector):
         """L^-1 vector."""
         result = []
-        for index, row in enumerate(self.lower):
-            result.append((vector[index] - dot(row, result)) / row[index])
+        for index, row in enumerate(self.prefixes):
+            result.append((vector[index] - dot(row, result)) / self.lower[index][index])
         return result
+
+    @cached_property
+    def prefixes(self):
+        return [row[:-1] for row in self.lower]
 
     def backward(self, vector):
         """L^-T vector."""
@@ -246,7 +251,7 @@ def expressed(readings, kind, phrase):
     return bool(readings.get((kind, phrase)))
 
 
-def reading_vocabulary(tags, areas):
+def reading_vocabulary(tags, areas, places=()):
     """Every feature a reading of a note or a stated preference may name, with what a like of it means."""
     vocabulary = {f'rating:{name}': f'toward {high} (5), away from {low} (1)' for name, (low, high) in RATINGS.items()}
     vocabulary.update({f'{name}:{value}': f'{name.replace("_", " ")} is {value}' for name, values in CATEGORIES.items() for value in values})
@@ -255,6 +260,8 @@ def reading_vocabulary(tags, areas):
     vocabulary.update({'price': 'a higher monthly price', 'size': 'a larger size', 'price_per_sqft': 'a higher price per square foot',
                        'bedrooms': 'more bedrooms', 'bathrooms': 'more bathrooms'})
     vocabulary.update({f'area:{area}': f'in {area}' for area in areas})
+    vocabulary['station_distance'] = 'a longer distance to the nearest rapid-transit station'
+    vocabulary.update({f'place:{place}': f'a longer distance to {place}' for place in places})
     vocabulary.update({f'tag:{tag}': f'has the trait or concern "{tag}"' for tag in tags})
     return vocabulary
 
@@ -292,13 +299,6 @@ def validate_note_reading(reading, vocabulary):
     if set(reading['likes']) & set(reading['dislikes']):
         raise ValueError('A feature is either liked or disliked in one note.')
     return {'sentiment': reading['sentiment'], 'likes': list(dict.fromkeys(reading['likes'])), 'dislikes': list(dict.fromkeys(reading['dislikes']))}
-
-
-def distance_km(first, second):
-    latitude = math.radians((first[0] + second[0]) / 2)
-    north = math.radians(second[0] - first[0])
-    east = math.radians(second[1] - first[1]) * math.cos(latitude)
-    return EARTH_RADIUS_KM * math.hypot(north, east)
 
 
 def kernel(first, second):
@@ -346,6 +346,10 @@ def raw_values(listing, phrases, areas, density):
         values.update({f'area:{area}': float(area in listing['areas']) for area in areas})
     if density is not None:
         values['near_favorites'] = density
+    if listing['code'].get('station_distance_km') is not None:
+        values['station_distance'] = listing['code']['station_distance_km']
+    for place, distance in (listing['code'].get('place_distances_km') or {}).items():
+        values[f'place:{place}'] = distance
     for _, phrase in phrases:
         verdict = (listing['judgments'].get(phrase) or {}).get('verdict')
         if verdict in ('has', 'rules out'):
@@ -372,11 +376,17 @@ def prior_means(inputs, phrases):
             add(name, NOTE_WEIGHT)
         for name in reading['dislikes']:
             add(name, -NOTE_WEIGHT)
-    areas = inputs['settings'].get('location_priorities', {}).get('areas', {})
+    priorities = inputs['settings'].get('location_priorities', {})
+    areas = priorities.get('areas', {})
     for area, importance in areas.items():
         add(f'area:{area}', IMPORTANCE[importance] * STATED_WEIGHT)
     if areas:
         add('near_favorites', max(IMPORTANCE[importance] for importance in areas.values()) * STATED_WEIGHT)
+    if 'rapid_transit' in priorities:
+        add('station_distance', -IMPORTANCE[priorities['rapid_transit']] * STATED_WEIGHT)
+    if 'places' in priorities:
+        for place in inputs['settings'].get('places', []):
+            add(f'place:{place["name"]}', -IMPORTANCE[priorities['places']] * STATED_WEIGHT)
     return means
 
 
@@ -429,7 +439,7 @@ def design(inputs):
     columns, matrix = [], []
     for name in sorted(names, key=lambda name: (sparse_column(name), name)):
         known = [values[name] for values in raw if name in values]
-        numeric = name.startswith('rating:') or name in CODE_NUMBERS or name == 'near_favorites'
+        numeric = name.startswith(('rating:', 'place:')) or name in (*CODE_NUMBERS, 'near_favorites', 'station_distance')
         spread = pstdev(known)
         if spread == 0:
             continue
@@ -471,17 +481,18 @@ def label(listing, sentiment):
     return None
 
 
-def observations(model_design, inputs, unlabeled_weight, rows=None, leave_out=None):
+def observations(model_design, inputs, unlabeled_weight, rows=None, leave_out=None, *, weak_labels=None):
     """The likelihood's rows: each listing's label, or a weak negative for a ranked listing without one, and each
-    pairwise answer. leave_out is a listing whose labels and answers are left out, rows the listing rows to use."""
+    pairwise answer. leave_out is a listing whose labels and answers are left out, so it counts as a listing without
+    a label, rows the listing rows to use."""
     rows = model_design.likelihood_rows if rows is None else rows
     position = {identifier: index for index, identifier in enumerate(model_design.ids)}
     result = Observations([], [], [], [], [], {})
     for index, identifier in enumerate(model_design.ids):
-        if identifier == leave_out:
-            continue
         listing = model_design.listings[identifier]
-        labeled_as = label(listing, inputs['sentiments'].get(identifier))
+        labeled_as = None if identifier == leave_out else label(listing, inputs['sentiments'].get(identifier))
+        if labeled_as is None and weak_labels:
+            labeled_as = weak_labels.get(identifier)
         if labeled_as is None and listing['rankable']:
             labeled_as = (0, unlabeled_weight)
         if labeled_as is not None:
@@ -500,16 +511,18 @@ def observations(model_design, inputs, unlabeled_weight, rows=None, leave_out=No
     return observed(result.rows, result.labels, result.weights, result.listings, result.pairs)
 
 
-def held_out_observations(model_design, data, favorite):
-    """The full fit's rows with the favorite's rows weighing nothing and the favorites' nearness computed without it.
-    The sparse values do not change, so the rows keep their holders."""
+def held_out_observations(model_design, data, favorite, own_weight):
+    """The full fit's rows with the favorite's own row a negative of own_weight, its answers weighing nothing and the
+    favorites' nearness computed without it. The sparse values do not change, so the rows keep their holders."""
     rows = model_design.rows_without[favorite]
     position = {identifier: index for index, identifier in enumerate(model_design.ids)}
     changed = rows is not model_design.likelihood_rows
     result = [rows[position[listing]] if listing is not None else difference(rows[position[pair[0]]], rows[position[pair[1]]]) if changed else row
               for row, listing, pair in zip(data.rows, data.listings, data.pairs)]
-    weights = [0.0 if listing == favorite or (pair and favorite in pair) else weight for weight, listing, pair in zip(data.weights, data.listings, data.pairs)]
-    return Observations(result, data.labels, weights, data.listings, data.pairs, data.holders)
+    labels = [0 if listing == favorite else value for value, listing in zip(data.labels, data.listings)]
+    weights = [own_weight if listing == favorite else 0.0 if pair and favorite in pair else weight
+               for weight, listing, pair in zip(data.weights, data.listings, data.pairs)]
+    return Observations(result, labels, weights, data.listings, data.pairs, data.holders)
 
 
 def difference(first, second):
@@ -631,30 +644,85 @@ def scores(rows, weights, dense_count):
     return [linear(row, head, sparse) for row in rows]
 
 
-def held_out_fit(model_design, inputs, full, data, unlabeled_weight, mean, precision, favorite, *, steps=None):
-    """The fit without one favorite's labels and answers, warm-started from the full fit. Its steps use the full
-    fit's Hessian with the left-out rows taken out by the Woodbury identity. With steps, it stops after that many,
-    which with one is the usual approximate leave-one-out; otherwise it runs until the change is below
-    HELD_OUT_TOLERANCE and finishes with Newton iterations if that takes longer than HELD_OUT_ITERATIONS."""
+def held_out_fit(model_design, full, data, unlabeled_weight, mean, precision, favorite, *, converge=True):
+    """The fit without one favorite's labels and answers, warm-started from the full fit, in which the favorite counts
+    as a listing without a label does: a weak negative when it is ranked. A held-out favorite stands for an unseen
+    listing, and with its row dropped instead, a model with a weight of its own for each listing would leave that
+    weight at its prior and rank the favorite above every weak negative.
+
+    One step takes out the favorite's rows with the full fit's Hessian less their curvature (the Woodbury identity),
+    the usual approximate leave-one-out. The weak negative then moves the weights along that Hessian's solve of the
+    favorite's row until the row's own score settles. Another step would overshoot instead, because the full fit is
+    confident of a favorite's score, so the row's curvature there is near zero. With converge, steps with that Hessian
+    and the weak negative's curvature where its score settled follow until the change is below HELD_OUT_TOLERANCE,
+    and Newton iterations finish if that takes longer than HELD_OUT_ITERATIONS."""
     dense_count = model_design.dense_count
     rows = model_design.rows_without[favorite]
-    reduced = held_out_observations(model_design, data, favorite)
     removed = [index for index, (listing, pair) in enumerate(zip(data.listings, data.pairs)) if listing == favorite or (pair and favorite in pair)]
-    updates = [[math.sqrt(full.curvature[index]) * value for value in expand(data.rows[index], len(mean))] for index in removed]
-    solved = [full.factor.solve(update) for update in updates]
-    inverse = invert([[(1.0 if row == column else 0.0) - dot(updates[row], solved[column]) for column in range(len(updates))]
-                      for row in range(len(updates))])
-    weights = list(full.weights)
-    for _ in range(steps or HELD_OUT_ITERATIONS):
-        direction, _ = gradient(reduced, weights, mean, precision, dense_count)
-        step = full.factor.solve(direction)
-        if updates:
-            correction = [dot(row, [dot(update, step) for update in updates]) for row in inverse]
-            step = [value + sum(solved[index][position] * correction[index] for index in range(len(updates))) for position, value in enumerate(step)]
+    vectors = [expand(data.rows[index], len(mean)) for index in removed]
+    curvature = [full.curvature[index] for index in removed]
+    solved = [full.factor.solve(vector) for vector in vectors]
+    solved_columns = list(zip(*solved))
+    inverse = invert([[(1.0 if row == column else 0.0) - curvature[row] * dot(vectors[row], solved[column]) for column in range(len(removed))]
+                      for row in range(len(removed))])
+
+    def solve(vector):
+        step = full.factor.solve(vector)
+        correction = [dot(row, [weight * dot(update, step) for weight, update in zip(curvature, vectors)]) for row in inverse]
+        return [value + dot(column, correction) for value, column in zip(step, solved_columns)]
+
+    direction, _ = gradient(held_out_observations(model_design, data, favorite, 0.0), full.weights, mean, precision, dense_count)
+    weights = [weight - change for weight, change in zip(full.weights, solve(direction))]
+    weak = unlabeled_weight if model_design.listings[favorite]['rankable'] else 0.0
+    position = removed.index(data.listings.index(favorite))
+    own = vectors[position]
+    lever = [dot(column, [row[position] for row in inverse]) for column in solved_columns]
+    leverage = dot(own, lever)
+    start = dot(own, weights)
+    settled_score = weak_negative_score(start, weak * leverage)
+    weights = [weight - (start - settled_score) / leverage * value for weight, value in zip(weights, lever)]
+    if not converge:
+        return rows, weights
+    probability = sigmoid(settled_score)
+    weak_curvature = weak * probability * (1 - probability)
+
+    def relabeled_solve(vector):
+        step = solve(vector)
+        coefficient = weak_curvature * dot(own, step) / (1 + weak_curvature * leverage)
+        return [value - coefficient * change for value, change in zip(step, lever)]
+
+    relabeled = held_out_observations(model_design, data, favorite, weak)
+    for _ in range(HELD_OUT_ITERATIONS):
+        step = relabeled_solve(gradient(relabeled, weights, mean, precision, dense_count)[0])
         weights = [weight - change for weight, change in zip(weights, step)]
-        if steps is None and max(map(abs, step), default=0) < HELD_OUT_TOLERANCE:
+        if max(map(abs, step), default=0) < HELD_OUT_TOLERANCE:
             return rows, weights
-    return rows, weights if steps else fit(reduced, mean, precision, dense_count, weights).weights
+    return rows, fit(relabeled, mean, precision, dense_count, weights).weights
+
+
+def weak_negative_score(start, weighted_leverage):
+    """The score z = start - weighted_leverage * sigmoid(z) of a row that joins the fit as a negative, from its score
+    start without it and its leverage times its weight, while the rest of the posterior stays quadratic. The root lies
+    between start - weighted_leverage and start, because the sigmoid lies between 0 and 1. Newton's method can cycle
+    around the sigmoid's bend, so a Newton step that would leave the bracket around the root, or would not halve the
+    step before it, bisects the bracket instead."""
+    low, high = start - weighted_leverage, start
+    score, previous_step = start, weighted_leverage
+    while True:
+        probability = sigmoid(score)
+        residual = score - start + weighted_leverage * probability
+        if residual > 0:
+            high = score
+        else:
+            low = score
+        step = residual / (1 + weighted_leverage * probability * (1 - probability))
+        candidate = score - step
+        if not low < candidate < high or abs(step) > previous_step / 2:
+            candidate = (low + high) / 2
+        previous_step = abs(candidate - score)
+        if previous_step < HELD_OUT_TOLERANCE or high - low < HELD_OUT_TOLERANCE:
+            return candidate
+        score = candidate
 
 
 def invert(matrix):
@@ -673,15 +741,22 @@ def invert(matrix):
     return [row[size:] for row in augmented]
 
 
-def held_out_ranks(model_design, inputs, full, data, unlabeled_weight, mean, precision, *, steps=None):
-    """Each favorite's rank among the ranked listings that are not favorites, when the model is fitted without it."""
+def held_out_scores(model_design, full, data, unlabeled_weight, mean, precision, *, converge=True):
+    """Each listing's score when the model is fitted without one favorite's labels, by favorite."""
+    result = {}
+    for favorite in model_design.favorites:
+        rows, weights = held_out_fit(model_design, full, data, unlabeled_weight, mean, precision, favorite, converge=converge)
+        result[favorite] = scores(rows, weights, model_design.dense_count)
+    return result
+
+
+def held_out_ranks(model_design, held_out):
+    """Each favorite's rank among the ranked listings that are not favorites, from the scores of the fit without it."""
     favorites = set(model_design.favorites)
     others = [index for index, identifier in enumerate(model_design.ids)
               if identifier not in favorites and model_design.listings[identifier]['rankable']]
     ranks = {}
-    for favorite in model_design.favorites:
-        rows, weights = held_out_fit(model_design, inputs, full, data, unlabeled_weight, mean, precision, favorite, steps=steps)
-        values = scores(rows, weights, model_design.dense_count)
+    for favorite, values in held_out.items():
         own = values[model_design.ids.index(favorite)]
         ranks[favorite] = 1 + sum(values[index] > own for index in others)
     return ranks
@@ -693,7 +768,11 @@ class Model:
     fit: Fit
     scale: float
     unlabeled_weight: float
-    held_out: dict
+    held_out_scores: dict
+
+    @cached_property
+    def held_out(self):
+        return held_out_ranks(self.design, self.held_out_scores)
 
 
 def summary_of(held_out):
@@ -701,24 +780,25 @@ def summary_of(held_out):
     return {'median': median(values) if values else None, 'mean': fmean(values) if values else None}
 
 
-def fit_model(inputs, hyperparameters=None):
+def fit_model(inputs, hyperparameters=None, *, weak_labels=None, warm_start=None):
     """The fitted scoring model with the given (prior scale, weak-negative weight). Without them, once there are
     TUNING_FAVORITES favorites, the leave-one-out check chooses them: first the weak-negative weight among
     UNLABELED_WEIGHTS at the first of PRIOR_SCALES, then the prior scale among PRIOR_SCALES at that weight, each time
-    the one whose approximate check, one step from the full fit, gives the favorites the best mean held-out rank, the
-    earlier on a tie. Before that, DEFAULT_HYPERPARAMETERS. The held-out ranks it reports come from converged fits."""
-    model_design = design(inputs)
+    the one whose approximate check, held_out_fit without converge, gives the favorites the best mean held-out rank,
+    the earlier on a tie. Before that, DEFAULT_HYPERPARAMETERS. The held-out ranks it reports come from converged fits.
+    warm_start reuses a model fitted to the same inputs when only diagnostic labels change."""
+    model_design = warm_start.design if warm_start else design(inputs)
     dense_count = model_design.dense_count
     tuning = hyperparameters is None and len(model_design.favorites) >= TUNING_FAVORITES
-    fits, start = {}, [None]
+    fits, start = {}, [warm_start.fit.weights if warm_start else None]
 
     def candidate(scale, unlabeled_weight):
         if (scale, unlabeled_weight) not in fits:
             mean, precision = prior(model_design, scale)
-            data = observations(model_design, inputs, unlabeled_weight)
+            data = observations(model_design, inputs, unlabeled_weight, weak_labels=weak_labels)
             full = fit(data, mean, precision, dense_count, start[0], settle=not tuning)
             start[0] = full.weights
-            check = summary_of(held_out_ranks(model_design, inputs, full, data, unlabeled_weight, mean, precision, steps=1))['mean'] if tuning else None
+            check = summary_of(held_out_ranks(model_design, held_out_scores(model_design, full, data, unlabeled_weight, mean, precision, converge=False)))['mean'] if tuning else None
             fits[scale, unlabeled_weight] = (check, mean, precision, data, full)
         return fits[scale, unlabeled_weight]
 
@@ -730,7 +810,7 @@ def fit_model(inputs, hyperparameters=None):
     _, mean, precision, data, full = candidate(scale, unlabeled_weight)
     if tuning:
         full = settled(data, full.weights, mean, precision, dense_count)
-    return Model(model_design, full, scale, unlabeled_weight, held_out_ranks(model_design, inputs, full, data, unlabeled_weight, mean, precision))
+    return Model(model_design, full, scale, unlabeled_weight, held_out_scores(model_design, full, data, unlabeled_weight, mean, precision))
 
 
 def display(model_design, index, name):
@@ -764,6 +844,10 @@ def display(model_design, index, name):
         distances = [distance_km(here, model_design.coordinates[favorite]) for favorite in model_design.favorites
                      if favorite in model_design.coordinates and favorite != model_design.ids[index]]
         return f'{min(distances):.1f} km from the nearest favorite' if distances else None
+    if name == 'station_distance':
+        return f'{raw[name]:.1f} km to the nearest station, {code["nearest_station"]}'
+    if kind == 'place':
+        return f'{raw[name]:.1f} km from {key}'
     currency = f' {code["currency"]}' if code.get('currency') else ''
     return {
         'price': lambda: f'{code["monthly_price"]:,.0f}{currency} a month',
@@ -808,27 +892,35 @@ def explanation(model_design, contributed, index):
     }
 
 
+def feature_reason(contributions):
+    """The part of a reason that names the features that moved the score most, as the listing's record states them."""
+    cited = [part for part in contributions if part['value'] is not None and abs(part['contribution']) >= REASON_THRESHOLD]
+    up = [part['value'] for part in cited if part['contribution'] > 0][:REASON_UP]
+    down = [part['value'] for part in cited if part['contribution'] < 0][:REASON_DOWN]
+    sentences = [f'For it: {", ".join(up)}.'] if up else []
+    if down:
+        sentences.append(f'Against it: {", ".join(down)}.')
+    return ' '.join(sentences) or 'Close to the average listing.'
+
+
+def compose_reason(features, *, exploration, code_only, similar_favorite):
+    """A listing's one-line reason: its exploration mark, a note when it is ranked from code features only, the part
+    that names its features, and its most similar favorite."""
+    sentences = ['Shown to learn your taste.'] if exploration else []
+    if code_only:
+        sentences.append('Ranked from code features only, because extraction failed 3 times.')
+    sentences.append(features)
+    if similar_favorite:
+        sentences.append(f'Most like your favorite {similar_favorite["title"]}.')
+    return ' '.join(sentences)[:REASON_LIMIT]
+
+
 def reason(model_design, details, index, *, exploration):
     """One line naming the features that moved the score most, as the listing's record states them, and the most
     similar favorite."""
-    listing = model_design.listings[model_design.ids[index]]
-    cited = [part for part in details['contributions'] if part['value'] is not None and abs(part['contribution']) >= REASON_THRESHOLD]
-    up = [part['value'] for part in cited if part['contribution'] > 0][:REASON_UP]
-    down = [part['value'] for part in cited if part['contribution'] < 0][:REASON_DOWN]
-    sentences = []
-    if exploration:
-        sentences.append('Shown to learn your taste.')
-    if listing['record'] is None:
-        sentences.append('Ranked from code features only, because extraction failed 3 times.')
-    if up:
-        sentences.append(f'For it: {", ".join(up)}.')
-    if down:
-        sentences.append(f'Against it: {", ".join(down)}.')
-    if not up and not down:
-        sentences.append('Close to the average listing.')
-    if details['similar_favorite']:
-        sentences.append(f'Most like your favorite {details["similar_favorite"]["title"]}.')
-    return ' '.join(sentences)[:500]
+    return compose_reason(feature_reason(details['contributions']), exploration=exploration,
+                          code_only=model_design.listings[model_design.ids[index]]['record'] is None,
+                          similar_favorite=details['similar_favorite'])
 
 
 def explore(model_design, fit_result, order, seed):
@@ -854,10 +946,11 @@ def ranked_order(model_design, weights):
     return sorted(rankable, key=lambda index: (-values[index], model_design.ids[index]))
 
 
-def rank_listings(inputs, seed):
+def rank_listings(inputs, seed, *, model=None):
     """The rerank's result: each ranked listing's rank, reason, explanation and exploration mark, the reason each
-    other listing shown in Rankings is not ranked, and the summary with each favorite's held-out rank."""
-    model = fit_model(inputs)
+    other listing shown in Rankings is not ranked, and the summary with each favorite's held-out rank.
+    model, when supplied, is already fitted to these inputs."""
+    model = model or fit_model(inputs)
     model_design, weights = model.design, model.fit.weights
     order = ranked_order(model_design, weights)
     exploring = explore(model_design, model.fit, order, seed) if len(order) > TOP else []
@@ -875,13 +968,36 @@ def rank_listings(inputs, seed):
     unranked = {listing['id']: {'fingerprint': listing['fingerprint'], 'reason': 'Not ranked yet: waiting for its feature record.'}
                 for listing in inputs['listings'] if listing['rankable'] and listing['id'] not in ranked}
     held_out = [{'id': identifier, 'title': title(model_design.listings[identifier]), 'rank': rank} for identifier, rank in model.held_out.items()]
-    return {'ranked': ranked, 'unranked': unranked, 'summary': {
+    values = scores(model_design.likelihood_rows, weights, model_design.dense_count)
+    position = {identifier: index for index, identifier in enumerate(model_design.ids)}
+    return {'ranked': ranked, 'unranked': unranked, 'check': {
+        'order': [model_design.ids[index] for index in rest], 'exploration': [model_design.ids[index] for index in exploring],
+        'scores': [values[index] for index in rest],
+        'held_out': {favorite: {'own': held[position[favorite]], 'scores': [held[index] for index in rest]}
+                     for favorite, held in model.held_out_scores.items()},
+    }, 'summary': {
         'ranked': len(ranked), 'waiting_for_features': len(unranked),
         'favorites': len(model_design.favorites), 'held_out': held_out, **{f'held_out_{key}': value for key, value in summary_of(model.held_out).items()},
         'exploration': [model_design.ids[index] for index in exploring], 'seed': seed,
         'prior_scale': model.scale, 'unlabeled_weight': model.unlabeled_weight,
         'weights': {column.name: weight for column, weight in zip(model_design.columns, weights[1:])},
+        'findings': state_findings(model_design, weights),
     }}
+
+
+def state_findings(model_design, weights):
+    """What looks wrong in the fitted model that code can tell: a large weight on a present-or-absent feature that a
+    single labeled listing carries, because one label is not evidence of a taste."""
+    findings = []
+    for column, weight in zip(model_design.columns, weights[1:]):
+        if column.numeric or abs(weight) < SINGLE_LABEL_WEIGHT:
+            continue
+        carriers = [identifier for index, identifier in enumerate(model_design.ids)
+                    if labeled(model_design.listings[identifier]) and model_design.raw[index].get(column.name) == 1.0]
+        if len(carriers) == 1:
+            findings.append(f'The weight of {column.name} ({weight:+.2f}) rests on a single labeled listing, '
+                            f'{title(model_design.listings[carriers[0]])}.')
+    return findings
 
 
 def questions(inputs, hyperparameters, count, answered):

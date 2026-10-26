@@ -96,6 +96,10 @@ if [ -z "$(hermes -p "$PROFILE_NAME" config get delegation.model)" ]; then
 fi
 hermes -p "$PROFILE_NAME" cron resume apt-scraper-features
 
+# The ranking review job checks every minute whether a rerank's review pass waits, and wakes the model only then.
+step 'Ranking review job'
+hermes -p "$PROFILE_NAME" cron resume apt-scraper-review
+
 step 'Claude subscription provider plugin'
 hermes -p "$PROFILE_NAME" plugins install "$PLUGIN_NAME" --force --enable
 

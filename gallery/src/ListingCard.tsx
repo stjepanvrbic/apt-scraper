@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ActionIcon, AspectRatio, Badge, Box, Button, Card, Divider, Group, Image, Paper, Stack, Text, Title, UnstyledButton } from '@mantine/core';
 import { IconHeart, IconPhoto } from '@tabler/icons-react';
 import { period, price, title, viewingTime, type ListingSummary } from './model';
+import { DistanceAttribution, Exploration } from './RankingExplanation';
 
 export type Save = (path: string, body: Record<string, unknown>) => Promise<boolean>;
 export const listingPath = (listing: ListingSummary, action: string) => `/api/listings/${encodeURIComponent(listing.id)}/${action}`;
@@ -26,7 +27,7 @@ export function ListingCard(props: CardProps) {
     <UnstyledButton onClick={open} aria-label={`View ${title(listing)}`} className="photo-button">
       <Photo listing={listing} />
     </UnstyledButton>
-      {props.variant !== 'compare' && <><Badge className="rank-badge" color="dark" variant="white" radius="sm">{listing.analysis_current && listing.rank ? `#${listing.rank} match` : 'Awaiting ranking'}</Badge>
+      {props.variant !== 'compare' && <><Badge className="rank-badge" color="dark" variant="white" radius="sm">{listing.rank ? `#${listing.rank} match` : 'Awaiting ranking'}</Badge>
       <ActionIcon className="favorite-button" variant="white" color={listing.favorite ? 'pink' : 'dark'} size={44} radius="xl"
         aria-label={`${listing.favorite ? 'Unfavorite' : 'Favorite'} ${title(listing)}`} aria-pressed={listing.favorite}
         disabled={busy || listing.dismissed} onClick={() => props.save(listingPath(listing, 'feedback'), { favorite: !listing.favorite })}>
@@ -44,7 +45,8 @@ export function ListingCard(props: CardProps) {
         <Button size="md" fullWidth aria-label={`Choose this apartment: ${title(listing)}`} disabled={busy} loading={props.choosing} onClick={props.choose}>Choose this apartment</Button>
         <Button variant="subtle" color="dark" fullWidth onClick={open}>View details</Button>
       </Stack> : <><Divider />
-      <Text size="sm" c="dimmed" mih={42}>{listing.analysis_current ? listing.reason : 'Awaiting ranking.'}</Text>
+      {listing.exploration && <Exploration />}
+      <div><Text size="sm" c="dimmed" mih={42}>{listing.reason ?? 'Awaiting ranking.'}</Text><DistanceAttribution text={listing.reason} /></div>
       <Badge variant="light" color={listing.status === 'available' ? 'green' : 'gray'}>{listing.status === 'available' ? 'Available' : 'Unavailable'}</Badge>
       {listing.viewing && <Text size="sm" fw={600}>{viewingTime(listing.viewing.time)}</Text>}
       {listing.contact && <Badge variant="light" color={listing.contact.status === 'pending' ? 'gray' : 'blue'}>

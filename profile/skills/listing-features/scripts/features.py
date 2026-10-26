@@ -1,9 +1,10 @@
 """Keeps a feature record for every listing the ranking needs, read once per listing content.
 
 Commands:
-  features.py run           one pass of the scheduled job apt-scraper-features: prepares the photos of the listings
-                            waiting for extraction, prints one extraction task per listing for the agent, and ends with
-                            a line that tells Hermes whether to wake the agent. Never fails.
+  features.py run           one pass of the scheduled job apt-scraper-features: fetches the rapid-transit stations
+                            once per transit feed, prepares the photos of the listings waiting for extraction, prints
+                            one extraction task per listing for the agent, and ends with a line that tells Hermes
+                            whether to wake the agent. Never fails.
   features.py save FILE     the extraction child's command: save one record from a JSON file in the scratch directory,
                             then delete the file
   features.py tags          the tag list, most used first, which the extraction child reads before choosing tags
@@ -43,6 +44,7 @@ sys.path.insert(0, str(SKILLS / 'gallery' / 'scripts'))
 sys.path.insert(0, str(SKILLS / 'contact' / 'scripts'))
 
 from contact import NotConnected, tell_user, usable  # noqa: E402
+from geodata import SourceUnavailable, fetch_stations  # noqa: E402
 from record import CATEGORIES, FLAGS, NOT_SHOWN, RATINGS, ROOM_TYPES, UNIT_LEVELS, choices, validate_judgments  # noqa: E402
 from scoring import stated_phrases  # noqa: E402
 from scratch import read_scratch_object, scratch_directory  # noqa: E402
@@ -54,6 +56,7 @@ PARALLEL_TASKS = 10
 SUBAGENTS_PER_WAKE = 50
 PREPARE_BUDGET = timedelta(minutes=10)
 PHOTO_PATIENCE = timedelta(hours=1)
+STATION_RETRY = timedelta(hours=6)
 DOWNLOADS = 8
 JUDGMENT_BATCH = 25
 NOTE_BATCH = 25
@@ -157,14 +160,15 @@ def photo_overview(count):
 
 class RunState:
     """The job's records next to the listing store: the last run's failure, the listings whose photos could not be
-    downloaded, since when and why, and the model reads the last run handed to the agent. A read handed over that still
+    downloaded, since when and why, the transit feed whose stations could not be fetched, since when, when last tried
+    and why, and the model reads the last run handed to the agent. A read handed over that still
     waits at the next run counts as a failed attempt then, so an attempt counts only once its wake has ended."""
 
     def __init__(self, path):
         self.path = path
 
     def load(self):
-        return {'problem': None, 'photos_unavailable': {}, 'handed': [],
+        return {'problem': None, 'photos_unavailable': {}, 'stations_unavailable': None, 'handed': [],
                 **(json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {})}
 
     def update(self, **values):
@@ -176,8 +180,8 @@ class RunState:
 
 
 class Features:
-    def __init__(self, store, state, workspace, fetch, now):
-        self.store, self.state, self.workspace, self.fetch, self.now = store, state, workspace, fetch, now
+    def __init__(self, store, state, workspace, fetch, now, stations):
+        self.store, self.state, self.workspace, self.fetch, self.now, self.stations = store, state, workspace, fetch, now, stations
 
     def outstanding(self):
         """The listings without a record of their current content, and the extracted listings with stated preferences not
@@ -217,6 +221,7 @@ class Features:
         if self.store.missing_settings():
             self.state.update(problem=None)
             return ['The interview is not complete, so no listing is extracted.'], False
+        station_lines = self.refresh_stations()
         state = self.state.load()
         waiting = self.reads(self.outstanding())
         self.store.record_read_attempts([read for read in state['handed'] if read in waiting], waiting)
@@ -240,7 +245,7 @@ class Features:
         self.state.update(problem=None, photos_unavailable=unavailable, handed=handed)
         self.remove_work_directories({work_directory(self.workspace, listing['id'], listing['content_fingerprint'])
                                       for listing in work['extract']})
-        lines = [f'{len(work["extract"])} listings wait for extraction: {len(tasks)} prepared below, {deferred + len(unavailable)} wait '
+        lines = [*station_lines, f'{len(work["extract"])} listings wait for extraction: {len(tasks)} prepared below, {deferred + len(unavailable)} wait '
                  f'for the next run, {len(work["extract_given_up"])} given up after {READ_ATTEMPTS} attempts.']
         if unavailable:
             lines.append(f'The photos of {len(unavailable)} listings could not be downloaded now, so they wait for the next run.')
@@ -254,6 +259,27 @@ class Features:
         if self.compare_invitation_pending() and usable('gateway'):
             self.invite_compare()
         return lines, bool(tasks or work['judge'] or work['notes'] or work['unread'])
+
+    def refresh_stations(self):
+        """Fetches the rapid-transit stations of the transit feed once, and again only when the feed changes. A feed is tens
+        of megabytes, so a failed fetch is tried again after STATION_RETRY."""
+        feed = self.store.transit_feed()
+        if feed['fetched_at']:
+            return []
+        now = self.now()
+        failure = self.state.load()['stations_unavailable']
+        failure = failure if failure and failure['url'] == feed['url'] else None
+        if failure and now - datetime.fromisoformat(failure['tried']) < STATION_RETRY:
+            return []
+        try:
+            stations = self.stations(feed['url'])
+        except SourceUnavailable as error:
+            self.state.update(stations_unavailable={'url': feed['url'], 'since': failure['since'] if failure else now.isoformat(),
+                                                    'tried': now.isoformat(), 'reason': str(error)})
+            return [f'{error} Distances to stations stay unknown, and the next run after {now + STATION_RETRY:%Y-%m-%d %H:%M} UTC tries again.']
+        self.store.save_stations(feed['url'], stations)
+        self.state.update(stations_unavailable=None)
+        return [f'{len(stations)} rapid-transit stations fetched from {feed["url"]}.']
 
     def compare_invitation_pending(self):
         if self.state.load().get('compare_invited_at') or self.store.missing_settings():
@@ -484,6 +510,11 @@ class Features:
             problems.append(f'{len(work["notes_given_up"])} notes and {len(work["unread_given_up"])} stated preferences could not be read in '
                             f'{READ_ATTEMPTS} attempts, so they do not count in the ranking until the user asks to retry.')
         now = self.now()
+        if state['stations_unavailable']:
+            failure = state['stations_unavailable']
+            problems.append(f'The rapid-transit stations of {failure["url"]} could not be fetched since '
+                            f'{datetime.fromisoformat(failure["since"]):%Y-%m-%d %H:%M} UTC, so no listing has a distance to a station. '
+                            f'The job tries again every {STATION_RETRY // timedelta(hours=1)} hours. {failure["reason"]}')
         stalled = {identifier: entry for identifier, entry in state['photos_unavailable'].items()
                    if now - datetime.fromisoformat(entry['since']) >= PHOTO_PATIENCE}
         if stalled:
@@ -502,7 +533,7 @@ class Features:
 def open_features():
     path = store_path()
     return Features(ListingStore(path), RunState(path.parent / 'features.json'), path.parent / 'extraction', download,
-                    lambda: datetime.now(timezone.utc))
+                    lambda: datetime.now(timezone.utc), fetch_stations)
 
 
 def run():

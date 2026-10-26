@@ -4,11 +4,12 @@ import os
 import secrets
 import threading
 import sqlite3
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 from chat import ChatController
-from rerank import pairwise_questions
+from rerank import pairwise_questions, rerank
 
 
 STATIC = Path(__file__).resolve().parents[1] / 'web'
@@ -25,6 +26,7 @@ def comparison(store):
 def make_server(store, port=8765, chat_runner=None, install_id='development'):
     access_token = secrets.token_urlsafe(32)
     chat = ChatController(store, chat_runner)
+    rerank_lock = threading.Lock()
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *arguments):
             pass
@@ -66,6 +68,8 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                     query = parse_qs(urlsplit(self.path).query)
                     if path == '/api/revision':
                         result = {'revision': store.revision()}
+                    elif path == '/api/rerank':
+                        result = {'running': rerank_lock.locked(), 'last_rerank': store.last_rerank()}
                     elif path == '/api/compare':
                         result = comparison(store)
                     elif path == '/api/listings':
@@ -127,12 +131,32 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                     if not set(body) <= {'message_id', 'prompt_id', 'answer', 'interrupt'} or 'message_id' not in body:
                         raise ValueError('Invalid conversation response.')
                     chat.respond(**body)
+                elif parts == ['api', 'signals']:
+                    self.require_fields(body, {'events'})
+                    self.reply(200, {'recorded': store.record_signals(body['events'])})
+                    return
                 elif parts == ['api', 'compare', 'answer']:
                     self.require_fields(body, {'chosen', 'other'})
                     store.answer_pair(body['chosen'], body['other'])
                 elif parts == ['api', 'compare', 'skip']:
                     self.require_fields(body, {'first', 'second'})
                     store.skip_pair(body['first'], body['second'])
+                elif parts == ['api', 'rerank']:
+                    self.require_fields(body, set())
+                    if not rerank_lock.acquire(blocking=False):
+                        self.reply(409, {'error': 'Scoring is already running. Wait for the new ranking.'})
+                        return
+                    try:
+                        result = rerank(store)
+                    except Exception:
+                        traceback.print_exc()
+                        status, result = 500, {'error': 'Could not score the listings. Try again. Check the gallery log if this continues.'}
+                    else:
+                        status = 200
+                    finally:
+                        rerank_lock.release()
+                    self.reply(status, result)
+                    return
                 elif len(parts) == 4 and parts[:2] == ['api', 'listings']:
                     listing_id, action = parts[2:]
                     if action == 'feedback':

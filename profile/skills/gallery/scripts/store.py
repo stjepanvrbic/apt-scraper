@@ -12,9 +12,9 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
-from code_features import FEATURES, store_code_features
+from code_features import FEATURES, configured_transit_feed, store_all_code_features, store_code_features
 from schema import content_fingerprint, migrate
-from queries import RANKABLE, browse, snapshot, validate_page
+from queries import RANKABLE, RANKING_EXCLUSION, browse, snapshot, validate_page
 from record import SEED_TAGS, known_spelling, validate_extraction, validate_judgments
 from scoring import reading_vocabulary, stated_phrases, validate_note_reading, validate_preference_reading
 
@@ -26,8 +26,7 @@ WEEKDAYS = ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 
 VIEWING_MINUTES = 60
 CRITERIA = ('location', 'price', 'size', 'rooms', 'move_in', 'other')
 PREFERENCES = ('likes', 'dislikes')
-PLACE_FIELDS = ('name', 'address', 'travel_mode', 'longest_trip_minutes', 'visits_per_week')
-TRAVEL_MODES = ('walk', 'bike', 'transit', 'car')
+PLACE_FIELDS = ('name', 'address')
 IMPORTANCE = ('low', 'medium', 'high')
 READ_ATTEMPTS = 3
 
@@ -196,11 +195,6 @@ def validate_viewing_availability(availability):
             raise ValueError('An unavailable period must end on or after its start.')
 
 
-def require_positive(value, name):
-    if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
-        raise ValueError(f'{name} must be a positive number.')
-
-
 def validate_places(places):
     if not isinstance(places, list):
         raise ValueError('Places must be an array.')
@@ -209,10 +203,6 @@ def validate_places(places):
             raise ValueError(f'A place has exactly {", ".join(PLACE_FIELDS)}.')
         require_text(place['name'], 'Place name', limit=200)
         require_text(place['address'], 'Place address', limit=1000)
-        if place['travel_mode'] not in TRAVEL_MODES:
-            raise ValueError(f'A place travel_mode is {", ".join(TRAVEL_MODES)}.')
-        require_positive(place['longest_trip_minutes'], 'Longest trip minutes')
-        require_positive(place['visits_per_week'], 'Visits per week')
     if len({place['name'].strip().casefold() for place in places}) != len(places):
         raise ValueError('Each place is named once.')
 
@@ -255,6 +245,7 @@ SETTINGS = {
     'viewing_availability': validate_viewing_availability,
     'places': validate_places,
     'location_priorities': validate_location_priorities,
+    'transit_feed': require_url,
 }
 
 
@@ -290,6 +281,31 @@ def validate_agent(agent):
 def extraction_read(listing_id, fingerprint):
     """The model_reads key of the extraction of one listing content."""
     return json.dumps(['extraction', listing_id, fingerprint])
+
+
+def explain_pending_rankings(connection, listings):
+    pending = {listing['id']: listing for listing in listings if not listing['analysis_current'] or listing['rank'] is None}
+    if not pending:
+        return
+    placeholders = ','.join('?' for _ in pending)
+    rows = connection.execute(f'''SELECT l.id, l.fingerprint, records.listing_id AS record,
+        {RANKING_EXCLUSION} AS exclusion FROM listings l
+        LEFT JOIN feedback f ON f.listing_id = l.id
+        LEFT JOIN feature_records records ON records.listing_id = l.id AND records.fingerprint = l.fingerprint
+        WHERE l.id IN ({placeholders})''', list(pending)).fetchall()
+    reads = [extraction_read(row['id'], row['fingerprint']) for row in rows]
+    attempts = dict(connection.execute(f'SELECT read, attempts FROM model_reads WHERE read IN ({placeholders})', reads))
+    for row, read in zip(rows, reads):
+        listing = pending[row['id']]
+        if row['exclusion']:
+            reason = row['exclusion']
+        elif row['record']:
+            reason = 'Not ranked yet: new or changed since the last rerank.'
+        elif attempts.get(read, 0) >= READ_ATTEMPTS:
+            reason = f'Not ranked yet: extraction failed {READ_ATTEMPTS} times. Score and rerank to use code-derived features.'
+        else:
+            reason = 'Not ranked yet: waiting for its feature record.'
+        listing.update(rank=None, reason=reason, exploration=False)
 
 
 def apply_criteria(connection, judge):
@@ -382,7 +398,8 @@ class ListingStore:
             connection.execute('UPDATE listings SET matches_criteria = ? WHERE id = ? AND matches_criteria != ?', (matches, listing_id, matches))
 
     def update_settings(self, *, judge=None, **settings):
-        """Saving criteria applies them to every stored listing in the same transaction, with judge as in apply_criteria."""
+        """Saving criteria applies them to every stored listing in the same transaction, with judge as in apply_criteria.
+        Saving places or the transit feed computes every listing's distances again, to the places with stored geocodes."""
         if not settings or not set(settings) <= set(SETTINGS):
             raise ValueError(f'Settings are {", ".join(SETTINGS)}, and at least one is required.')
         for name, value in settings.items():
@@ -396,6 +413,8 @@ class ListingStore:
             settings = {**settings, **reconcile_area_priorities({**saved, **settings}, settings)}
             connection.executemany('INSERT INTO settings VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
                                    [(name, json.dumps(value, allow_nan=False)) for name, value in settings.items()])
+            if {'places', 'transit_feed'} & set(settings):
+                store_all_code_features(connection)
             return apply_criteria(connection, judge) if 'criteria' in settings and judge else None
 
     def apply_criteria(self, judge):
@@ -403,6 +422,48 @@ class ListingStore:
         features is the listing's current analysis or None. Returns the count of each verdict, or None without criteria."""
         with self.connect(write=True) as connection:
             return apply_criteria(connection, judge)
+
+    def save_geocodes(self, geocodes):
+        """Keeps the coordinates a geocoder found for place addresses, by address: {latitude, longitude, found}, where
+        found is how the geocoder named the location."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self.connect(write=True) as connection:
+            connection.executemany('''INSERT INTO geocodes VALUES (?, ?, ?, ?, ?) ON CONFLICT(address) DO UPDATE SET
+                latitude = excluded.latitude, longitude = excluded.longitude, found = excluded.found, geocoded_at = excluded.geocoded_at''',
+                                   [(address, found['latitude'], found['longitude'], found['found'], now) for address, found in geocodes.items()])
+
+    def geocodes(self, addresses):
+        """The stored coordinates of each of the addresses that has them: {latitude, longitude, found}, by address."""
+        with self.connect() as connection:
+            return {row['address']: {'latitude': row['latitude'], 'longitude': row['longitude'], 'found': row['found']}
+                    for address in addresses for row in connection.execute('SELECT * FROM geocodes WHERE address = ?', (address,))}
+
+    def transit_feed(self):
+        """The rapid-transit feed the settings name, the default without one, and the stations fetched from it:
+        {url, fetched_at, stations}, with fetched_at None and no stations until they are fetched."""
+        with self.connect() as connection:
+            url = configured_transit_feed(connection)
+            fetched = connection.execute('SELECT * FROM transit_feed WHERE url = ?', (url,)).fetchone()
+            stations = [dict(row) for row in connection.execute('SELECT * FROM stations ORDER BY id')] if fetched else []
+            return {'url': url, 'fetched_at': fetched['fetched_at'] if fetched else None, 'stations': stations}
+
+    def save_stations(self, url, stations):
+        """Replaces the stored rapid-transit stations with those fetched from the feed at url, each {id, name, latitude,
+        longitude}, and computes every listing's distances again."""
+        with self.connect(write=True) as connection:
+            connection.execute('DELETE FROM stations')
+            connection.executemany('INSERT INTO stations VALUES (?, ?, ?, ?)',
+                                   [(station['id'], station['name'], station['latitude'], station['longitude']) for station in stations])
+            connection.execute('INSERT INTO transit_feed VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET url = excluded.url, fetched_at = excluded.fetched_at',
+                               (url, datetime.now(timezone.utc).isoformat()))
+            store_all_code_features(connection)
+
+    def places_without_coordinates(self):
+        """The names of the saved places whose address has no stored geocode, such as places saved before places were
+        geocoded. They count for no listing until they are saved again."""
+        places = self.settings().get('places', [])
+        located = self.geocodes({place['address'] for place in places})
+        return [place['name'] for place in places if place['address'] not in located]
 
     def missing_settings(self, names=tuple(SETTINGS)):
         """What the interview still needs, limited to the settings in names."""
@@ -450,24 +511,25 @@ class ListingStore:
         today = today or datetime.now(timezone.utc).date()
         with self.connect() as connection:
             return {row['listing_id']: {**{name: row[name] for name in ('fingerprint', *FEATURES, 'first_seen')},
+                                        'place_distances_km': json.loads(row['place_distances_km']),
                                         'days_since_first_seen': (today - date.fromisoformat(row['first_seen'])).days}
                     for row in connection.execute('''SELECT c.*, l.first_seen FROM code_features c
                         JOIN listings l ON l.id = c.listing_id AND l.fingerprint = c.fingerprint ORDER BY c.listing_id''')}
 
-    def ranking_inputs(self):
+    def ranking_inputs(self, *, include_signals=False):
         """Everything a rerank reads, from one snapshot of the store: each listing with its current feature record or
         None, its judgments of stated preferences, its code-derived features, the criteria areas whose search found it
         or None, whether extraction gave up on it, whether it is ranked (available, inside the criteria and not
         dismissed), its rank from the latest rerank when its content has not changed since, and the user's actions on it; the settings; the readings of the stated preferences by (kind,
         phrase) and of the user's notes by note id; each listing's latest note sentiment; and the pairwise answers as
-        (chosen, other)."""
+        (chosen, other). Completed visits are included only for the rerank's diagnostic check."""
         with self.connect() as connection:
             connection.execute('BEGIN')
             settings = {row['name']: json.loads(row['value']) for row in connection.execute('SELECT * FROM settings')}
             attempts = {row['read']: row['attempts'] for row in connection.execute('SELECT * FROM model_reads')}
             records = {row['listing_id']: row for row in connection.execute(
                 'SELECT r.* FROM feature_records r JOIN listings l ON l.id = r.listing_id AND l.fingerprint = r.fingerprint')}
-            code = {row['listing_id']: dict(row) for row in connection.execute(
+            code = {row['listing_id']: {**dict(row), 'place_distances_km': json.loads(row['place_distances_km'])} for row in connection.execute(
                 'SELECT c.* FROM code_features c JOIN listings l ON l.id = c.listing_id AND l.fingerprint = c.fingerprint')}
             ranking = {row['listing_id']: row for row in connection.execute(
                 'SELECT r.* FROM ranking r JOIN listings l ON l.id = r.listing_id AND l.fingerprint = r.fingerprint')}
@@ -480,6 +542,13 @@ class ListingStore:
             preference_readings = {(row['kind'], row['phrase']): json.loads(row['features'])
                                    for row in connection.execute('SELECT * FROM preference_readings')}
             pairs = [(row['chosen'], row['other']) for row in connection.execute('SELECT chosen, other FROM pairwise_answers ORDER BY id')]
+            visits = []
+            if include_signals:
+                visits = [dict(row) for row in connection.execute('''SELECT s.listing_id, s.visit_id,
+                    SUM(COALESCE(s.duration_ms, 0)) AS duration_ms FROM implicit_signals s
+                    JOIN listings l ON l.id = s.listing_id AND l.fingerprint = s.fingerprint
+                    GROUP BY s.listing_id, s.fingerprint, s.visit_id
+                    HAVING SUM(s.kind = 'open') > 0 AND SUM(s.kind = 'close') > 0''')]
             paired = {identifier for pair in pairs for identifier in pair}
             listings = []
             for row in connection.execute(f'''SELECT l.*, {RANKABLE} AS rankable FROM listings l
@@ -502,13 +571,62 @@ class ListingStore:
                 })
         return {'listings': listings, 'settings': settings, 'preference_readings': preference_readings,
                 'note_readings': {note: reading for note, (_, reading) in note_readings.items()},
-                'sentiments': {listing_id: reading['sentiment'] for listing_id, reading in note_readings.values()}, 'pairs': pairs}
+                'sentiments': {listing_id: reading['sentiment'] for listing_id, reading in note_readings.values()}, 'pairs': pairs,
+                'implicit_visits': visits}
+
+    def record_signals(self, events):
+        """Stores an atomic, retryable batch without changing the gallery's content revision."""
+        if not isinstance(events, list) or not 1 <= len(events) <= 20:
+            raise ValueError('Signals must contain 1 to 20 events.')
+        fields = {'event_id', 'visit_id', 'listing_id', 'fingerprint', 'kind', 'occurred_at'}
+        rows = []
+        for event in events:
+            if not isinstance(event, dict) or event.get('kind') not in ('open', 'dwell', 'photo', 'close'):
+                raise ValueError('Signal kind must be open, dwell, photo or close.')
+            extra = {'duration_ms'} if event['kind'] == 'dwell' else {'photo_url'} if event['kind'] == 'photo' else set()
+            if set(event) != fields | extra:
+                raise ValueError('Signal fields do not match its kind.')
+            for name in fields:
+                require_text(event[name], name, limit=200)
+            if not re.fullmatch('[a-f0-9]{64}', event['fingerprint']):
+                raise ValueError('Signal fingerprint must identify listing content.')
+            try:
+                occurred = datetime.fromisoformat(event['occurred_at'])
+            except ValueError:
+                raise ValueError('Signal occurred_at must be an ISO timestamp.') from None
+            if occurred.tzinfo is None:
+                raise ValueError('Signal occurred_at must include a timezone.')
+            duration = event.get('duration_ms')
+            photo = event.get('photo_url')
+            if event['kind'] == 'dwell' and (type(duration) is not int or not 0 <= duration <= 86400000):
+                raise ValueError('Signal duration_ms must be an integer from 0 to 86400000.')
+            if event['kind'] == 'photo':
+                require_text(photo, 'photo_url')
+                if not re.fullmatch(r'/media/[A-Za-z0-9._-]+', photo):
+                    require_url(photo)
+            rows.append((event['event_id'], event['visit_id'], event['listing_id'], event['fingerprint'],
+                         event['kind'], event['occurred_at'], duration, photo))
+        with self.connect() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            recorded = 0
+            for row in rows:
+                self.require_listing(connection, row[2])
+                previous = connection.execute('SELECT * FROM implicit_signals WHERE event_id = ?', (row[0],)).fetchone()
+                if previous:
+                    if tuple(previous) != row:
+                        raise ValueError('Signal event_id already records a different event.')
+                    continue
+                connection.execute('INSERT INTO implicit_signals VALUES (?, ?, ?, ?, ?, ?, ?, ?)', row)
+                recorded += 1
+            return recorded
 
     def save_rerank(self, result):
         """Replaces the whole ranking in one transaction with a rerank's result: each listing in result['ranked']
         gets its rank, reason, explanation and exploration mark, each in result['unranked'] its reason without a rank,
-        and every other listing loses its rank, reason and explanation. The summary is kept as the latest rerank. An
-        entry whose listing changed meanwhile is left out, and the stale listing ids are returned and recorded."""
+        and every other listing loses its rank, reason and explanation. The summary is kept as the latest rerank, with
+        the ids of the entries left out because their listing changed meanwhile as `stale`. The rerank's review pass
+        waits from then on, with result['check'], the scores its leave-one-out check reads, and a review still waiting
+        for an earlier rerank is superseded. Returns the rerank's id."""
         with self.connect(write=True) as connection:
             current = dict(connection.execute('SELECT id, fingerprint FROM listings').fetchall())
             entries = [(identifier, entry['fingerprint'], entry['rank'], require_text(entry['reason'], 'Reason', limit=500),
@@ -523,23 +641,92 @@ class ListingStore:
                 ON CONFLICT(listing_id) DO UPDATE SET rank = excluded.rank, reason = excluded.reason, explanation = excluded.explanation,
                 exploration = excluded.exploration, features = CASE WHEN ranking.fingerprint = excluded.fingerprint THEN ranking.features END,
                 fingerprint = excluded.fingerprint''', fresh)
-            connection.execute('INSERT INTO reranks (finished_at, result) VALUES (?, ?)',
-                               (datetime.now(timezone.utc).isoformat(), json.dumps({**result['summary'], 'stale': stale}, ensure_ascii=False, allow_nan=False)))
-            return stale
+            now = datetime.now(timezone.utc).isoformat()
+            rerank_id = connection.execute('INSERT INTO reranks (finished_at, result) VALUES (?, ?)',
+                                           (now, json.dumps({**result['summary'], 'stale': stale}, ensure_ascii=False, allow_nan=False))).lastrowid
+            connection.execute("UPDATE reviews SET state = 'superseded', snapshot = NULL, updated_at = ? WHERE state IN ('waiting', 'running')", (now,))
+            connection.execute("INSERT INTO reviews (rerank_id, state, updated_at, snapshot) VALUES (?, 'waiting', ?, ?)",
+                               (rerank_id, now, json.dumps(result['check'], allow_nan=False)))
+            return rerank_id
 
     def last_rerank(self):
-        """The summary of the latest rerank with the time it finished, or None before the first."""
+        """The latest rerank as rerank describes it, or None before the first."""
+        return self.rerank(None)
+
+    def rerank(self, rerank_id):
+        """The summary of a rerank, the latest when rerank_id is None, with its id, the time it finished and its review
+        pass: the review's state, the times it was handed to the agent, when its state last changed, and its result once
+        it has one. The states are waiting, running (handed to the agent), done, failed and superseded (a later rerank
+        replaced it). None when there is no such rerank."""
         with self.connect() as connection:
-            row = connection.execute('SELECT * FROM reranks ORDER BY id DESC LIMIT 1').fetchone()
-            return {**json.loads(row['result']), 'finished_at': row['finished_at']} if row else None
+            row = connection.execute('SELECT r.*, v.state, v.attempts, v.updated_at, v.result AS review FROM reranks r '
+                                     'LEFT JOIN reviews v ON v.rerank_id = r.id WHERE ? IS NULL OR r.id = ? ORDER BY r.id DESC LIMIT 1',
+                                     (rerank_id, rerank_id)).fetchone()
+            if not row:
+                return None
+            review = {'state': row['state'], 'attempts': row['attempts'], 'updated_at': row['updated_at'],
+                      'result': json.loads(row['review']) if row['review'] else None} if row['state'] else None
+            return {**json.loads(row['result']), 'id': row['id'], 'finished_at': row['finished_at'], 'review': review}
+
+    def review_snapshot(self, rerank_id):
+        """The scores the leave-one-out check of a waiting review reads, as the rerank stored them, or None once the
+        review ended."""
+        with self.connect() as connection:
+            row = connection.execute('SELECT snapshot FROM reviews WHERE rerank_id = ?', (rerank_id,)).fetchone()
+            return json.loads(row['snapshot']) if row and row['snapshot'] else None
+
+    def ranked_listings(self):
+        """Each listing the latest rerank ranked whose content has not changed since: its rank, reason, explanation and
+        exploration mark, by id."""
+        with self.connect() as connection:
+            return {row['listing_id']: {'rank': row['rank'], 'reason': row['reason'], 'explanation': json.loads(row['explanation']),
+                                        'exploration': bool(row['exploration'])}
+                    for row in connection.execute('SELECT r.* FROM ranking r JOIN listings l ON l.id = r.listing_id AND l.fingerprint = r.fingerprint '
+                                                  'WHERE r.rank IS NOT NULL ORDER BY r.rank')}
+
+    def hand_review(self, rerank_id):
+        """Records that the review of a rerank was handed to the agent once more, and returns how many times it was, or
+        None when the review no longer waits, because a later rerank replaced it or it ended meanwhile."""
+        with self.connect(write=True) as connection:
+            if not connection.execute("UPDATE reviews SET state = 'running', attempts = attempts + 1, updated_at = ? "
+                                      "WHERE rerank_id = ? AND state IN ('waiting', 'running')",
+                                      (datetime.now(timezone.utc).isoformat(), rerank_id)).rowcount:
+                return None
+            return connection.execute('SELECT attempts FROM reviews WHERE rerank_id = ?', (rerank_id,)).fetchone()['attempts']
+
+    def fail_review(self, rerank_id, error):
+        """Ends a waiting review without a saved review, with the error saying why."""
+        with self.connect(write=True) as connection:
+            connection.execute("UPDATE reviews SET state = 'failed', snapshot = NULL, result = ?, updated_at = ? "
+                               "WHERE rerank_id = ? AND state IN ('waiting', 'running')",
+                               (json.dumps({'error': error}, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), rerank_id))
+
+    def save_review(self, rerank_id, ranks, reasons, result):
+        """Applies a saved review in one transaction: each listing in ranks gets its rank and each in reasons its
+        reason, and the review is done with result. A listing whose content changed since the rerank keeps no rank, as
+        after any rerank. Raises ValueError when a later rerank replaced the review or it ended."""
+        with self.connect(write=True) as connection:
+            review = connection.execute('SELECT state FROM reviews WHERE rerank_id = ?', (rerank_id,)).fetchone()
+            if not review or review['state'] not in ('waiting', 'running'):
+                raise ValueError(f'The review of rerank {rerank_id} no longer waits: a later rerank replaced it or it ended.')
+            current = {row['listing_id'] for row in connection.execute(
+                'SELECT r.listing_id FROM ranking r JOIN listings l ON l.id = r.listing_id AND l.fingerprint = r.fingerprint WHERE r.rank IS NOT NULL')}
+            connection.executemany('UPDATE ranking SET rank = ? WHERE listing_id = ?',
+                                   [(rank, identifier) for identifier, rank in ranks.items() if identifier in current])
+            connection.executemany('UPDATE ranking SET reason = ? WHERE listing_id = ?',
+                                   [(require_text(reason, 'Reason', limit=500), identifier) for identifier, reason in reasons.items() if identifier in current])
+            connection.execute("UPDATE reviews SET state = 'done', snapshot = NULL, result = ?, updated_at = ? WHERE rerank_id = ?",
+                               (json.dumps(result, ensure_ascii=False, allow_nan=False), datetime.now(timezone.utc).isoformat(), rerank_id))
 
     def reading_vocabulary(self, connection=None):
-        """The features a reading may name: those of the feature record, the code features and the criteria areas."""
+        """The features a reading may name: those of the feature record, the code features, the criteria areas and the
+        places."""
         if connection is None:
             with self.connect() as connection:
                 return self.reading_vocabulary(connection)
-        criteria = connection.execute("SELECT value FROM settings WHERE name = 'criteria'").fetchone()
-        return reading_vocabulary(sorted(self.known_tags(connection)), json.loads(criteria['value']).get('location', []) if criteria else [])
+        settings = {row['name']: json.loads(row['value']) for row in connection.execute("SELECT * FROM settings WHERE name IN ('criteria', 'places')")}
+        return reading_vocabulary(sorted(self.known_tags(connection)), settings.get('criteria', {}).get('location', []),
+                                  [place['name'] for place in settings.get('places', [])])
 
     def unread_notes(self):
         """The user's notes without a reading, oldest first, with the title of their listing."""
@@ -750,6 +937,7 @@ class ListingStore:
 
     def listing(self, listing_id, *, notes_page=1, correspondence_page=1, viewings_page=1, visible_only=False):
         with self.connect() as connection:
+            connection.execute('BEGIN')
             row = connection.execute('SELECT * FROM listings WHERE id = ?', (listing_id,)).fetchone()
             if not row or visible_only and not row['matches_criteria'] and not connection.execute(
                     'SELECT 1 FROM contacts WHERE listing_id = ? UNION SELECT 1 FROM viewings WHERE listing_id = ?', (listing_id, listing_id)).fetchone():
@@ -774,6 +962,9 @@ class ListingStore:
                 rows = [dict(item) for item in connection.execute(
                     f'SELECT * FROM {key} WHERE listing_id = ? ORDER BY {order} LIMIT 50 OFFSET ?', (listing_id, (page - 1) * 50))]
                 listing[key] = rows if key == 'viewings' else list(reversed(rows))
+            explain_pending_rankings(connection, [listing])
+            if listing['rank'] is None:
+                listing['explanation'] = None
             return listing
 
     def state(self):
@@ -822,7 +1013,9 @@ class ListingStore:
 
     def browse(self, view='Rankings', *, page=1, page_size=24):
         with self.connect() as connection:
-            return browse(connection, view, page, page_size)
+            result = browse(connection, view, page, page_size)
+            explain_pending_rankings(connection, result['items'])
+            return result
 
     def feedback(self, listing_id, *, favorite=None, dismissed=None):
         for value in (favorite, dismissed):

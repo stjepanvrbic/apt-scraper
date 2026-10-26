@@ -16,18 +16,27 @@ stored in the code_features table for the content it was computed from:
                   photos and text, so a consumer takes this level when it is known and extraction's otherwise.
   photo_count     photos stored with the listing
   latitude, longitude
+  nearest_station, station_distance_km
+                  the name of the rapid-transit station nearest the listing and the great-circle distance to it
+  place_distances_km
+                  the great-circle distance to each of the user's places that has coordinates, by place name
 
 When no unit has a price, the features describe the only unit, or none when there are several. Any value
-the listing does not state is null. Days since first seen depends on the day it is counted on, so
+the listing does not state is null. A listing without coordinates has no distances, and neither does one when the
+store has no stations or no geocoded places. Days since first seen depends on the day it is counted on, so
 ListingStore.code_features counts it when read.
 """
 
 import json
+import math
 import re
+from dataclasses import dataclass
 
 PERIODS_PER_YEAR = {'day': 365, 'week': 52, 'month': 12, 'year': 1}
 FEATURES = ('monthly_price', 'currency', 'size_sqft', 'price_per_sqft', 'bedrooms', 'bathrooms', 'unit_label', 'unit_floor',
-            'unit_level', 'photo_count', 'latitude', 'longitude')
+            'unit_level', 'photo_count', 'latitude', 'longitude', 'nearest_station', 'station_distance_km', 'place_distances_km')
+EARTH_RADIUS_KM = 6371.0088
+DEFAULT_TRANSIT_FEED = 'https://www.transitchicago.com/downloads/sch_data/google_transit.zip'
 
 UNIT_WORD = re.compile(r'(?:#|(?:apt|unit|ste|suite)\b\.?)\s*#?\s*', re.I)
 ADDRESS_UNIT = re.compile(r'(?:#|\b(?:apt|unit|ste|suite)\b\.?)\s*#?\s*([^,#]+?)\s*(?:,|$)', re.I)
@@ -36,6 +45,35 @@ GARDEN = re.compile(r'(?:g|gdn|grdn|garden|bsmt|basement|ll|lower(?: level)?)(?:
 PENTHOUSE = re.compile(r'ph[ -]?\d{0,2}|penthouse(?: \w+)?', re.I)
 FLOOR = (re.compile(r'([1-9])[a-z]{1,2}(?: floor| fl)?', re.I), re.compile(r'([1-9])\d{2}'),
          re.compile(r'([1-9]\d?)(?:st|nd|rd|th) (?:floor|fl)', re.I))
+
+
+@dataclass(frozen=True)
+class Surroundings:
+    """What a listing's distances are measured to: the rapid-transit stations as (name, latitude, longitude) and the
+    user's geocoded places as (name, latitude, longitude)."""
+    stations: tuple = ()
+    places: tuple = ()
+
+
+def distance_km(first, second):
+    """The great-circle distance between two (latitude, longitude) points in degrees, by the haversine formula on the
+    mean Earth radius."""
+    latitude_1, longitude_1, latitude_2, longitude_2 = map(math.radians, (*first, *second))
+    haversine = (math.sin((latitude_2 - latitude_1) / 2) ** 2
+                 + math.cos(latitude_1) * math.cos(latitude_2) * math.sin((longitude_2 - longitude_1) / 2) ** 2)
+    return 2 * EARTH_RADIUS_KM * math.asin(min(1.0, math.sqrt(haversine)))
+
+
+def distances(latitude, longitude, surroundings):
+    """The listing's nearest station, its distance and the distance to each place, unknown without coordinates."""
+    if latitude is None or longitude is None:
+        return {'nearest_station': None, 'station_distance_km': None, 'place_distances_km': {}}
+    here = (latitude, longitude)
+    nearest = min(((distance_km(here, (station_latitude, station_longitude)), name) for name, station_latitude, station_longitude
+                   in surroundings.stations), default=(None, None))
+    return {'nearest_station': nearest[1], 'station_distance_km': nearest[0],
+            'place_distances_km': {name: distance_km(here, (place_latitude, place_longitude))
+                                   for name, place_latitude, place_longitude in surroundings.places}}
 
 
 def monthly(price, period):
@@ -78,8 +116,8 @@ def chosen_unit(units):
     return units[0] if len(units) == 1 else {}
 
 
-def code_features(listing, facts):
-    """The features of a listing, a stored listing object, given its site facts or None."""
+def code_features(listing, facts, surroundings=Surroundings()):
+    """The features of a listing, a stored listing object, given its site facts or None and its surroundings."""
     facts = facts or {}
     units = facts.get('units') or [{'price': listing.get('price'), 'period': listing.get('rental_period')}]
     unit = chosen_unit(units)
@@ -93,15 +131,49 @@ def code_features(listing, facts):
         'bedrooms': unit.get('bedrooms'), 'bathrooms': unit.get('bathrooms'),
         'unit_label': label, 'unit_floor': floor, 'unit_level': level, 'photo_count': len(listing.get('photos') or []),
         'latitude': facts.get('latitude'), 'longitude': facts.get('longitude'),
+        **distances(facts.get('latitude'), facts.get('longitude'), surroundings),
     }
 
 
-def store_code_features(connection, listing_id):
+def configured_transit_feed(connection):
+    """The transit feed URL the settings name, or the default."""
+    row = connection.execute("SELECT value FROM settings WHERE name = 'transit_feed'").fetchone()
+    return json.loads(row[0]) if row else DEFAULT_TRANSIT_FEED
+
+
+def fetched_stations(connection):
+    """The stored stations as (name, latitude, longitude), when they were fetched from the configured feed."""
+    fetched = connection.execute('SELECT url FROM transit_feed').fetchone()
+    if not fetched or fetched[0] != configured_transit_feed(connection):
+        return ()
+    return tuple(map(tuple, connection.execute('SELECT name, latitude, longitude FROM stations ORDER BY id')))
+
+
+def stored_surroundings(connection):
+    """The stations of the configured transit feed, when they have been fetched, and the places with coordinates."""
+    row = connection.execute("SELECT value FROM settings WHERE name = 'places'").fetchone()
+    places = []
+    for place in json.loads(row[0]) if row else []:
+        found = connection.execute('SELECT latitude, longitude FROM geocodes WHERE address = ?', (place['address'],)).fetchone()
+        if found:
+            places.append((place['name'], *found))
+    return Surroundings(fetched_stations(connection), tuple(places))
+
+
+def store_all_code_features(connection):
+    """Computes and stores the features of every listing, as when their surroundings change."""
+    surroundings = stored_surroundings(connection)
+    for (listing_id,) in connection.execute('SELECT id FROM listings').fetchall():
+        store_code_features(connection, listing_id, surroundings)
+
+
+def store_code_features(connection, listing_id, surroundings=None):
     """Computes and stores the features of a listing's current content, from its facts when they are for that content."""
     row = connection.execute('''SELECT l.data, l.fingerprint, CASE WHEN r.fingerprint = l.fingerprint THEN r.features END AS features
         FROM listings l LEFT JOIN ranking r ON r.listing_id = l.id WHERE l.id = ?''', (listing_id,)).fetchone()
     facts = json.loads(row[2]).get('facts') if row[2] else None
-    features = code_features(json.loads(row[0]), facts)
+    features = code_features(json.loads(row[0]), facts, stored_surroundings(connection) if surroundings is None else surroundings)
+    features['place_distances_km'] = json.dumps(features['place_distances_km'], ensure_ascii=False)
     connection.execute(f'''INSERT INTO code_features (listing_id, fingerprint, {", ".join(FEATURES)})
         VALUES (?, ?, {", ".join("?" for _ in FEATURES)}) ON CONFLICT(listing_id) DO UPDATE SET fingerprint = excluded.fingerprint,
         {", ".join(f"{name} = excluded.{name}" for name in FEATURES)}''', (listing_id, row[1], *(features[name] for name in FEATURES)))
