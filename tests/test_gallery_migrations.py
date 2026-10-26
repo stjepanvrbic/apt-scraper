@@ -24,7 +24,7 @@ class MigrationTests(unittest.TestCase):
                 self.assertEqual(saved['rental_period'], 'month')
                 self.assertEqual(saved['notes'][0]['text'], 'Keep the courtyard.')
 
-    def test_a_stored_notes_session_is_dropped_and_the_conversation_kept(self):
+    def test_a_stored_notes_session_is_dropped_and_its_running_reply_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'listings.sqlite3'
             with closing(sqlite3.connect(path)) as connection, connection:
@@ -33,11 +33,17 @@ class MigrationTests(unittest.TestCase):
                     connection.execute(f'PRAGMA user_version = {index + 1}')
                 connection.execute("UPDATE chat_session SET session_id = 'shared-session'")
                 connection.execute("INSERT INTO chat_messages (role, content, status, created_at) VALUES ('user', 'Quiet street', 'complete', '2026-10-01')")
+                connection.execute('''INSERT INTO chat_messages (role, content, status, created_at, admission_id)
+                    VALUES ('agent', 'Noted', 'running', '2026-10-01', 'admission-in-shared-session')''')
             store = ListingStore(path)
             self.assertEqual(store.schema_version, len(MIGRATIONS))
             state = store.chat_state()
             self.assertIsNone(state['session_id'])
-            self.assertEqual([message['content'] for message in state['messages']], ['Quiet street'])
+            self.assertEqual([message['content'] for message in state['messages']], ['Quiet street', 'Noted'])
+            self.assertFalse(state['active'])
+            reply = state['messages'][-1]
+            self.assertEqual(reply['status'], 'error')
+            self.assertIn('Send the message again', reply['error'])
 
     def test_newer_schema_is_rejected_without_modification(self):
         with tempfile.TemporaryDirectory() as directory:

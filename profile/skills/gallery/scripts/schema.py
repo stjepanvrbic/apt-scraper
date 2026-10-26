@@ -120,8 +120,12 @@ def implicit_signals(connection):
 
 def notes_session_per_database(connection):
     """A stored Notes session may be one that other databases share, bound to a working folder that no longer exists.
-    Each database starts a Hermes session of its own and keeps its messages."""
+    Each database starts a Hermes session of its own and keeps its messages. A reply still running belongs to the
+    dropped session, so the gallery cannot collect it and closes it with an error the user can act on."""
     connection.execute('UPDATE chat_session SET session_id = NULL')
+    connection.execute("""UPDATE chat_messages SET status = 'error', prompt = NULL,
+        error = 'The gallery was updated while this reply was running, and the reply could not be collected. Send the message again if you still need it.'
+        WHERE status = 'running'""")
 
 
 MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals,
