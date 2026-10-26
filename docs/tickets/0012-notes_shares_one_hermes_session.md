@@ -18,7 +18,7 @@ Each gallery database has its own Hermes session for the Notes chat, and a Notes
 
 - [x] The sample database and the profile's real database get different Hermes sessions.
 - [x] A Notes turn succeeds after the folder the session was first created in no longer exists.
-- [ ] Delivered as a pull request to `main`, left unmerged for the owner.
+- [x] Delivered as a pull request to `main`, left unmerged for the owner.
 
 ## Spec
 
@@ -48,4 +48,5 @@ Verified on Windows 11 with Hermes 0.22.5, on this change over `main` at `9136e6
   - The two databases `main` left at schema 9 holding `local-80c88b35…` migrated to version 10 and each completed a turn in a new session of its own (`local-ffd85f9e…`, `local-16b9602d…`), with all earlier messages kept.
 - `tests/test_hermes_adapter.py`: a gateway double that resumes a titled session and refuses turns in a missing folder. It fails on `main` (same session for both databases) and, with only the title removed, still fails (`workspace_unavailable` after the folder is deleted).
 - `tests/test_gallery_migrations.py`: a version-9 database with a saved session and a running reply migrates with no session, its messages, and the reply closed with that error.
+- Code review of the branch: three low findings. The ticket's control characters and a reply left running at migration time were fixed. Using the profile's `workspace` instead of the profile home was withdrawn, because Hermes never recreates `workspace` and the gallery recreates it only for its default database path.
 - `python -m unittest discover -s tests`: 528 passed, 0 skipped. `ruff check profile tests`: passed. `npm run lint`, `npm run build` (built assets unchanged), `npx playwright test` (headless): 38 passed.
