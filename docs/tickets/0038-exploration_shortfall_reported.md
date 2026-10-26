@@ -1,9 +1,9 @@
 ---
 title: A shortfall of exploration listings is reported, not silent
 type: Bug
-state: In Progress
+state: Done
 priority: 3
-assignee: agent
+assignee:
 milestone:
 parent:
 blocked_by: []
@@ -18,7 +18,7 @@ When fewer than two unlabeled listings sit outside the top 18, the rerank report
 
 - [x] Spec › Ranking and `docs/ranking.md` say: up to two exploration listings, drawn from the unlabeled listings outside the top 18, fewer when there are fewer candidates.
 - [x] The ranking skill reports the count from the rerank summary instead of a fixed "two"; `ExplorationTests` gains the degenerate case.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 

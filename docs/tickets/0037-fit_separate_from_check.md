@@ -1,9 +1,9 @@
 ---
 title: The fit is separate from the leave-one-out check
 type: Chore
-state: In Progress
+state: Done
 priority: 3
-assignee: agent
+assignee:
 milestone:
 parent:
 blocked_by: []
@@ -18,7 +18,7 @@ related: []
 
 - [x] `questions()` and the diagnostic no longer compute held-out scores; `rank_listings` composes fit and check; the `Model` type carries held-out scores only where a rerank computed them.
 - [x] Measured: `pairwise_questions(store, 1)` on the 300-listing, 50-favorite fixture takes about the fit's time (0.17 s best of three on the review machine), not 0.64 s.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
