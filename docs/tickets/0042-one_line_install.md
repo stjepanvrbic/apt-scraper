@@ -20,7 +20,7 @@ A new user installs with one command pasted into a terminal, on Windows or macOS
 - [ ] Rerunning the same line updates the repository and the profile, and keeps the user's `config.yaml`, data and credentials.
 - [ ] `README.md` leads with the two lines and nothing else a user must do before the chat opens; the clone-and-run path stays for development.
 - [ ] A test runs each bootstrap against a fake `git` and a fake installer in temporary directories, for a fresh install and a rerun.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
@@ -36,3 +36,5 @@ A new user installs with one command pasted into a terminal, on Windows or macOS
 ## Result
 
 ## Comments
+
+- 2026-10-26: Review found that `set -u` with an empty `"$@"` exits on macOS bash 3.2; fixed with `${1+"$@"}` in `bootstrap.sh` and the same pre-existing case in `install.sh`. Confirmed from bash's COMPAT notes, not run on a Mac. Gallery data under Hermes lives in `HERMES_HOME/workspace/gallery/`, not beside the clone.
