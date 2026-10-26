@@ -70,11 +70,21 @@ class CompareInvitationTests(FeaturesTestCase):
         self.assertEqual(self.features.status()['problems'], [])
         self.assertFalse(self.features.compare_invitation_pending())
 
-    def test_a_failing_gateway_check_is_recorded_like_a_failed_send(self):
+    def test_a_failing_gateway_check_leaves_the_report_wake_and_handed_reads_intact(self):
         self.prepare_records()
-        with mock.patch('contact.require', side_effect=RuntimeError('The connection check for gateway failed: timed out')):
-            self.assertFalse(self.run_cron()[1])
-        self.assertIn('timed out', self.features.status()['problems'][0])
+        waiting = self.add(3)
+        with (mock.patch('contact.require', side_effect=RuntimeError('The connection check for gateway failed: timed out')),
+              mock.patch('features.tell_user') as send):
+            report, wake = self.run_cron()
+        send.assert_not_called()
+        self.assertTrue(wake)
+        [task] = self.tasks(report)
+        self.assertEqual(self.manifest(task)['id'], waiting)
+        self.assertEqual(self.state.load()['handed'], [extraction_read(waiting, self.manifest(task)['fingerprint'])])
+        self.assertNotIn('Extraction failed', report)
+        [problem] = self.features.status()['problems']
+        self.assertIn('Compare', problem)
+        self.assertIn('timed out', problem)
         self.assertTrue(self.features.compare_invitation_pending())
 
     def test_invitation_waits_for_interview_and_two_eligible_records(self):
