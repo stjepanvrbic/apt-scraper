@@ -1,7 +1,7 @@
 ---
 title: Ranking that learns the user's taste from listing features
 type:
-state: Todo
+state: In Progress
 priority: 2
 assignee:
 milestone:
