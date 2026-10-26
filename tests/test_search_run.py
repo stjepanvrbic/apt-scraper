@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/sea
 
 from test_gallery_store import ListingStore  # noqa: E402
 from matching import evaluate  # noqa: E402
-from search import Search, SearchState  # noqa: E402
+from search import RUN_BUDGET, Search, SearchState  # noqa: E402
 from sites.errors import Blocked, Changed, Gone  # noqa: E402
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'profile/skills/search/scripts/search.py'
@@ -295,6 +295,7 @@ class SearchRunTests(unittest.TestCase):
         self.assertFalse(report['wake'])
         status = Search(self.store, SearchState(self.directory / 'search.sqlite3'), client=None, site_for=None, site_named=None,
                         now=lambda: self.now).status()
+        self.assertEqual(status['state'], 'failed')
         self.assertTrue(any('disk full' in problem for problem in status['problems']))
 
     def test_criteria_narrowed_during_a_run_hide_every_listing_outside_them_when_the_run_ends(self):
@@ -407,7 +408,7 @@ class SearchScriptTests(unittest.TestCase):
         state.finish_run(state.start_run(now), now, {'sites': [site]})
         result = self.run_script('status')
         self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertEqual(json.loads(result.stdout)['state'], 'running')
+        self.assertEqual(json.loads(result.stdout)['state'], 'finished')
 
     def test_status_reports_a_search_that_never_ran_and_one_that_stopped(self):
         self.store.update_settings(**SETTINGS)
@@ -420,6 +421,49 @@ class SearchScriptTests(unittest.TestCase):
         report = json.loads(result.stdout)
         self.assertEqual(report['state'], 'stopped')
         self.assertTrue(any('gateway' in problem for problem in report['problems']))
+        state.start_run(datetime.now(timezone.utc) - timedelta(hours=4))
+        report = json.loads(self.run_script('status').stdout)
+        self.assertEqual(report['state'], 'stopped')
+        self.assertTrue(any('gateway' in problem for problem in report['problems']))
+
+    def test_status_reports_a_first_run_in_progress_without_a_problem(self):
+        self.store.update_settings(**SETTINGS)
+        state = SearchState(self.home / 'workspace' / 'gallery' / 'search.sqlite3')
+        started = datetime.now(timezone.utc) - timedelta(seconds=97)
+        state.start_run(started)
+        result = self.run_script('status')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        report = json.loads(result.stdout)
+        self.assertEqual((report['state'], report['problems'], report['running_since'], report['last_run']), ('running', [], started.isoformat(), None))
+
+    def test_status_reports_a_run_that_has_gone_on_longer_than_twice_its_budget(self):
+        self.store.update_settings(**SETTINGS)
+        state = SearchState(self.home / 'workspace' / 'gallery' / 'search.sqlite3')
+        state.start_run(datetime.now(timezone.utc) - 2 * RUN_BUDGET - timedelta(minutes=1))
+        result = self.run_script('status')
+        self.assertEqual(result.returncode, 3, result.stdout)
+        report = json.loads(result.stdout)
+        self.assertEqual(report['state'], 'running')
+        [problem] = report['problems']
+        self.assertIn('has not finished after 51 minutes', problem)
+
+    def test_status_follows_the_latest_run_past_one_that_never_finished(self):
+        self.store.update_settings(**SETTINGS)
+        state = SearchState(self.home / 'workspace' / 'gallery' / 'search.sqlite3')
+        now = datetime.now(timezone.utc)
+        state.start_run(now - timedelta(hours=2))
+        state.finish_run(state.start_run(now - timedelta(minutes=10)), now - timedelta(minutes=5), {'sites': []})
+        self.assertIsNone(state.running_since())
+        result = self.run_script('status')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        report = json.loads(result.stdout)
+        self.assertEqual((report['state'], report['running_since']), ('finished', None))
+        started = now - timedelta(minutes=1)
+        state.start_run(started)
+        self.assertEqual(state.running_since(), started)
+        report = json.loads(self.run_script('status').stdout)
+        self.assertEqual((report['state'], report['running_since'], report['last_run']['finished_at']),
+                         ('running', started.isoformat(), (now - timedelta(minutes=5)).isoformat()))
 
     def test_new_listings_are_reported_once(self):
         self.store.update_settings(**{**SETTINGS, 'criteria': {**SETTINGS['criteria'], 'other': []}})

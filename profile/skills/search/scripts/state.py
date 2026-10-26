@@ -94,15 +94,22 @@ class SearchState:
         with self.connect() as connection:
             connection.execute('UPDATE runs SET finished_at = ?, report = ? WHERE id = ?', (now.isoformat(), json.dumps(report), run_id))
 
+    def latest_run(self):
+        """The run started last, as it recorded itself: started_at, and once it finished, finished_at and its report. A run
+        that never finished, because its process was killed, stays unfinished until a later run supersedes it."""
+        return self.run_where('TRUE')
+
     def running_since(self):
-        with self.connect() as connection:
-            row = connection.execute('SELECT started_at FROM runs WHERE finished_at IS NULL ORDER BY id DESC LIMIT 1').fetchone()
-            return parse(row['started_at']) if row else None
+        latest = self.latest_run()
+        return parse(latest['started_at']) if latest and not latest['finished_at'] else None
 
     def last_run(self):
+        return self.run_where('finished_at IS NOT NULL')
+
+    def run_where(self, condition):
         with self.connect() as connection:
-            row = connection.execute('SELECT * FROM runs WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1').fetchone()
-            return {'started_at': row['started_at'], 'finished_at': row['finished_at'], **json.loads(row['report'])} if row else None
+            row = connection.execute(f'SELECT * FROM runs WHERE {condition} ORDER BY id DESC LIMIT 1').fetchone()
+            return {'started_at': row['started_at'], 'finished_at': row['finished_at'], **json.loads(row['report'] or '{}')} if row else None
 
     def has_searched(self):
         with self.connect() as connection:
