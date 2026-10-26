@@ -1,7 +1,7 @@
 ---
 title: Installers build and check the ranking environments
 type: Feature
-state: Todo
+state: Canceled
 priority: 3
 assignee:
 milestone:
@@ -33,3 +33,7 @@ Follow the search environment: `profile/scripts/search-run.py install` with the 
 ## Deviations
 
 ## Result
+
+## Comments
+
+- 2026-10-25: Canceled. The embedding path stays out, so the ranking runs on the standard library and the installers already build and check the search environment.
