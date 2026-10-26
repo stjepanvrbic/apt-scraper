@@ -1,9 +1,9 @@
 ---
 title: A failed Compare invitation aborts the features job and gives up on waiting listings
 type: Bug
-state: Todo
+state: In Progress
 priority: 2
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []

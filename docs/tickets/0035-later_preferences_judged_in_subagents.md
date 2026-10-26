@@ -1,9 +1,9 @@
 ---
 title: Later preference judgments run in extraction subagents, not the job agent
 type: Chore
-state: Todo
+state: In Progress
 priority: 3
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []

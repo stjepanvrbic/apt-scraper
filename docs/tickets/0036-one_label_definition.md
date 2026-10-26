@@ -1,9 +1,9 @@
 ---
 title: Extraction and scoring share one definition of a labeled listing
 type: Bug
-state: Todo
+state: In Progress
 priority: 3
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []
