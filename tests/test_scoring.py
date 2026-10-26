@@ -389,6 +389,21 @@ class ExplorationTests(unittest.TestCase):
             self.assertGreaterEqual(mean_order.index(identifier), TOP - 2)
             self.assertTrue(result['ranked'][identifier]['reason'].startswith('Shown to learn your taste.'))
 
+    def test_without_unlabeled_listings_outside_the_top_18_none_explores(self):
+        listings = [entry(f'listing:{number:02}', user_notes=number >= 18) for number in range(21)]
+        result = rank_listings(inputs(listings), seed=3)
+        self.assertEqual(result['summary']['exploration'], [])
+        self.assertFalse(any(ranked['exploration'] for ranked in result['ranked'].values()))
+        self.assertEqual(ranks(result), {listing['id']: number for number, listing in enumerate(listings, 1)})
+
+    def test_one_unlabeled_listing_outside_the_top_18_explores_at_the_first_exploration_rank(self):
+        listings = [entry(f'listing:{number:02}', user_notes=number >= 19) for number in range(21)]
+        result = rank_listings(inputs(listings), seed=3)
+        self.assertEqual(result['summary']['exploration'], ['listing:18'])
+        self.assertEqual(result['ranked']['listing:18']['rank'], EXPLORATION_RANKS[0])
+        self.assertTrue(result['ranked']['listing:18']['reason'].startswith('Shown to learn your taste.'))
+        self.assertEqual([identifier for identifier, ranked in result['ranked'].items() if ranked['exploration']], ['listing:18'])
+
     def test_no_listing_explores_with_20_or_fewer_ranked(self):
         result = rank_listings(inputs(neighborhood(20)), seed=3)
         self.assertEqual(result['summary']['exploration'], [])

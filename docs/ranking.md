@@ -157,7 +157,7 @@ The solver uses the standard library's [math.sumprod](https://docs.python.org/3/
 
 ### Exploration
 
-With more than 20 ranked listings, ranks 7 and 14 hold exploration listings, marked in the store's `ranking.exploration` and in their reason ("Shown to learn your taste."). Each is drawn by posterior sampling: weights drawn from the Laplace posterior pick the highest-scoring listing outside the top 18 by posterior mean that has no label from the user, no favorite, dismissal, contact request, note or pairwise answer. The draws come from the rerank's seed, recorded in its summary, so a rerank with the same seed is reproducible, and with 20 or fewer ranked listings no seed changes anything.
+With more than 20 ranked listings, up to two exploration listings are placed at ranks 7 and 14, marked in the store's `ranking.exploration` and in their reason ("Shown to learn your taste."). They are drawn from the candidates: the ranked listings outside the top 18 by posterior mean that have no label from the user, no favorite, dismissal, contact request, note or pairwise answer. Each is drawn by posterior sampling: weights drawn from the Laplace posterior pick the highest-scoring candidate not drawn yet. With one candidate, only rank 7 holds an exploration listing, and with none, neither does. A listing of the top 18 is never one, because a listing the model already ranks high teaches it nothing about where it is wrong. The rerank's summary lists the exploration listings in `exploration`, and its length is how many were placed. The draws come from the rerank's seed, recorded in its summary, so a rerank with the same seed is reproducible, and with 20 or fewer ranked listings no seed changes anything.
 
 ### Pairwise questions
 

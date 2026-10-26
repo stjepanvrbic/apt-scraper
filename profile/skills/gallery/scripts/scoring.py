@@ -941,8 +941,9 @@ def reason(model_design, details, index, *, exploration):
 
 
 def explore(model_design, fit_result, order, seed):
-    """Two listings for EXPLORATION_RANKS, by posterior sampling: each draw of the weights from the Laplace posterior
-    picks the unlabeled ranked listing outside the mean's top that scores highest under it."""
+    """Up to one listing for each of EXPLORATION_RANKS, by posterior sampling: each draw of the weights from the Laplace
+    posterior picks the unlabeled ranked listing outside the mean's top that scores highest under it and is not drawn
+    yet. Fewer such listings give fewer exploration listings."""
     keep = TOP - len(EXPLORATION_RANKS)
     candidates = [index for index in order[keep:] if not labeled(model_design.listings[model_design.ids[index]])]
     generator = random.Random(seed)
