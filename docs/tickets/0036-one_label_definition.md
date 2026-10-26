@@ -1,9 +1,9 @@
 ---
 title: Extraction and scoring share one definition of a labeled listing
 type: Bug
-state: In Progress
+state: Done
 priority: 3
-assignee: agent
+assignee:
 milestone:
 parent:
 blocked_by: []
@@ -18,7 +18,7 @@ Whether a listing is labeled (favorite, dismissed, contact request, note, or an 
 
 - [x] `labeled` lives once, in `scoring.py`, over fields the store's snapshot computes the same way for `ranking_inputs` and the features job; `features.py` uses it for `labeled` and `needs_record`.
 - [x] Test: a paired listing whose content changes while unavailable is extracted, and its pair row stays in the fit.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 

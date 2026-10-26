@@ -1,9 +1,9 @@
 ---
 title: A failed Compare invitation aborts the features job and gives up on waiting listings
 type: Bug
-state: In Progress
+state: Done
 priority: 2
-assignee: agent
+assignee:
 milestone:
 parent:
 blocked_by: []
@@ -18,7 +18,7 @@ The features job's report, wake decision and handed-read bookkeeping never depen
 
 - [x] With `tell_user` raising a send error, a run still lists its extraction tasks, wakes the agent as before, counts no attempt for any read, records the failure as the run's problem and leaves the invitation pending; the next run retries it. A job-level test covers this.
 - [x] The invitation is its own guarded step after the report is complete.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 

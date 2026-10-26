@@ -1,9 +1,9 @@
 ---
 title: Later preference judgments run in extraction subagents, not the job agent
 type: Chore
-state: In Progress
+state: Done
 priority: 3
-assignee: agent
+assignee:
 milestone:
 parent:
 blocked_by: []
@@ -19,7 +19,7 @@ No listing text enters the features job agent's conversation. The agent sees the
 - [x] `features.py preferences` writes one task file per batch into `extraction/` and the report lists the `delegate_task` calls; the job agent's turn holds no listing text.
 - [x] The `judge` command and attempt bookkeeping are unchanged; `docs/ranking.md` describes the isolation for both reads.
 - [x] `docs/ranking.md` and the listing-features `SKILL.md` say the job agent sees the tag list, validated to the tag shape. Test: every entry `readings` prints is a fixed vocabulary entry or a tag of that shape, with no other listing text.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
