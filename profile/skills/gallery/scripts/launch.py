@@ -20,9 +20,13 @@ def install_fingerprint(root=None):
     return digest.hexdigest()
 
 
+def secrets_directory():
+    return Path.home() / '.secrets' / 'apt-scraper' / 'gallery'
+
+
 def connection_file(database, port):
     identity = hashlib.sha256(f'{Path(database).resolve()}:{port}'.encode()).hexdigest()
-    return Path.home() / '.secrets' / 'apt-scraper' / 'gallery' / f'{identity}.json'
+    return secrets_directory() / f'{identity}.json'
 
 
 def save_connection(database, server):
