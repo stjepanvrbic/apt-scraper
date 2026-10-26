@@ -24,7 +24,7 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 - **Label**: what a user action says about one listing: a favorite, a contact request, a dismissal, a note's sentiment or a pairwise answer.
 - **Scoring model**: the model of the user's taste fitted from the feature records, the labels and the preferences.
 - **Rerank**: fitting the scoring model and ordering Rankings by it.
-- **Leave-one-out check**: each favorite's rank when the scoring model is fitted without that favorite.
+- **Leave-one-out check**: each favorite's rank when the scoring model is fitted without that favorite's label, with the favorite counted like any other unlabeled ranked listing.
 - **Exploration listing**: a listing placed in the top 20 to learn the user's taste, chosen from what the scoring model is unsure of.
 - **Review pass**: the model's review of a rerank's result.
 - **Pairwise question**: two listings shown together with the question "Which of these two?".
