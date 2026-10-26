@@ -86,7 +86,7 @@ def review_run(store, workspace):
     inbox = inbox_directory('review')
     try:
         saved, rejected = apply(inbox, {'review': lambda value: save_review(store, value)})
-    except (OSError, sqlite3.Error) as error:
+    except (OSError, sqlite3.OperationalError) as error:
         return [f'The review in the inbox could not be saved now, so it stays for the next run. {type(error).__name__}: {error}'], False
     lines = [saved_line(name, result) for name, result in saved.items()]
     last = store.last_rerank()

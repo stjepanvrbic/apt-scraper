@@ -440,6 +440,25 @@ class SaveTests(FeaturesTestCase):
         self.assertTrue(file.exists())
         self.assertIn('not in the vocabulary', self.readings_task(self.run_cron()[0]).read_text(encoding='utf-8'))
 
+    def test_a_file_with_values_of_the_wrong_type_is_rejected_and_the_run_goes_on(self):
+        self.add(1, photos=0)
+        [task] = self.tasks(self.run_job()[0])
+        self.save(task)
+        self.store.update_settings(preferences={'likes': ['Near a park'], 'dislikes': []})
+        self.read_unexpressed(('like', 'Near a park'))
+        [(task, [entry])] = self.judgment_tasks(self.run_job()[0])
+        file = self.write(self.saving_file(self.task_file(task)), {'judgments': [
+            {'id': [entry['id']], 'fingerprint': entry['fingerprint'], 'preferences': {'Near a park': {'verdict': 'has', 'evidence': ''}}}]})
+        readings = self.write(self.inbox / 'readings.json', {'preferences': [{'kind': ['like'], 'phrase': 'Near a park', 'features': []}], 'notes': []})
+        self.add(2, photos=0)
+        report, wake = self.run_cron()
+        self.assertTrue(wake)
+        self.assertIn(f'0 files saved, 2 rejected ({file.name}, readings.json)', report)
+        self.assertEqual([self.manifest(task)['id'] for task in self.tasks(report)], ['zillow:2'])
+        self.assertTrue(file.exists())
+        self.assertFalse(readings.exists())
+        self.assertIn("id and fingerprint are the text the task file gives", self.task_file(self.judgment_tasks(report)[0][0]).read_text(encoding='utf-8'))
+
     def test_a_rejected_record_whose_listing_is_not_handed_again_is_deleted(self):
         self.add(1)
         [task] = self.tasks(self.run_job()[0])

@@ -50,18 +50,28 @@ class InboxTests(unittest.TestCase):
         self.assertEqual(result, {'record-a.json': {'saved': 1}})
         self.assertEqual(saved, [1])
         self.assertEqual(rejected['record-b.json'], 'n must not be negative: -1.')
-        self.assertEqual(rejected['record-c.json'], 'The file has no "n".')
+        self.assertEqual(rejected['record-c.json'], "KeyError: 'n'")
         self.assertIn('The file must be a JSON object: ', rejected['record-d.json'])
         self.assertEqual(rejected['record-e.json'], 'The file must be a JSON object.')
         self.assertEqual(rejected['notes.json'], 'notes.json is not a file this job saves.')
         self.assertFalse(good.exists())
         self.assertTrue(all(file.exists() for file in (bad, missing, broken, listed, stranger, other)))
 
-    def test_a_failure_that_is_not_a_rejection_stops_the_run_and_keeps_the_file(self):
+    def test_a_failure_of_the_machine_stops_the_run_and_keeps_the_file(self):
         file = self.write('record-a.json', '{}')
-        with self.assertRaises(sqlite3.OperationalError):
-            apply(self.inbox, {'record': mock.Mock(side_effect=sqlite3.OperationalError('database is locked'))})
+        for error in (sqlite3.OperationalError('database is locked'), PermissionError('denied')):
+            with self.subTest(error=error), self.assertRaises(type(error)):
+                apply(self.inbox, {'record': mock.Mock(side_effect=error)})
         self.assertTrue(file.exists())
+
+    def test_any_other_failure_rejects_the_file_alone_with_its_type(self):
+        self.write('record-a.json', '{"id": ["x"]}')
+        self.write('record-b.json', '{"id": "x"}')
+        saved, rejected = apply(self.inbox, {'record': lambda value: {'saved': {value['id']: 1}}})
+        self.assertEqual(saved, {'record-b.json': {'saved': {'x': 1}}})
+        self.assertEqual(rejected, {'record-a.json': "TypeError: unhashable type: 'list'"})
+        rejected = apply(self.inbox, {'record': mock.Mock(side_effect=sqlite3.ProgrammingError('type not supported'))})[1]
+        self.assertEqual(rejected, {'record-a.json': 'ProgrammingError: type not supported'})
 
     def test_an_empty_or_missing_inbox_saves_nothing(self):
         self.assertEqual(apply(self.inbox, {}), ({}, {}))

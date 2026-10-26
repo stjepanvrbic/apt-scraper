@@ -299,6 +299,8 @@ class Search:
         for entry in entries:
             if not isinstance(entry, dict) or set(entry) != {'id', 'fingerprint', 'must_haves'} or not isinstance(entry['must_haves'], dict):
                 raise ValueError('Each judgment needs exactly id, fingerprint and must_haves, an object.')
+            if not isinstance(entry['id'], str) or not isinstance(entry['fingerprint'], str):
+                raise ValueError("Each judgment's id and fingerprint are the text the task file gives.")
             allowed = required(criteria, self.store.features(entry['id']))
             for phrase, value in entry['must_haves'].items():
                 if phrase not in allowed:

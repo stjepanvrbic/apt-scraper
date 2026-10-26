@@ -8,6 +8,7 @@ written whole. An agent Hermes abandoned after a timeout may still write one, wh
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 
 from scratch import read_object
@@ -19,8 +20,9 @@ def inbox_directory(job):
 
 def apply(directory, handlers):
     """Applies every JSON file in directory with the handler of its kind, the part of its name before the first hyphen,
-    and returns the results of the files applied and the errors of the files rejected, by file name. A handler rejects a
-    file by raising ValueError or KeyError. Any other exception stops the run and leaves the file for the next one."""
+    and returns the results of the files applied and the errors of the files rejected, by file name. Only a failure of
+    the machine, an OSError or a locked or unavailable database, stops the run and leaves the file for the next one: any
+    other exception comes from what the agent wrote and rejects that file alone."""
     saved, rejected = {}, {}
     for file in sorted(directory.glob('*.json')) if directory.is_dir() else []:
         kind = file.stem.split('-', 1)[0]
@@ -30,7 +32,9 @@ def apply(directory, handlers):
             result = handlers[kind](read_object(file, 'The file'))
         except FileNotFoundError:
             continue
-        except (ValueError, KeyError) as error:
+        except (OSError, sqlite3.OperationalError):
+            raise
+        except Exception as error:
             rejected[file.name] = rejection(error)
             continue
         file.unlink(missing_ok=True)
@@ -39,11 +43,9 @@ def apply(directory, handlers):
 
 
 def rejection(error):
-    """A rejection's error for the agent. A KeyError carries either a message or, from a lookup, only the missing key."""
-    if isinstance(error, ValueError):
-        return str(error)
-    text = str(error.args[0])
-    return text if ' ' in text else f'The file has no "{text}".'
+    """A rejection's error for the agent: a check's message as it is, and any other exception with its type, so a bare
+    KeyError still says that a key was missing."""
+    return str(error) if type(error) is ValueError else f'{type(error).__name__}: {error}'
 
 
 def discard(directory, rejected, handed):

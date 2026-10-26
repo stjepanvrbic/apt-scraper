@@ -555,6 +555,8 @@ class Features:
         for entry in value['judgments']:
             if not isinstance(entry, dict) or set(entry) != {'id', 'fingerprint', 'preferences'} or not isinstance(entry['preferences'], dict):
                 raise ValueError('Each judgment needs exactly id, fingerprint and preferences, an object.')
+            if not isinstance(entry['id'], str) or not isinstance(entry['fingerprint'], str):
+                raise ValueError("Each judgment's id and fingerprint are the text the task file gives.")
             given = {phrase for _, identifier, _, phrase in handed if identifier == entry['id']}
             if entry['id'] not in waiting or waiting[entry['id']][0] != entry['fingerprint']:
                 if entry['id'] not in waiting and not given:
@@ -596,11 +598,15 @@ class Features:
         for item in value['preferences']:
             if not isinstance(item, dict) or set(item) != {'kind', 'phrase', 'features'}:
                 raise ValueError('Each preference reading has exactly kind, phrase and features.')
+            if not isinstance(item['kind'], str) or not isinstance(item['phrase'], str):
+                raise ValueError("Each preference reading's kind and phrase are the text the task file gives.")
             if (item['kind'], item['phrase']) in stated or (item['kind'], item['phrase']) not in given:
                 preferences.append((item['kind'], item['phrase'], item['features']))
         for item in value['notes']:
             if not isinstance(item, dict) or set(item) != {'id', 'sentiment', 'likes', 'dislikes'}:
                 raise ValueError('Each note reading has exactly id, sentiment, likes and dislikes.')
+            if type(item['id']) is not int:
+                raise ValueError("Each note reading's id is the number the task file gives.")
             notes.append((item['id'], {key: item[key] for key in ('sentiment', 'likes', 'dislikes')}))
         self.store.save_readings(notes=notes, preferences=preferences)
         return {'preferences': len(preferences), 'notes': len(notes)}

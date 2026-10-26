@@ -442,6 +442,17 @@ class SearchRunTests(unittest.TestCase):
         self.assertFalse(file.exists())
         self.assertEqual(self.shown(), ['fake:2'])
 
+    def test_a_judgments_file_with_values_of_the_wrong_type_is_rejected_and_the_search_goes_on(self):
+        self.site.results = {'North': [1], 'South': []}
+        [listings] = self.task_listings(self.search())
+        file = self.directory / 'inbox' / 'judgments-batch-1.json'
+        file.parent.mkdir()
+        file.write_text(json.dumps({'judgments': [{'id': [listings[0]['id']], 'fingerprint': listings[0]['fingerprint'],
+                                                   'must_haves': {'Dogs allowed': True}}]}), encoding='utf-8')
+        report = self.search()
+        self.assertEqual((report['error'], report['rejected'], report['wake']), (None, ['judgments-batch-1.json'], True))
+        self.assertIn("id and fingerprint are the text the task file gives", Path(report['tasks'][0]).read_text(encoding='utf-8'))
+
     def test_a_rejected_judgments_file_whose_listings_no_longer_wait_is_deleted(self):
         self.site.results = {'North': [1], 'South': []}
         [listings] = self.task_listings(self.search())
