@@ -1,9 +1,9 @@
 ---
 title: The installer ends in the Hermes web dashboard, where the agent runs the setup
 type: Feature
-state: In Progress
+state: Done
 priority: 2
-assignee: agent
+assignee:
 milestone:
 parent:
 blocked_by: []
@@ -21,7 +21,7 @@ After `install`, the user is in the Hermes web dashboard's chat for the `apt-scr
 - [x] The dashboard starts without a window at login, and an apt-scraper shortcut (Start menu on Windows, Applications on macOS) opens its chat, starting the dashboard first when it is not running. Reopening the dashboard after a restart needs no terminal.
 - [ ] The first conversation in the dashboard offers the connections and the interview as `profile/SOUL.md` says; the agent runs every command and opens every page of the Google and gateway setup itself and asks the user only to sign in and approve. Verified on a throwaway profile with a headless browser against the dashboard, with screenshots in the pull request.
 - [x] The account-connections skill works when the user is in the dashboard rather than a terminal: nothing it does assumes a TTY, and `hermes gateway setup`'s interactive wizard is driven by the agent, not the user.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
@@ -74,3 +74,5 @@ Tech debt fixed: the parity test's shell step pattern did not match indented ste
 Delivered on `feat/dashboard_first_run` in [PR #26](https://github.com/stjepanvrbic/apt-scraper/pull/26), open against `main`, not merged. Spec decisions checked: none have ADR identifiers.
 
 ## Comments
+
+- 2026-10-25: Done except the first conversation with real Google and Telegram sign-in and computer use, which the owner runs on the test profile. Not fixed here: shortcuts have no icon (the repository has only `assets/icon.svg`); `install.sh` mentions Linux, which the spec does not cover.
