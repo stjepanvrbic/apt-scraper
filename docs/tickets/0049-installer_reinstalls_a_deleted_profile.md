@@ -56,6 +56,8 @@ Verified on Windows at `699d8de`:
 
 Not run: the installers end to end, and anything on macOS.
 
+Delivered on `fix/installer_deleted_profile` in [PR #41](https://github.com/stjepanvrbic/apt-scraper/pull/41), open against `main`, not merged.
+
 ## Comments
 
 - 2026-10-26: Hit on the owner's first one-line install after the test profiles were deleted. Unblocked by hand with `profile create`, removing its `config.yaml`, then `profile install --force`.
