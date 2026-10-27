@@ -1,7 +1,7 @@
 ---
 title: The account setup runs the user's real browser on its own profile, attached over CDP
 type: Bug
-state: In Progress
+state: Done
 priority: 1
 assignee: agent
 milestone:
@@ -23,7 +23,7 @@ The account setup drives a full instance of the user's own browser binary (Brave
 - [x] Without a supported default browser, the skill tells the user to install Brave, Chrome or Edge and stops, instead of falling back to Chrome for Testing.
 - [x] README, spec and the ticket 0052 wording are updated to this design.
 - [x] Tests in the existing style: the launch command (binary, user-data dir, port, flags, no automation flag), the config key set and cleared, the instance closed on `off`, the gate and stale rule on the new key; no test opens the owner's browser or a real window (use a fake binary).
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
@@ -49,6 +49,7 @@ Verification must not open the owner's browser or touch its profile: a fake bina
 
 ## Result
 
+- Delivered in [PR #47](https://github.com/stjepanvrbic/apt-scraper/pull/47), merged to `main` as 7fc215d after one review round with no blocking findings and two follow-ups (old keys cleared on upgrade, the private-address deviation written down).
 - Delivered on branch `feat/setup_browser_over_cdp`.
 - `connections.py`:
   - `browser on` finds the default browser the way Hermes does and starts its real binary, detached, on `$HERMES_HOME/apt-scraper/browser` with a free debugging port on 127.0.0.1 (9333 first). It records PID, start time and port in `apt-scraper/browser-instance.json` and sets `browser.allow_private_urls` and `browser.cdp_url`. It exits 4 while a contact run is recorded and 5 without a supported browser.
