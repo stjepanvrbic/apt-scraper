@@ -5,15 +5,15 @@ Commands:
                             judgments the last wake wrote into the job's inbox, fetches the rapid-transit stations once
                             per transit feed, prepares the photos of the listings waiting for extraction, writes the
                             task files of the extractions, the readings and the judgments of preferences stated later,
-                            prints their delegate_task calls for the agent, sends the Compare invitation once it is
-                            due, and ends with a line that tells Hermes whether to wake the agent. Never fails.
+                            prints their delegate_task calls for the agent, delivers the Compare invitation once it
+                            is due, and ends with a line that tells Hermes whether to wake the agent. Never fails.
   features.py tags          the tag list, most used first
-  features.py status        whether extraction needs the user's attention
+  features.py status        whether extraction needs the user's attention, and whether to ask the user to answer
+                            Compare questions
   features.py retry         try again every extraction and judgment given up after 3 attempts
-  features.py invite-compare ask for the first 5 to 8 pairwise answers through the messaging gateway, once ready
+  features.py compare-asked record that a conversation asked the user to answer 5 to 8 Compare questions
 
-Exit codes: 0 done (for status: no problem), 3 extraction needs attention or the invitation gateway is not connected,
-1 the input or a step failed, 2 usage error.
+Exit codes: 0 done (for status: no problem), 3 extraction needs attention, 1 the input or a step failed, 2 usage error.
 
 Hermes wakes the model whenever a cron script fails (cron/scheduler_prompt.py, "Script Error"), so run records its
 failures for status and ends with its wake decision instead.
@@ -42,7 +42,7 @@ SKILLS = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SKILLS / 'gallery' / 'scripts'))
 sys.path.insert(0, str(SKILLS / 'contact' / 'scripts'))
 
-from contact import NotConnected, tell_user, usable  # noqa: E402
+from contact import tell_user, usable  # noqa: E402
 from geodata import SourceUnavailable, fetch_stations  # noqa: E402
 from inbox import apply, batches, correction, discard, inbox_directory, listing_key, load_batches, save_batches  # noqa: E402
 from record import CATEGORIES, FLAGS, NOT_SHOWN, RATINGS, ROOM_TYPES, UNIT_LEVELS, choices, validate_judgments  # noqa: E402
@@ -65,6 +65,9 @@ READING_TEMPLATE = Path(__file__).resolve().parents[1] / 'reading.md'
 MEDIA = SKILLS / 'gallery' / 'web' / 'media'
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36'
 EXTENSIONS = {'JPEG': 'jpg', 'PNG': 'png', 'WEBP': 'webp', 'GIF': 'gif'}
+COMPARE_INVITATION = ('Your first apartments are ready to compare. Please answer 5 to 8 questions in the gallery\'s Compare tab. '
+                      'For each pair, choose the apartment you prefer, or skip if you cannot decide. '
+                      'Your choices will count the next time you ask me to score and rerank.')
 
 
 class PhotosUnavailable(Exception):
@@ -165,9 +168,9 @@ def photo_overview(count):
 class RunState:
     """The job's records next to the listing store: the last run's problems, the listings whose photos could not be
     downloaded, since when and why, the transit feed whose stations could not be fetched, since when, when last tried
-    and why, the model reads the last run handed to the agent, and when the Compare invitation was sent. A read handed
-    over that still waits at the next run, after it applied the inbox, counts as a failed attempt then, so an attempt
-    counts only once its wake has ended."""
+    and why, and the model reads the last run handed to the agent. A read handed over that still waits at the next
+    run, after it applied the inbox, counts as a failed attempt then, so an attempt counts only once its wake has
+    ended."""
 
     def __init__(self, path):
         self.path = path
@@ -223,7 +226,8 @@ class Features:
     def run(self):
         """One pass of the job: the files the last wake wrote into the inbox, the stations, the extraction tasks, the
         readings and judgments waiting for the agent, and then the Compare invitation. A step that fails becomes one of
-        the run's problems without stopping the others. A rejected file stays in the inbox while its task is handed
+        the run's problems without stopping the others, except the invitation, whose failure its record in the store
+        holds. A rejected file stays in the inbox while its task is handed
         again, with the error, and is deleted otherwise. The reads handed to the agent are recorded once the report
         that hands them over is complete, and the invitation comes after that, so the messaging gateway cannot change
         the report, the wake or the attempts."""
@@ -248,8 +252,8 @@ class Features:
             discard(self.inbox, rejected, [name for _, _, files in prepared for name in files])
         handed = [extraction_read(listing['id'], listing['content_fingerprint']) for listing in tasks] + readings + judgments
         self.state.update(problems=problems, handed=handed)
-        problems += self.send_compare_invitation(problems)
-        return [*saved_lines, *lines, *extraction_lines, *reading_lines, *judgment_lines, *problems], bool(handed)
+        return [*saved_lines, *lines, *extraction_lines, *reading_lines, *judgment_lines, *problems,
+                *self.deliver_compare_invitation()], bool(handed)
 
     def save_inbox(self):
         """Saves the records, readings and judgments in the inbox, and returns the report's line about them and the
@@ -354,18 +358,30 @@ class Features:
         reads = [judgment_read(listing, phrase) for batch in named.values() for listing, phrases in batch for phrase in phrases]
         return lines, reads, [f'judgments-{name}.json' for name in every if name in named or name in again]
 
-    def send_compare_invitation(self, problems):
-        """Sends the Compare invitation when it is due and the gateway is connected. A failure is recorded as one of the
-        run's problems and returned, and the invitation stays pending for the next run."""
+    def deliver_compare_invitation(self):
+        """Delivers the Compare invitation once it is due and neither the gateway nor the gallery has: through the
+        messaging gateway when it is connected and no conversation has asked yet, otherwise in the gallery, whose
+        invitation the next conversation passes on. A send or gateway check that fails is recorded in the invitation's
+        record, so a conversation asks while the invitation stays pending and the next run tries again, and the
+        report's line about it is returned. The record is the only place that holds it, so the first delivery on any
+        surface ends it."""
         try:
-            if self.compare_invitation_pending() and usable('gateway'):
-                self.invite_compare()
+            invitation = self.store.compare_invitation()
+            if not invitation['due'] or {'gateway', 'gallery'} & set(invitation['delivered']):
+                return []
+            surface = 'gallery'
+            try:
+                if 'conversation' not in invitation['delivered'] and usable('gateway'):
+                    tell_user(COMPARE_INVITATION)
+                    surface = 'gateway'
+            except Exception as error:
+                self.store.fail_compare_invitation(failure(error))
+                raise
+            self.store.deliver_compare_invitation(surface)
             return []
         except Exception as error:
-            problem = (f'The message that asks the user to answer questions in the Compare tab could not be sent, '
-                       f'so the next run sends it again. {failure(error)}')
-            self.state.update(problems=[*problems, problem])
-            return [problem]
+            return [f'The invitation to answer questions in the Compare tab could not be delivered, so the next conversation '
+                    f'asks and the next run tries again. {failure(error)}']
 
     def refresh_stations(self):
         """Fetches the rapid-transit stations of the transit feed once, and again only when the feed changes. A feed is tens
@@ -388,22 +404,27 @@ class Features:
         self.state.update(stations_unavailable=None)
         return [f'{len(stations)} rapid-transit stations fetched from {feed["url"]}.']
 
-    def compare_invitation_pending(self):
-        if self.state.load().get('compare_invited_at') or self.store.missing_settings():
-            return False
-        inputs = self.store.ranking_inputs()
-        return not inputs['pairs'] and sum(
-            listing['rankable'] and listing['record'] is not None and not listing['id'].startswith('sample:')
-            for listing in inputs['listings']) >= 2
+    def compare_asked(self):
+        """Records that a conversation asked the user to answer Compare questions, once."""
+        return {'recorded': self.store.deliver_compare_invitation('conversation')}
 
-    def invite_compare(self):
-        if not self.compare_invitation_pending():
-            return {'sent': False}
-        tell_user('Your first apartments are ready to compare. Please answer 5 to 8 questions in the gallery\'s Compare tab. '
-                  'For each pair, choose the apartment you prefer, or skip if you cannot decide. '
-                  'Your choices will count the next time you ask me to score and rerank.')
-        self.state.update(compare_invited_at=self.now().isoformat())
-        return {'sent': True}
+    def ask_to_compare(self):
+        """Whether a conversation should ask the user to answer Compare questions, from the invitation's record: it is
+        due, neither the gateway nor a conversation has delivered it, and the gallery has, the job's last attempt failed,
+        or the job's next run will deliver it in the gallery, because the gateway is not connected. The gateway is
+        checked only while the record says nothing else, so a conversation between the first records and the job's
+        next run asks too. A gateway check that fails counts as no gateway, since the job's run could not send through
+        it either."""
+        invitation = self.store.compare_invitation()
+        delivered = set(invitation['delivered'])
+        if not invitation['due'] or delivered & {'gateway', 'conversation'}:
+            return False
+        if 'gallery' in delivered or invitation['failed']:
+            return True
+        try:
+            return not usable('gateway')
+        except RuntimeError:
+            return True
 
     @staticmethod
     def reads(work):
@@ -613,7 +634,7 @@ class Features:
         problems = list(state['problems'])
         if self.store.missing_settings():
             return {'problems': problems, 'records': 0, 'waiting': 0, 'given_up': [], 'awaiting_judgment': 0, 'awaiting_reading': 0,
-                    'photos_unavailable': {}}
+                    'photos_unavailable': {}, 'ask_to_compare': False}
         work = self.outstanding()
         given_up = [listing['id'] for listing in work['extract_given_up']]
         if given_up:
@@ -641,7 +662,7 @@ class Features:
                                         for identifier, entry in stalled.items()) + '.')
         return {'problems': problems, 'records': len(work['records']), 'waiting': len(work['extract']), 'given_up': given_up,
                 'awaiting_judgment': len(work['judge']), 'awaiting_reading': len(work['notes']) + len(work['unread']),
-                'photos_unavailable': state['photos_unavailable']}
+                'photos_unavailable': state['photos_unavailable'], 'ask_to_compare': self.ask_to_compare()}
 
     def retry(self):
         self.store.reset_read_attempts()
@@ -675,7 +696,7 @@ def main(argv):
     commands.add_parser('tags')
     commands.add_parser('status')
     commands.add_parser('retry')
-    commands.add_parser('invite-compare')
+    commands.add_parser('compare-asked')
     arguments = parser.parse_args(argv)
     if arguments.command == 'run':
         return run()
@@ -685,17 +706,14 @@ def main(argv):
             report = features.status()
             print(json.dumps(report, ensure_ascii=False))
             return ATTENTION if report['problems'] else 0
-        if arguments.command == 'invite-compare':
-            print(json.dumps(features.invite_compare()))
+        if arguments.command == 'compare-asked':
+            print(json.dumps(features.compare_asked()))
         elif arguments.command == 'retry':
             features.retry()
             print('Every extraction and judgment given up is tried again from the next run.')
         else:
             print('\n'.join(features.tag_lines()))
         return 0
-    except NotConnected as error:
-        print(str(error), file=sys.stderr)
-        return 3
     except (ValueError, KeyError, OSError, sqlite3.Error, RuntimeError) as error:
         print(error.args[0] if isinstance(error, KeyError) else error, file=sys.stderr)
         return 1

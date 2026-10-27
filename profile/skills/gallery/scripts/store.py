@@ -17,7 +17,7 @@ from code_features import FEATURES, configured_transit_feed, store_all_code_feat
 from schema import FINGERPRINT, LISTING_ID, MIGRATIONS, content_fingerprint, migrate
 from queries import RANKABLE, RANKING_EXCLUSION, answered_pairs, browse, paired, snapshot, user_noted, validate_page
 from record import SEED_TAGS, known_spelling, validate_extraction, validate_judgments
-from scoring import reading_vocabulary, stated_phrases, validate_note_reading, validate_preference_reading
+from scoring import compose_reason, reading_vocabulary, stated_phrases, validate_note_reading, validate_preference_reading
 
 
 UNCHANGED = object()
@@ -30,6 +30,7 @@ PREFERENCES = ('likes', 'dislikes')
 PLACE_FIELDS = ('name', 'address')
 IMPORTANCE = ('low', 'medium', 'high')
 READ_ATTEMPTS = 3
+COMPARE_SURFACES = ('gateway', 'gallery', 'conversation')
 
 
 class TimeZoneDataMissing(RuntimeError):
@@ -285,6 +286,10 @@ def extraction_read(listing_id, fingerprint):
 
 
 def explain_pending_rankings(connection, listings):
+    """Sets unranked_reason, why a listing has no current rank, on each listing, None for a ranked one, and clears the
+    rank, reason and exploration mark of the listings without a current rank."""
+    for listing in listings:
+        listing['unranked_reason'] = None
     pending = {listing['id']: listing for listing in listings if not listing['analysis_current'] or listing['rank'] is None}
     if not pending:
         return
@@ -306,7 +311,7 @@ def explain_pending_rankings(connection, listings):
             reason = f'Not ranked yet: extraction failed {READ_ATTEMPTS} times. Score and rerank to use code-derived features.'
         else:
             reason = 'Not ranked yet: waiting for its feature record.'
-        listing.update(rank=None, reason=reason, exploration=False)
+        listing.update(rank=None, reason=None, unranked_reason=reason, exploration=False)
 
 
 class CriteriaApplied(NamedTuple):
@@ -541,8 +546,8 @@ class ListingStore:
         None, its judgments of stated preferences, its code-derived features, the criteria areas whose search found it
         or None, whether extraction gave up on it, whether it is ranked (available, inside the criteria and not
         dismissed), its rank from the latest rerank when its content has not changed since, and the user's actions on it; the settings; the readings of the stated preferences by (kind,
-        phrase) and of the user's notes by note id; each listing's latest note sentiment; and the pairwise answers as
-        (chosen, other). Completed visits are included only for the rerank's diagnostic check."""
+        phrase) and of the user's notes by note id; each listing's latest note sentiment; the pairwise answers as
+        (chosen, other); and the tag list. Completed visits are included only for the rerank's diagnostic check."""
         with self.connect() as connection:
             connection.execute('BEGIN')
             settings = {row['name']: json.loads(row['value']) for row in connection.execute('SELECT * FROM settings')}
@@ -562,6 +567,7 @@ class ListingStore:
             preference_readings = {(row['kind'], row['phrase']): json.loads(row['features'])
                                    for row in connection.execute('SELECT * FROM preference_readings')}
             pairs = answered_pairs(connection)
+            tags = sorted(self.known_tags(connection))
             visits = []
             if include_signals:
                 visits = [dict(row) for row in connection.execute('''SELECT s.listing_id, s.visit_id,
@@ -592,7 +598,7 @@ class ListingStore:
         return {'listings': listings, 'settings': settings, 'preference_readings': preference_readings,
                 'note_readings': {note: reading for note, (_, reading) in note_readings.items()},
                 'sentiments': {listing_id: reading['sentiment'] for listing_id, reading in note_readings.values()}, 'pairs': pairs,
-                'implicit_visits': visits}
+                'tags': tags, 'implicit_visits': visits}
 
     def record_signals(self, events):
         """Stores an atomic, retryable batch without changing the gallery's content revision."""
@@ -642,18 +648,17 @@ class ListingStore:
 
     def save_rerank(self, result):
         """Replaces the whole ranking in one transaction with a rerank's result: each listing in result['ranked']
-        gets its rank, reason, explanation and exploration mark, each in result['unranked'] its reason without a rank,
-        and every other listing loses its rank, reason and explanation. The summary is kept as the latest rerank, with
+        gets its rank, reason, explanation and exploration mark, each in result['unranked'] stays without them, and
+        every other listing loses its rank, reason and explanation. The summary is kept as the latest rerank, with
         the ids of the entries left out because their listing changed meanwhile as `stale`. The rerank's review pass
-        waits from then on, with result['check'], the scores its leave-one-out check reads, and a review still waiting
-        for an earlier rerank is superseded. Returns the rerank's id."""
+        waits from then on, with result['check'], the scores its leave-one-out check reads and the inputs its task
+        describes, and a review still waiting for an earlier rerank is superseded. Returns the rerank's id."""
         with self.connect(write=True) as connection:
             current = dict(connection.execute('SELECT id, fingerprint FROM listings').fetchall())
-            entries = [(identifier, entry['fingerprint'], entry['rank'], require_text(entry['reason'], 'Reason', limit=500),
+            entries = [(identifier, entry['fingerprint'], entry['rank'], json.dumps(entry['reason'], ensure_ascii=False),
                         json.dumps(entry['explanation'], ensure_ascii=False, allow_nan=False), int(entry['exploration']))
                        for identifier, entry in result['ranked'].items()]
-            entries += [(identifier, entry['fingerprint'], None, require_text(entry['reason'], 'Reason', limit=500), None, 0)
-                        for identifier, entry in result['unranked'].items()]
+            entries += [(identifier, entry['fingerprint'], None, None, None, 0) for identifier, entry in result['unranked'].items()]
             stale = sorted(entry[0] for entry in entries if current.get(entry[0]) != entry[1])
             fresh = [entry for entry in entries if entry[0] not in stale]
             connection.execute('UPDATE ranking SET rank = NULL, reason = NULL, explanation = NULL, exploration = 0')
@@ -689,8 +694,8 @@ class ListingStore:
             return {**json.loads(row['result']), 'id': row['id'], 'finished_at': row['finished_at'], 'review': review}
 
     def review_snapshot(self, rerank_id):
-        """The scores the leave-one-out check of a waiting review reads, as the rerank stored them, or None once the
-        review ended."""
+        """What a waiting review reads as the rerank stored it, the scores of its leave-one-out check and the inputs its
+        task describes, or None once the review ended."""
         with self.connect() as connection:
             row = connection.execute('SELECT snapshot FROM reviews WHERE rerank_id = ?', (rerank_id,)).fetchone()
             return json.loads(row['snapshot']) if row and row['snapshot'] else None
@@ -699,7 +704,7 @@ class ListingStore:
         """Each listing the latest rerank ranked whose content has not changed since: its rank, reason, explanation and
         exploration mark, by id."""
         with self.connect() as connection:
-            return {row['listing_id']: {'rank': row['rank'], 'reason': row['reason'], 'explanation': json.loads(row['explanation']),
+            return {row['listing_id']: {'rank': row['rank'], 'reason': json.loads(row['reason']), 'explanation': json.loads(row['explanation']),
                                         'exploration': bool(row['exploration'])}
                     for row in connection.execute('SELECT r.* FROM ranking r JOIN listings l ON l.id = r.listing_id AND l.fingerprint = r.fingerprint '
                                                   'WHERE r.rank IS NOT NULL ORDER BY r.rank')}
@@ -734,7 +739,7 @@ class ListingStore:
             connection.executemany('UPDATE ranking SET rank = ? WHERE listing_id = ?',
                                    [(rank, identifier) for identifier, rank in ranks.items() if identifier in current])
             connection.executemany('UPDATE ranking SET reason = ? WHERE listing_id = ?',
-                                   [(require_text(reason, 'Reason', limit=500), identifier) for identifier, reason in reasons.items() if identifier in current])
+                                   [(json.dumps(reason, ensure_ascii=False), identifier) for identifier, reason in reasons.items() if identifier in current])
             connection.execute("UPDATE reviews SET state = 'done', snapshot = NULL, result = ?, updated_at = ? WHERE rerank_id = ?",
                                (json.dumps(result, ensure_ascii=False, allow_nan=False), datetime.now(timezone.utc).isoformat(), rerank_id))
 
@@ -833,6 +838,43 @@ class ListingStore:
         connection.execute('DELETE FROM pairwise_skips WHERE remaining = 1')
         connection.execute('UPDATE pairwise_skips SET remaining = remaining - 1')
 
+    def compare_invitation(self):
+        """The invitation to answer the first pairwise questions, one record every surface reads: whether it is due,
+        because the interview is complete, at least two listings the ranking can compare have a feature record of their
+        current content and the user has given no pairwise answer yet; when each surface delivered it, by surface:
+        gateway (the messaging gateway), gallery (shown in the gallery while it is due) and conversation (asked in a
+        conversation with the agent); and the last attempt that failed, {'at', 'reason'}, while no surface has
+        delivered it since, otherwise None. Sample listings do not count."""
+        missing = self.missing_settings()
+        with self.connect() as connection:
+            connection.execute('BEGIN')
+            comparable = connection.execute(f'''SELECT COUNT(*) FROM listings l LEFT JOIN feedback f ON f.listing_id = l.id
+                JOIN feature_records records ON records.listing_id = l.id AND records.fingerprint = l.fingerprint
+                WHERE {RANKABLE} AND l.id NOT LIKE 'sample:%' ''').fetchone()[0]
+            answered = connection.execute('SELECT 1 FROM pairwise_answers LIMIT 1').fetchone()
+            row = connection.execute('SELECT * FROM compare_invitation').fetchone()
+        return {'due': not missing and comparable >= 2 and not answered,
+                'delivered': {surface: row[surface] for surface in COMPARE_SURFACES if row[surface]},
+                'failed': {'at': row['failed_at'], 'reason': row['failure']} if row['failed_at'] else None}
+
+    def deliver_compare_invitation(self, surface):
+        """Records that surface delivered the invitation to answer the first pairwise questions, which ends any failed
+        attempt, and returns whether this is the first time it did."""
+        if surface not in COMPARE_SURFACES:
+            raise ValueError(f'{surface} is not a surface of the Compare invitation.')
+        with self.connect(write=True) as connection:
+            first = connection.execute(f'SELECT {surface} IS NULL FROM compare_invitation').fetchone()[0]
+            connection.execute(f'UPDATE compare_invitation SET {surface} = COALESCE({surface}, ?), failed_at = NULL, failure = NULL',
+                               (datetime.now(timezone.utc).isoformat(),))
+            return bool(first)
+
+    def fail_compare_invitation(self, reason):
+        """Records an attempt to deliver the invitation that failed, and why, unless a surface delivered it already."""
+        with self.connect(write=True) as connection:
+            connection.execute('UPDATE compare_invitation SET failed_at = ?, failure = ? '
+                               'WHERE gateway IS NULL AND gallery IS NULL AND conversation IS NULL',
+                               (datetime.now(timezone.utc).isoformat(), reason))
+
     def skip_pair(self, first, second):
         """Suppresses this pair until twenty other questions have been answered or skipped."""
         with self.connect(write=True) as connection:
@@ -859,16 +901,20 @@ class ListingStore:
         them from their code features."""
         return {listing['id'] for listing in self.ranking_inputs()['listings'] if listing['given_up']}
 
-    def rank(self, listing_id, fingerprint, rank, reason):
+    def rank(self, listing_id, fingerprint, rank, reason_features):
+        """Sets one listing's rank and a reason whose features part is reason_features, either {'for': [...], 'against':
+        [...]} or {'text': ...}."""
         if type(rank) is not int or rank < 1:
             raise ValueError('Rank must be a positive integer.')
-        reason = require_text(reason, 'Reason', limit=500)
+        if not isinstance(reason_features, dict) or set(reason_features) not in ({'for', 'against'}, {'text'}):
+            raise ValueError('A reason names its features as for and against lists or as a text.')
+        reason = compose_reason(reason_features, code_only=False, similar_favorite=None)
         with self.connect(write=True) as connection:
             self.require_fingerprint(connection, listing_id, fingerprint)
             connection.execute('''INSERT INTO ranking (listing_id, fingerprint, rank, reason) VALUES (?, ?, ?, ?)
                 ON CONFLICT(listing_id) DO UPDATE SET rank = excluded.rank, reason = excluded.reason,
                 features = CASE WHEN ranking.fingerprint = excluded.fingerprint THEN ranking.features END,
-                fingerprint = excluded.fingerprint''', (listing_id, fingerprint, rank, reason))
+                fingerprint = excluded.fingerprint''', (listing_id, fingerprint, rank, json.dumps(reason, ensure_ascii=False)))
 
     def save_extraction(self, listing_id, fingerprint, extraction, *, photos, phrases):
         """Stores the model's part of the feature record of this content when it keeps the contract of record.py.
@@ -964,7 +1010,7 @@ class ListingStore:
             listing = json.loads(row['data'])
             listing['matches_criteria'] = bool(row['matches_criteria'])
             ranking = connection.execute('SELECT * FROM ranking WHERE listing_id = ?', (listing_id,)).fetchone()
-            listing.update(rank=ranking['rank'] if ranking else None, reason=ranking['reason'] if ranking else None,
+            listing.update(rank=ranking['rank'] if ranking else None, reason=json.loads(ranking['reason']) if ranking and ranking['reason'] else None,
                            explanation=json.loads(ranking['explanation']) if ranking and ranking['explanation'] else None,
                            exploration=bool(ranking and ranking['exploration']),
                            content_fingerprint=row['fingerprint'], analysis_current=bool(ranking and ranking['fingerprint'] == row['fingerprint']))

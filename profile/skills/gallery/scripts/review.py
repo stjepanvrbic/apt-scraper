@@ -83,10 +83,10 @@ def checked_text(text, values, words=CONNECTING_WORDS, *, source='the record', r
     return ' '.join(CITATION.sub(lambda match: match.group(1), text).split())
 
 
-def tag_counts(inputs, tags):
-    """Every tag of the tag list with the number of listings whose current record uses it, most used first."""
+def tag_counts(inputs):
+    """Every tag of the inputs' tag list with the number of listings whose current record uses it, most used first."""
     used = Counter(tag for listing in inputs['listings'] if listing['record'] for tag in {*listing['record']['traits'], *listing['record']['concerns']})
-    return dict(sorted(((tag, used[tag]) for tag in tags), key=lambda item: (-item[1], item[0])))
+    return dict(sorted(((tag, used[tag]) for tag in inputs['tags']), key=lambda item: (-item[1], item[0])))
 
 
 def record_digest(record):
@@ -99,60 +99,102 @@ def shown_contributions(explanation):
     return [part for part in explanation['contributions'] if part['feature'] not in HIDDEN_FEATURES]
 
 
-def review_task(inputs, last, snapshot, ranked, tags):
-    """The review's input: the top REVIEWED listings of the latest rerank, last, in the order of its snapshot, that
-    have not changed since, each with what its record states and what moved its score; the stated preferences with
-    their readings; the note readings; and the ranking state with the tag list, tags, each with the number of listings
-    whose record uses it. ranked is each listing still ranked with its explanation. It holds no label and no favorite's
-    identity."""
-    listings = {listing['id']: listing for listing in inputs['listings']}
-    top = [identifier for identifier in snapshot['order'][:REVIEWED] if identifier in ranked]
-    settings, readings = inputs['settings'], inputs['preference_readings']
-    phrases = stated_phrases(settings)
-    starting = prior_means(inputs, [(kind, phrase) for kind, phrase in phrases if not expressed(readings, kind, phrase)])
-    named_by = {}
+def reviewed_listing(listing, entry):
+    """What the review of a rerank reads about one of its top listings, from the rerank's inputs, listing, and its
+    result, entry: its title, what its record stated, what moved its score, the values a rewritten reason may cite,
+    whether the rerank ranked it from code features only, and its most similar favorite."""
+    shown = shown_contributions(entry['explanation'])
+    return {
+        'id': listing['id'], 'title': listing['title'] or listing['address'], 'record': record_digest(listing['record']),
+        'contributions': [[part['value'], round(part['contribution'], 2)] for part in shown if part['value'] is not None][:CONTRIBUTIONS_SHOWN],
+        'reason': feature_reason(shown), 'citable': citable_values(entry['explanation'], listing['record']),
+        'code_only': entry['reason']['code_only'], 'similar_favorite': entry['explanation']['similar_favorite'],
+    }
+
+
+def review_inputs(inputs, result):
+    """Everything the review of a rerank reads besides its scores, which the rerank stores with its waiting review, so
+    a record, a reading, a preference or a label that arrives after the rerank cannot make the task describe a ranking
+    the rerank did not make, nor the review cite or mark what the rerank did not use: the stated preferences with their
+    readings, the likes and dislikes of the note readings, each feature's starting weight and the preferences that name
+    it, the counts of the labels other than favorites, reviewed_listing of each of the top REVIEWED listings of result,
+    the rerank's result on these inputs, how many ranked listings waited for a feature record and which ones extraction
+    gave up on, and the tag counts."""
+    readings = inputs['preference_readings']
+    phrases = stated_phrases(inputs['settings'])
+    stated_by = {}
     for kind, phrase in phrases:
         for item in readings.get((kind, phrase)) or []:
-            named_by.setdefault(item['feature'], []).append(f'{kind} "{phrase}"')
+            stated_by.setdefault(item['feature'], []).append(f'{kind} "{phrase}"')
         if readings.get((kind, phrase)) == []:
-            named_by.setdefault(f'preference:{phrase}', []).append(f'{kind} "{phrase}"')
+            stated_by.setdefault(f'preference:{phrase}', []).append(f'{kind} "{phrase}"')
+    listings = {listing['id']: listing for listing in inputs['listings']}
+    rankable = [listing for listing in inputs['listings'] if listing['rankable']]
+    return {
+        'preferences': [{'kind': kind, 'phrase': phrase, 'reading': readings.get((kind, phrase))} for kind, phrase in phrases],
+        'note_readings': [{'likes': reading['likes'], 'dislikes': reading['dislikes']} for reading in inputs['note_readings'].values()
+                          if reading['likes'] or reading['dislikes']],
+        'starting_weights': prior_means(inputs, [(kind, phrase) for kind, phrase in phrases if not expressed(readings, kind, phrase)]),
+        'stated_by': stated_by,
+        'labels': {
+            'contact_requests': sum(listing['contact'] for listing in inputs['listings']),
+            'dismissals': sum(listing['dismissed'] for listing in inputs['listings']),
+            'positive_notes': sum(sentiment == 'positive' for sentiment in inputs['sentiments'].values()),
+            'negative_notes': sum(sentiment == 'negative' for sentiment in inputs['sentiments'].values()),
+            'pairwise_answers': len(inputs['pairs']),
+        },
+        'listings': [reviewed_listing(listings[identifier], result['ranked'][identifier]) for identifier in result['check']['order'][:REVIEWED]],
+        'waiting_for_features': sum(listing['record'] is None and not listing['given_up'] for listing in rankable),
+        'extraction_given_up': [listing['title'] or listing['id'] for listing in rankable if listing['given_up']],
+        'tags': tag_counts(inputs),
+    }
+
+
+def stated_preferences(snapshot):
+    """The stated preferences of the rerank a snapshot belongs to, as (kind, phrase)."""
+    return {(item['kind'], item['phrase']) for item in snapshot['inputs']['preferences']}
+
+
+def reviewed_listings(snapshot, current):
+    """The top listings of a rerank's snapshot, as reviewed_listing describes them, that current holds, by id in the
+    rerank's order. current is the listings still ranked whose content has not changed since the rerank."""
+    return {entry['id']: entry for entry in snapshot['inputs']['listings'] if entry['id'] in current}
+
+
+def review_task(last, snapshot, current):
+    """The review's input, all of it what the latest rerank, last, read and stored in its snapshot: its top REVIEWED
+    listings in its order that current holds, the listings still ranked whose content has not changed since, each
+    with what its record stated and what moved its score; the stated preferences with their readings, the note
+    readings, the starting weights and the label counts; and the state of the ranking with the tag list, each tag with
+    the number of listings whose record used it. It holds no label and no favorite's identity."""
+    used = snapshot['inputs']
+    starting, stated_by = used['starting_weights'], used['stated_by']
     weights = {name: weight for name, weight in last['weights'].items() if name not in HIDDEN_FEATURES}
 
     def weight_entry(name):
         entry = {'feature': name, 'weight': round(weights[name], 3), 'starting_weight': starting.get(name, 0.0)}
-        return {**entry, 'stated': named_by[name]} if name in named_by else entry
+        return {**entry, 'stated': stated_by[name]} if name in stated_by else entry
 
-    rankable = [listing for listing in inputs['listings'] if listing['rankable']]
     return {
         'rerank': last['id'],
         'listings': [{
-            'rank': snapshot['order'].index(identifier) + 1, 'id': identifier, 'title': listings[identifier]['title'] or listings[identifier]['address'],
-            'exploration': identifier in snapshot['exploration'], 'record': record_digest(listings[identifier]['record']),
-            'contributions': [[part['value'], round(part['contribution'], 2)] for part in shown_contributions(ranked[identifier]['explanation'])
-                              if part['value'] is not None][:CONTRIBUTIONS_SHOWN],
-            'reason': feature_reason(shown_contributions(ranked[identifier]['explanation'])),
-        } for identifier in top],
-        'preferences': [{'kind': kind, 'phrase': phrase, 'reading': readings.get((kind, phrase))} for kind, phrase in phrases],
-        'note_readings': [{'likes': reading['likes'], 'dislikes': reading['dislikes']} for reading in inputs['note_readings'].values()
-                          if reading['likes'] or reading['dislikes']],
+            'rank': snapshot['order'].index(identifier) + 1, 'id': identifier, 'title': entry['title'],
+            'exploration': identifier in snapshot['exploration'], 'record': entry['record'],
+            'contributions': entry['contributions'], 'reason': entry['reason'],
+        } for identifier, entry in reviewed_listings(snapshot, current).items()],
+        'preferences': used['preferences'],
+        'note_readings': used['note_readings'],
         'state': {
             'ranked': len(snapshot['order']),
-            'labels': {
-                'favorites': len(last['held_out']),
-                'contact_requests': sum(listing['contact'] for listing in inputs['listings']),
-                'dismissals': sum(listing['dismissed'] for listing in inputs['listings']),
-                'positive_notes': sum(sentiment == 'positive' for sentiment in inputs['sentiments'].values()),
-                'negative_notes': sum(sentiment == 'negative' for sentiment in inputs['sentiments'].values()),
-                'pairwise_answers': len(inputs['pairs']),
-            },
+            'labels': {'favorites': len(last['held_out']), **used['labels']},
             'held_out_ranks': {'ranks': sorted(item['rank'] for item in last['held_out']), 'median': last['held_out_median'],
                                'mean': last['held_out_mean'],
                                'ranked_listings_that_are_not_favorites': len(snapshot['order']) - len(set(snapshot['order']) & set(snapshot['held_out']))},
             'weights_against_starting_weight': [weight_entry(name) for name in sorted(weights) if starting.get(name, 0.0) * weights[name] < 0],
             'largest_weights': [weight_entry(name) for name in sorted(weights, key=lambda name: (-abs(weights[name]), name))[:WEIGHTS_SHOWN]],
-            'waiting_for_features': sum(listing['record'] is None and not listing['given_up'] for listing in rankable),
-            'extraction_given_up': [listing['title'] or listing['id'] for listing in rankable if listing['given_up']],
-            'tags': tag_counts(inputs, tags),
+            'waiting_for_features': used['waiting_for_features'],
+            'extraction_given_up': used['extraction_given_up'],
+            'tags': used['tags'],
         },
     }
 
@@ -172,14 +214,17 @@ def require_entries(value, name, keys):
     return value
 
 
-def validated_review(value, rerank_id, snapshot, citable, terms, stated):
-    """The review's file, checked against the rerank it reviews: reasons, moves and flags only for the top REVIEWED of
-    the rerank's order in snapshot, each reason citing only the values in citable for its listing, which holds the
-    listings that have not changed since the rerank; each move's reason and each finding citing only the values of
-    those listings and terms, the tags and column names the task may name; no exploration listing moved and none moved
-    onto an exploration listing's rank; each listing moved at most once and each to a rank of its own; and flags only
-    for stated, the stated preferences as (kind, phrase). Raises ValueError naming every rejected text, or the first
-    other problem."""
+def validated_review(value, last, snapshot, current):
+    """The review's file, checked against the rerank it reviews, last, from what that rerank stored in snapshot:
+    reasons, moves and flags only for the top REVIEWED of the rerank's order, each reason citing only the values its
+    listing's record and explanation stated at the rerank, for the listings current holds, those still ranked whose
+    content has not changed since; each move's reason and each finding citing only the values of those listings and
+    review_terms of the rerank's tags and weights; no exploration listing moved and none moved onto an exploration
+    listing's rank; each listing moved at most once and each to a rank of its own; and flags only for the rerank's
+    stated preferences. Raises ValueError naming every rejected text, or the first other problem."""
+    rerank_id = last['id']
+    citable = {identifier: entry['citable'] for identifier, entry in reviewed_listings(snapshot, current).items()}
+    terms, stated = review_terms(snapshot['inputs']['tags'], last['weights']), stated_preferences(snapshot)
     if not isinstance(value, dict) or set(value) != set(REVIEW_FIELDS):
         raise ValueError(f'The review is a JSON object with exactly {", ".join(REVIEW_FIELDS)}.')
     if type(value['rerank']) is int and value['rerank'] < rerank_id:
@@ -304,14 +349,13 @@ def held_out_ranks(snapshot, shifts):
     return ranks
 
 
-def review_outcome(inputs, snapshot, ranked, review):
+def review_outcome(snapshot, review):
     """What a validated review changes: each listing's rank, each rewritten reason, and the review's result. snapshot
-    is what the rerank stored for the check and ranked each listing still ranked with its explanation."""
-    listings = {listing['id']: listing for listing in inputs['listings']}
-    reasons = {identifier: compose_reason(features, exploration=identifier in snapshot['exploration'],
-                                          code_only=listings[identifier]['record'] is None,
-                                          similar_favorite=ranked[identifier]['explanation']['similar_favorite'])
-               for identifier, features in review['reasons'].items()}
+    is what the rerank stored for its review, so a rewritten reason keeps the rerank's code-only mark and favorite."""
+    listings = {entry['id']: entry for entry in snapshot['inputs']['listings']}
+    reasons = {identifier: compose_reason({'text': text}, code_only=listings[identifier]['code_only'],
+                                          similar_favorite=listings[identifier]['similar_favorite'])
+               for identifier, text in review['reasons'].items()}
     order = reviewed_order(snapshot, review['moves'])
     exploration = set(snapshot['exploration'])
     score = dict(zip(snapshot['order'], snapshot['scores']))

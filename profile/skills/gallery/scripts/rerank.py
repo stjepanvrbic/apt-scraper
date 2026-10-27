@@ -9,8 +9,8 @@ import random
 import time
 
 from implicit_signals import diagnostic
-from review import citable_values, review_outcome, review_task, review_terms, validated_review
-from scoring import DEFAULT_HYPERPARAMETERS, fit_model, questions, rank_listings, stated_phrases
+from review import review_inputs, review_outcome, review_task, validated_review
+from scoring import DEFAULT_HYPERPARAMETERS, fit_model, questions, rank_listings
 
 REVIEW_ATTEMPTS = 3
 
@@ -24,13 +24,14 @@ def rerank(store, *, seed=None):
     inputs = store.ranking_inputs(include_signals=True)
     model = fit_model(inputs)
     result = rank_listings(inputs, seed, model=model)
+    result['check']['inputs'] = review_inputs(inputs, result)
     result['summary']['implicit_signals'] = diagnostic(inputs, result['summary'], model)
     rerank_id = store.save_rerank(result)
     return {**store.rerank(rerank_id), 'seconds': round(time.perf_counter() - started, 3)}
 
 
 def waiting_review(store):
-    """The latest rerank and the scores its review's check reads, while that review waits, otherwise None."""
+    """The latest rerank and what it stored for its review, while that review waits, otherwise None."""
     last = store.last_rerank()
     if not last or not last['review'] or last['review']['state'] not in ('waiting', 'running'):
         return None
@@ -51,13 +52,14 @@ def pending_review(store, rejection=None):
         return None
     if store.hand_review(last['id']) is None:
         return None
-    return review_task(store.ranking_inputs(), last, snapshot, store.ranked_listings(), store.tags())
+    return review_task(last, snapshot, set(store.ranked_listings()))
 
 
 def save_review(store, value):
     """Checks and applies the agent's review of the latest rerank, and returns its result. The leave-one-out check runs
-    on the scores the rerank stored, before and after the moves, so labels and listings that change after the rerank
-    leave the check as the review saw it. Raises ValueError for a review that breaks the review contract or no longer
+    on the scores the rerank stored, before and after the moves, and the review is checked and its reasons written
+    from what the rerank stored too, so labels, records and listings that change after the rerank leave the review as
+    its task described it. Raises ValueError for a review that breaks the review contract or no longer
     waits."""
     waiting = waiting_review(store)
     if waiting is None:
@@ -65,12 +67,8 @@ def save_review(store, value):
         state = last['review']['state'] if last and last['review'] else None
         raise ValueError(f'No review waits{f": the latest review is {state}" if state else ""}. Stop.')
     last, snapshot = waiting
-    inputs, ranked = store.ranking_inputs(), store.ranked_listings()
-    records = {listing['id']: listing['record'] for listing in inputs['listings']}
-    citable = {identifier: citable_values(entry['explanation'], records[identifier]) for identifier, entry in ranked.items()}
-    review = validated_review(value, last['id'], snapshot, citable, review_terms(store.tags(), last['weights']),
-                              set(stated_phrases(inputs['settings'])))
-    ranks, reasons, result = review_outcome(inputs, snapshot, ranked, review)
+    review = validated_review(value, last, snapshot, set(store.ranked_listings()))
+    ranks, reasons, result = review_outcome(snapshot, review)
     store.save_review(last['id'], ranks, reasons, result)
     return result
 

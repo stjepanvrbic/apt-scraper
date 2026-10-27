@@ -8,7 +8,7 @@ const checkValue = (value: number | null) => value === null ? 'No favorites' : n
 const reviewLabels = { waiting: 'Waiting for review', running: 'Review in progress', done: 'Review complete', failed: 'Review failed', superseded: 'Review superseded' };
 
 function ReviewText({ text }: { text: string }) {
-  return <div><Text size="sm" className="preserve-lines">{text}</Text><DistanceAttribution text={text} /></div>;
+  return <div><Text size="sm" className="preserve-lines">{text}</Text><DistanceAttribution texts={[text]} /></div>;
 }
 
 function ReviewDetails({ result, open }: { result: ReviewResult; open: (id: string) => void }) {

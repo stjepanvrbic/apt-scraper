@@ -111,6 +111,31 @@ test('loading, read errors and a rerank in another tab have distinct recoverable
   await expect(page.getByRole('button', { name: 'Score and rerank', exact: true })).toBeEnabled();
 });
 
+test('a reason lists each value it names as one item, the station distance with its station', async ({ page, gallery }, testInfo) => {
+  seed(gallery.database);
+  const listing = stored(gallery.database, `
+store.save_stations('https://www.transitchicago.com/downloads/sch_data/google_transit.zip', [{'id': '41020', 'name': 'Logan Square', 'latitude': 41.929728, 'longitude': -87.708541}])
+store.update_settings(location_priorities={**SETTINGS['location_priorities'], 'rapid_transit': 'high', 'places': 'high'})
+rerank(store, seed=1)
+shown = [store.listing(item['id']) for item in store.browse('Rankings')['items']]
+print(json.dumps(next(item for item in shown if any(value.endswith(' km to Logan Square station') for value in item['reason']['features']['for'] + item['reason']['features']['against']))))
+`);
+  const { for: up, against: down } = listing.reason.features;
+  await open(page, gallery.url);
+  const card = page.getByRole('article').filter({ has: page.getByRole('heading', { name: listing.title, exact: true }) });
+  const details = page.getByRole('dialog');
+  for (const scope of [card, details]) {
+    if (scope === details) await card.getByRole('button', { name: `View ${listing.title}`, exact: true }).click();
+    for (const [name, values] of [['For it', up], ['Against it', down]] as const) {
+      if (values.length) await expect(scope.getByRole('list', { name, exact: true }).getByRole('listitem')).toHaveText(values);
+    }
+  }
+  await expect(details.getByRole('listitem').filter({ hasText: /^\d+\.\d km to Logan Square station$/ })).toHaveCount(1);
+  await page.getByRole('button', { name: 'Close listing details' }).click();
+  await expect(details).toBeHidden();
+  await card.screenshot({ path: testInfo.outputPath('reason-lists.png') });
+});
+
 test('stored reviews refresh order, reasons and open details without losing notes or history', async ({ page, gallery }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -139,7 +164,7 @@ print(json.dumps({'review': result, 'listing': store.listing(identifier), 'order
 `);
   expect(result.review.outcome).toBe('kept');
   await expect(details.getByRole('heading', { name: 'Why it ranks #30', exact: true })).toBeVisible();
-  await expect(details.getByText(result.listing.reason, { exact: true })).toBeVisible();
+  await expect(details.getByText(result.listing.reason.features.text, { exact: true })).toBeVisible();
   await expect(details.getByText('Keep this note through the review.', { exact: true })).toBeVisible();
   await expect(details.getByText('The courtyard is available for a viewing.', { exact: true })).toBeVisible();
   await expect(details.getByRole('textbox', { name: 'Your note', exact: true })).toHaveValue('An unsaved thought stays here.');

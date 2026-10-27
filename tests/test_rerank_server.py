@@ -125,15 +125,17 @@ class RerankServerTests(GalleryServerCase):
         self.assertIsNone(pending['rank'])
         self.assertIsNone(pending['explanation'])
         self.assertFalse(pending['exploration'])
-        self.assertIn('waiting for its feature record', pending['reason'])
+        self.assertIsNone(pending['reason'])
+        self.assertIn('waiting for its feature record', pending['unranked_reason'])
         self.store.save_extraction(identifiers[0], changed['content_fingerprint'], extraction(0), photos=[], phrases=[])
-        self.assertIn('new or changed since the last rerank', self.request('/api/listings/' + identifiers[0])['reason'])
+        self.assertIn('new or changed since the last rerank', self.request('/api/listings/' + identifiers[0])['unranked_reason'])
         failed = self.store.upsert_listing(listing(id='example:failed'))
         for _ in range(READ_ATTEMPTS):
             self.store.record_read_attempts([extraction_read('example:failed', failed['content_fingerprint'])], [])
         items = self.request('/api/listings?page_size=100')['items']
-        self.assertTrue(all(item['rank'] for item in items[:24]))
-        reasons = {item['id']: item['reason'] for item in items[24:]}
+        self.assertTrue(all(item['rank'] and item['reason'] and item['unranked_reason'] is None for item in items[:24]))
+        self.assertTrue(all(item['reason'] is None for item in items[24:]))
+        reasons = {item['id']: item['unranked_reason'] for item in items[24:]}
         self.assertIn('new or changed since the last rerank', reasons[identifiers[0]])
         self.assertIn('extraction failed 3 times', reasons['example:failed'])
         self.assertIn('waiting for its feature record', reasons['example:100'])
@@ -146,7 +148,7 @@ class RerankServerTests(GalleryServerCase):
             card = next(item for item in self.request('/api/listings?view=' + view)['items'] if item['id'] == identifier)
             for item in (detail, card):
                 self.assertIsNone(item['rank'])
-                self.assertEqual(item['reason'], reason)
+                self.assertEqual((item['reason'], item['unranked_reason']), (None, reason))
                 self.assertFalse(item['exploration'])
             self.assertIsNone(detail['explanation'])
 
@@ -174,6 +176,6 @@ class RerankServerTests(GalleryServerCase):
         for item in (self.request('/api/listings/' + identifier),
                      next(item for item in self.request('/api/listings')['items'] if item['id'] == identifier)):
             self.assertIsNone(item['rank'])
-            self.assertEqual(item['reason'], 'Not ranked yet: new or changed since the last rerank.')
+            self.assertEqual((item['reason'], item['unranked_reason']), (None, 'Not ranked yet: new or changed since the last rerank.'))
         self.request('/api/rerank', {})
         self.assertEqual(self.request('/api/listings/' + identifier)['rank'], 1)

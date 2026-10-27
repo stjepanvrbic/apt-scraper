@@ -77,7 +77,7 @@ class GalleryServerTests(GalleryServerCase):
 
     def test_browser_reads_a_bounded_page_and_small_revision(self):
         fingerprint = self.store.listing('example:100')['content_fingerprint']
-        self.store.rank('example:100', fingerprint, 1, 'Quiet courtyard.')
+        self.store.rank('example:100', fingerprint, 1, {'text': 'Quiet courtyard.'})
         page = self.request('/api/listings?view=Rankings&page_size=1')
         self.assertEqual(len(page['items']), 1)
         self.assertNotIn('description', page['items'][0])

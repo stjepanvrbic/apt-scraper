@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Comparison, Listing, ListingPage } from './model';
+import type { CompareInvitation, Comparison, Listing, ListingPage } from './model';
 import { request } from './api';
 
 function useRevision() {
@@ -43,6 +43,14 @@ export function useGallery(view: string, page: number) {
   };
 }
 
+const invitationKey = ['gallery', 'compare-invitation'];
+
+export function useCompareInvitation() {
+  const revision = useRevision();
+  return useQuery({ queryKey: [...invitationKey, revision.data?.revision],
+    queryFn: ({ signal }) => request<CompareInvitation>('/api/compare/invitation', undefined, signal), enabled: revision.isSuccess, retry: false });
+}
+
 type ComparisonAction = { action: 'answer'; chosen: string; other: string } | { action: 'skip'; first: string; second: string };
 const compareKey = ['gallery', 'compare'];
 
@@ -70,7 +78,7 @@ export function useCompare() {
       setAnnouncement(variables.action === 'answer' ? 'Choice saved.' : 'Pair skipped.');
       client.setQueryData<Comparison>(compareKey, previous => previous && ({ question: null,
         answered: previous.answered + (variables.action === 'answer' ? 1 : 0) }));
-      await client.invalidateQueries({ queryKey: compareKey });
+      await Promise.all([client.invalidateQueries({ queryKey: compareKey }), client.invalidateQueries({ queryKey: invitationKey })]);
     },
   });
   const { isError, variables, reset } = mutation;

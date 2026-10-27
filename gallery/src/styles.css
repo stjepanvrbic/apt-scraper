@@ -16,6 +16,9 @@ body { margin: 0; }
 .listing-result-link .mantine-Button-label { white-space: normal; overflow-wrap: anywhere; }
 .score-number { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .exploration-label { color: #0653bd; }
+.reason-values ul { display: inline; margin: 0; padding: 0; list-style: none; }
+.reason-values li { display: inline; }
+.reason-values li + li::before { content: " · "; content: " · " / ""; }
 .ranking-explanation { background: #fff; border-color: #e5e6e8; }
 .explanation-accordion .mantine-Accordion-control { padding-inline: 0; }
 .explanation-accordion .mantine-Accordion-content { padding-inline: 0; }

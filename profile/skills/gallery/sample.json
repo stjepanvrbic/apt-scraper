@@ -28,7 +28,7 @@
     "first_seen": "2026-10-20",
     "status": "available",
     "rank": 1,
-    "reason": "Natural light, a separate workspace and a walkable neighborhood.",
+    "reason": {"for": ["natural light", "separate workspace", "walkable neighborhood"], "against": []},
     "rental_period": "month",
     "agent": {}
   },
@@ -60,7 +60,7 @@
     "first_seen": "2026-10-20",
     "status": "available",
     "rank": 2,
-    "reason": "Extra space for working from home, within the sample budget.",
+    "reason": {"for": ["extra space for working from home", "within the sample budget"], "against": []},
     "rental_period": "month",
     "agent": {}
   },
@@ -91,7 +91,7 @@
     "first_seen": "2026-10-20",
     "status": "available",
     "rank": 3,
-    "reason": "Lower monthly rent with outdoor space and lakefront access.",
+    "reason": {"for": ["lower monthly rent", "outdoor space", "lakefront access"], "against": []},
     "rental_period": "month",
     "agent": {}
   },
@@ -123,7 +123,7 @@
     "first_seen": "2026-10-20",
     "status": "available",
     "rank": 4,
-    "reason": "A quieter street and a shared garden for time outside.",
+    "reason": {"for": ["quieter street", "shared garden"], "against": []},
     "rental_period": "month",
     "agent": {}
   }

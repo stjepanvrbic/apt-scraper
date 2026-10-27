@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gal
 
 from record import CATEGORIES, FLAGS, RATINGS, SEED_TAGS  # noqa: E402
 from rerank import pairwise_questions, rerank  # noqa: E402
-from schema import MIGRATIONS  # noqa: E402
+from schema import MIGRATIONS, earlier_feature_text, reviews_with_inputs, structured_reasons  # noqa: E402
 from store import READ_ATTEMPTS, ListingStore, extraction_read  # noqa: E402
 from test_feature_record import extraction  # noqa: E402
 from test_gallery_store import listing  # noqa: E402
@@ -126,8 +126,10 @@ class RerankTests(StoreTestCase):
         items = self.store.browse('Rankings', page_size=20)['items']
         self.assertEqual(items[-1]['id'], 'zillow:waiting')
         self.assertIsNone(items[-1]['rank'])
-        self.assertEqual(items[-1]['reason'], 'Not ranked yet: waiting for its feature record.')
-        self.assertIn('extraction failed 3 times', self.store.listing('zillow:given-up')['reason'])
+        self.assertEqual((items[-1]['reason'], items[-1]['unranked_reason']), (None, 'Not ranked yet: waiting for its feature record.'))
+        given_up = self.store.listing('zillow:given-up')
+        self.assertTrue(given_up['reason']['code_only'])
+        self.assertIsNone(given_up['unranked_reason'])
         self.assertIsNotNone(waiting)
 
     def test_a_listing_that_changed_since_the_rerank_loses_its_rank(self):
@@ -150,7 +152,7 @@ class RerankTests(StoreTestCase):
         self.assertLess(summary['weights']['station_distance'], 0)
         values = {part['feature']: part['value'] for part in self.store.listing(identifiers[0])['explanation']['contributions']}
         self.assertRegex(values['place:Work'], r'^\d+\.\d km from Work$')
-        self.assertRegex(values['station_distance'], r'^\d+\.\d km to the nearest station, Logan Square$')
+        self.assertRegex(values['station_distance'], r'^\d+\.\d km to Logan Square station$')
 
     def test_a_single_pairwise_answer_ranks_the_chosen_listing_above_the_other_at_the_next_rerank(self):
         fill(self.store, 25, 3)
@@ -187,9 +189,61 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(store.schema_version, len(MIGRATIONS))
             with store.connect() as connection:
                 row = connection.execute('SELECT * FROM ranking').fetchone()
-            self.assertEqual((row['rank'], row['reason'], row['explanation'], row['exploration']), (3, 'Kept.', None, 0))
+            self.assertEqual((row['rank'], json.loads(row['reason']), row['explanation'], row['exploration']),
+                             (3, {'code_only': False, 'features': {'text': 'Kept.'}, 'similar_favorite': None}, None, 0))
             self.assertIsNone(store.last_rerank())
             self.assertEqual(store.pairwise_answers(), [])
+
+
+class StructuredReasonMigrationTests(StoreTestCase):
+    @staticmethod
+    def earlier_text(reason, features, exploration):
+        """The reason as reasons were stored before they had parts."""
+        sentences = ['Shown to learn your taste.'] if exploration else []
+        if reason['code_only']:
+            sentences.append('Ranked from code features only, because extraction failed 3 times.')
+        sentences.append(features)
+        if reason['similar_favorite']:
+            sentences.append(f'Most like your favorite {reason["similar_favorite"]}.')
+        return ' '.join(sentences)
+
+    def test_a_reason_the_model_wrote_gets_its_lists_back_and_one_a_review_rewrote_keeps_its_text(self):
+        """A listing ranked from code features only that got its record after the rerank keeps its code-only mark."""
+        fill(self.store, 30, 3)
+        self.store.upsert_listing(listing(id='zillow:waiting', title='Waiting'))
+        photos = [f'https://photos.example.com/given-up/{index}.jpg' for index in range(4)]
+        given_up = self.store.upsert_listing(listing(id='zillow:given-up', title='Given up', photos=photos))
+        for _ in range(READ_ATTEMPTS):
+            self.store.record_read_attempts([extraction_read('zillow:given-up', given_up['content_fingerprint'])], [])
+        rerank(self.store, seed=1)
+        ranked = self.store.ranked_listings()
+        reasons = {identifier: entry['reason'] for identifier, entry in ranked.items()}
+        self.assertTrue(reasons['zillow:given-up']['code_only'])
+        self.store.save_extraction('zillow:given-up', given_up['content_fingerprint'], extraction(4, ['Lots of daylight', 'Carpet']),
+                                   photos=photos, phrases=['Lots of daylight', 'Carpet'])
+        reviewed = next(identifier for identifier, entry in ranked.items() if entry['exploration'])
+        with self.store.connect(write=True) as connection:
+            for identifier, reason in reasons.items():
+                features = 'Strong on exposed brick.' if identifier == reviewed else earlier_feature_text(reason['features'])
+                connection.execute('UPDATE ranking SET reason = ? WHERE listing_id = ?',
+                                   (self.earlier_text(reason, features, ranked[identifier]['exploration']), identifier))
+            connection.execute("UPDATE ranking SET reason = 'Not ranked yet: waiting for its feature record.' WHERE rank IS NULL")
+            structured_reasons(connection)
+        migrated = {identifier: entry['reason'] for identifier, entry in self.store.ranked_listings().items()}
+        self.assertEqual(migrated, {**reasons, reviewed: {**reasons[reviewed], 'features': {'text': 'Strong on exposed brick.'}}})
+        with self.store.connect() as connection:
+            self.assertEqual([row['reason'] for row in connection.execute('SELECT * FROM ranking WHERE rank IS NULL')], [None])
+
+    def test_a_review_waiting_from_before_fails_and_the_next_rerank_leaves_one_with_its_inputs(self):
+        fill(self.store, 12, 2)
+        summary = rerank(self.store, seed=1)
+        with self.store.connect(write=True) as connection:
+            reviews_with_inputs(connection)
+        self.assertEqual(self.store.rerank(summary['id'])['review']['state'], 'failed')
+        self.assertIn('Rerank to get a review', self.store.rerank(summary['id'])['review']['result']['error'])
+        self.assertIsNone(self.store.review_snapshot(summary['id']))
+        later = rerank(self.store, seed=1)
+        self.assertIn('inputs', self.store.review_snapshot(later['id']))
 
 
 class ReadingStoreTests(StoreTestCase):
