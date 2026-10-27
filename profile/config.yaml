@@ -1,6 +1,6 @@
 model:
   provider: claude-subscription-directsdk-experimental
-  default: sonnet
+  default: opus
 
 delegation:
   model: sonnet
