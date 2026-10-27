@@ -1,9 +1,9 @@
 ---
 title: The installer installs the profile under a name that was deleted before
 type: Bug
-state: Todo
+state: In Progress
 priority: 1
-assignee:
+assignee: agent
 milestone:
 parent:
 blocked_by: []
