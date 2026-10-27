@@ -1,7 +1,7 @@
 ---
 title: The installer can leave a gateway running as administrator that nothing can reach
 type: Bug
-state: In Progress
+state: Done
 priority: 1
 assignee: agent
 milestone:
@@ -22,7 +22,7 @@ On Windows, the one-line install ends with the gateway running as the user, whic
 - [x] `Get-NativeOutput` includes the command's captured output in the error it throws, so a failed captured command (the test message) shows its reason on the console.
 - [x] `install.sh` is checked for the same shape (macOS launchd does not elevate; confirm nothing equivalent is possible there).
 - [x] `tests/test_installers.py` covers: the gateway install runs without `--start-now`; the wait for the login entry; the elevated-gateway state stopped through the elevated handoff and the gateway restarted unelevated, and the declined prompt reported; a failed captured command's output appears in the error.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
@@ -47,7 +47,7 @@ Verification must not run the real `hermes gateway install` or `gateway start` o
 - `install.sh` is unchanged. Hermes's launchd install (`hermes_cli/gateway_launchd.py`) bootstraps the LaunchAgent into the user's `gui/<uid>` domain in the same process, without sudo or a helper. Neither the administrator gateway nor the race exists on macOS.
 - The account-connections skill told the agent to run `gateway install --start-now --start-on-login` when no gateway service is installed. It now tells the agent to run `gateway install --no-start-now --start-on-login` and then `gateway start`, in the installer's order.
 - Spec › Installation and setup now says that the gateway and the dashboard run as the user who installed them, whatever the user answers to the UAC question, and that a failing step shows what its command printed.
-- Delivery is an open pull request, not a merge, as requested. The ticket stays In Progress.
+- Delivered in [PR #43](https://github.com/stjepanvrbic/apt-scraper/pull/43), merged to `main` as 6b54a1b after one review round with no blocking findings.
 
 ## Result
 
