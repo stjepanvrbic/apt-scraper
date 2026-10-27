@@ -79,7 +79,7 @@ Share only information in the listing's `approvals` whose purpose fits the messa
 
 ### Contact forms
 
-Fill in forms with the browser tools (`browser_navigate`, `browser_snapshot`, `browser_type`, `browser_click`). They run a fresh browser without the user's logins, except while the account setup uses the user's own browser, which they would share. Computer use is not available here, because a cron run has nobody to approve it.
+Fill in forms with the browser tools (`browser_navigate`, `browser_snapshot`, `browser_type`, `browser_click`). They run Hermes's own browser without the user's logins, except while the account setup points them at its own browser window, which they would share. Computer use is not available here, because a cron run has nobody to approve it.
 
 1. Before your first browser action for the listing, run `python "$HERMES_HOME/skills/account-connections/scripts/connections.py" browser status`. If it does not exit 0, stop for this listing without `fail` or `done`, so a later run takes it up. Otherwise open the form and take a snapshot. List the fields it requires.
 2. If it requires personal information that the listing's approvals do not hold for this purpose, `ask` the user for it with that `field` and `"purpose": "contact form"`, and stop for this listing. Ask for every missing field in one question.

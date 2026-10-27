@@ -5,21 +5,27 @@ import os
 import re
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import textwrap
 import threading
 import time
+import types
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
+
+import psutil
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "profile" / "skills" / "account-connections" / "scripts"
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(SCRIPTS))
 
 import connections  # noqa: E402
+
+FIND_BROWSER = connections.find_browser
 
 ALL_GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
@@ -62,6 +68,34 @@ if error:
 print(json.dumps({"success": True}))
 """
 
+FAKE_BROWSER = """
+import http.server, json, os, sys
+arguments = sys.argv[1:]
+with open(os.environ["FAKE_LOG"], "a", encoding="utf-8") as log:
+    log.write(json.dumps(["browser", *arguments]) + "\\n")
+port = int(next(argument.split("=", 1)[1] for argument in arguments if argument.startswith("--remote-debugging-port=")))
+profile = next(argument.split("=", 1)[1] for argument in arguments if argument.startswith("--user-data-dir="))
+os.makedirs(profile, exist_ok=True)
+open(os.path.join(profile, "Cookies"), "a").close()
+
+
+class Version(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = json.dumps({"Browser": "Chrome/141.0.0.0",
+                           "webSocketDebuggerUrl": f"ws://127.0.0.1:{port}/devtools/browser/fake"}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *arguments):
+        pass
+
+
+http.server.HTTPServer(("127.0.0.1", port), Version).serve_forever()
+"""
+
 FAKE_IMSG = """
 import json, os, sys, time
 with open(os.environ["FAKE_LOG"], "a", encoding="utf-8") as log:
@@ -98,6 +132,17 @@ class ConnectionsTest(unittest.TestCase):
             self.environment[name] = ""
         self.write_tool("hermes", FAKE_HERMES)
         self.install_google_skill(GOOGLE_API_OK)
+        # The real browser is never started: `browser on` starts the fake browser, run by Python, in its place.
+        browser = self.bin / "browser_fake.py"
+        browser.write_text(textwrap.dedent(FAKE_BROWSER), encoding="utf-8")
+        spawn = connections.spawn
+        for patcher in (mock.patch.object(connections, "find_browser", return_value=("brave", str(browser))),
+                        mock.patch.object(connections, "spawn", lambda arguments: spawn([sys.executable, *arguments])),
+                        mock.patch.object(connections, "BROWSER_CLOSE_SECONDS", 1),
+                        mock.patch.object(connections, "FIRST_DEBUG_PORT", 0)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.addCleanup(self.end_fake_browsers)
         self.macos = False
         self.gateway_running = True
         self.imessage_context = "terminal"
@@ -573,54 +618,194 @@ class ConnectionsTest(unittest.TestCase):
 
         self.assertRegex(output, r"The test text did not finish within [23] seconds\.")
 
-    # The account setup's browser settings are on only between `browser on` and `browser off`, or for
-    # SETUP_BROWSER_IDLE after the last `browser on`.
+    # The account setup's browser runs, and `browser.cdp_url` points at it, only between `browser on` and
+    # `browser off`, or for SETUP_BROWSER_IDLE after the last `browser on`. A fake browser stands in for the real
+    # binary: it answers the debugging port's /json/version until it is ended.
 
     def setup_record(self):
         return self.home / "apt-scraper" / "setup-browser"
 
-    def setup_settings(self, value):
-        return [["-p", "apt-scraper", "config", "set", key, value] for key in connections.SETUP_BROWSER_SETTINGS]
+    def setup_settings(self, url):
+        """The `config set` calls that point the browser tools at url, or with "" back at their own browser."""
+        allowed = ["-p", "apt-scraper", "config", "set", "browser.allow_private_urls", "true" if url else "false"]
+        address = ["-p", "apt-scraper", "config", "set", "browser.cdp_url", url]
+        if url:
+            return [allowed, address]
+        return [address, allowed, *(["-p", "apt-scraper", "config", "set", key, "false"]
+                                    for key in connections.REAL_PROFILE_SETTINGS)]
 
     def config_calls(self):
         return [call for call in self.calls("hermes") if call[2:4] == ["config", "set"]]
+
+    def launches(self):
+        return self.calls("browser")
+
+    def instance(self):
+        return json.loads((self.home / "apt-scraper" / "browser-instance.json").read_text(encoding="utf-8"))
+
+    def browser_alive(self, pid):
+        try:
+            return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            return False
 
     def age_setup_record(self, minutes):
         moment = time.time() - minutes * 60
         os.utime(self.setup_record(), (moment, moment))
 
-    def test_browser_on_records_the_setup_and_turns_on_the_real_profile_in_a_visible_window(self):
+    def end_fake_browsers(self):
+        for process in psutil.process_iter():
+            try:
+                if any(str(self.home) in argument for argument in process.cmdline()):
+                    process.kill()
+            except psutil.Error:
+                continue
+
+    def test_browser_on_starts_the_real_browser_on_its_own_profile_and_points_hermes_at_it(self):
         code, output = self.run_main("browser", "on")
         self.assertEqual(code, 0, output)
-        self.assertEqual(self.config_calls(), self.setup_settings("true"))
+        [arguments] = self.launches()
+        port = self.instance()["port"]
+        self.assertEqual(arguments, [f"--remote-debugging-port={port}",
+                                     f"--user-data-dir={self.home / 'apt-scraper' / 'browser'}",
+                                     "--no-first-run", "--no-default-browser-check"])
+        for flag in ("--enable-automation", "--headless", "--remote-debugging-pipe", "--disable-blink-features",
+                     "--remote-debugging-address"):
+            with self.subTest(flag):
+                self.assertFalse([argument for argument in arguments if argument.startswith(flag)])
+        self.assertEqual(self.config_calls(), self.setup_settings(f"http://127.0.0.1:{port}"))
+        self.assertTrue(connections.debugger_answers(port))
         self.assertTrue(self.setup_record().exists())
-        self.assertEqual(connections.SETUP_BROWSER_SETTINGS,
-                         ("browser.use_real_profile", "browser.headed", "browser.real_profile_autoclose"))
+        self.assertIn(f"Brave at http://127.0.0.1:{port}, in a new window", output)
 
-    def test_browser_off_turns_the_settings_off_and_removes_the_record(self):
+    def test_browser_on_again_reuses_the_open_browser(self):
         self.run_main("browser", "on")
+        code, output = self.run_main("browser", "on")
+        self.assertEqual(code, 0, output)
+        self.assertEqual(len(self.launches()), 1)
+        self.assertIn("already open", output)
+        self.assertEqual(self.config_calls(), self.setup_settings(f"http://127.0.0.1:{self.instance()['port']}") * 2)
+
+    def test_browser_off_clears_the_setting_and_closes_the_browser_but_keeps_its_profile(self):
+        self.run_main("browser", "on")
+        pid = self.instance()["pid"]
         code, output = self.run_main("browser", "off")
         self.assertEqual(code, 0, output)
-        self.assertEqual(self.config_calls(), self.setup_settings("true") + self.setup_settings("false"))
+        self.assertEqual(self.config_calls()[2:], self.setup_settings(""))
+        self.assertFalse(self.browser_alive(pid))
         self.assertFalse(self.setup_record().exists())
+        self.assertFalse((self.home / "apt-scraper" / "browser-instance.json").exists())
+        self.assertTrue((self.home / "apt-scraper" / "browser" / "Cookies").exists())
+
+    def test_browser_on_starts_the_browser_again_on_the_same_port_after_it_was_closed(self):
+        self.run_main("browser", "on")
+        first = self.instance()
+        psutil.Process(first["pid"]).kill()
+        psutil.wait_procs([psutil.Process(first["pid"])], timeout=5)
+        code, output = self.run_main("browser", "on")
+        self.assertEqual(code, 0, output)
+        self.assertEqual(len(self.launches()), 2)
+        self.assertEqual(self.instance()["port"], first["port"])
+        self.assertNotEqual(self.instance()["pid"], first["pid"])
+
+    def test_browser_off_leaves_a_process_that_took_over_the_recorded_id_alone(self):
+        stranger = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.addCleanup(stranger.kill)
+        instance = self.home / "apt-scraper" / "browser-instance.json"
+        instance.parent.mkdir(parents=True)
+        instance.write_text(json.dumps({"pid": stranger.pid, "created": psutil.Process(stranger.pid).create_time(),
+                                        "port": 9, "browser": "brave", "binary": "brave"}), encoding="utf-8")
+        code, output = self.run_main("browser", "off")
+        self.assertEqual(code, 0, output)
+        self.assertIsNone(stranger.poll())
+
+    def test_browser_on_without_a_supported_browser_says_what_to_install_and_sets_nothing(self):
+        with mock.patch.object(connections, "find_browser",
+                               side_effect=connections.NoBrowser("No supported browser is installed. "
+                                                                 "Install Brave, Google Chrome or Microsoft Edge.")):
+            code, output = self.run_main("browser", "on")
+        self.assertEqual(code, connections.NO_BROWSER)
+        self.assertIn("Install Brave, Google Chrome or Microsoft Edge", output)
+        self.assertEqual(self.config_calls(), self.setup_settings(""))
+        self.assertFalse(self.setup_record().exists())
+
+    def test_the_default_browser_is_found_as_hermes_finds_it_and_others_only_without_it(self):
+        found = {"brave": "C:/Brave/brave.exe", "chrome": "C:/Chrome/chrome.exe"}
+        detection = types.ModuleType("hermes_cli.browser_connect")
+        detection.chromium_executable = found.get
+        for default, expected in (("chrome", "chrome"), ("brave", "brave"), (None, "brave"),
+                                  ("__unsupported_channel__", "brave")):
+            detection.detect_default_chromium = lambda default=default: default
+            with self.subTest(default), mock.patch.dict(sys.modules, {"hermes_cli.browser_connect": detection}):
+                self.assertEqual(FIND_BROWSER(), (expected, found[expected]))
+        detection.chromium_executable = lambda key: None
+        with mock.patch.dict(sys.modules, {"hermes_cli.browser_connect": detection}):
+            self.assertRaises(connections.NoBrowser, FIND_BROWSER)
+
+    def test_the_browser_is_asked_to_quit_through_its_debugging_port_so_it_saves_the_sign_ins(self):
+        sent = []
+
+        class Socket:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *details):
+                return False
+
+            def send(self, message):
+                sent.append(json.loads(message))
+
+            def recv(self, timeout):
+                return "{}"
+
+        def connect(url, **options):
+            sent.append(url)
+            return Socket()
+
+        client = types.ModuleType("websockets.sync.client")
+        client.connect = connect
+        process = mock.Mock(cmdline=lambda: ["brave", "--remote-debugging-port=9333"])
+        version = {"webSocketDebuggerUrl": "ws://127.0.0.1:9333/devtools/browser/x"}
+        with mock.patch.dict(sys.modules, {"websockets": types.ModuleType("websockets"),
+                                           "websockets.sync": types.ModuleType("websockets.sync"),
+                                           "websockets.sync.client": client}),                 mock.patch.object(connections, "debugger_version", return_value=version):
+            connections.ask_to_close(process)
+        self.assertEqual(sent, [version["webSocketDebuggerUrl"], {"id": 1, "method": "Browser.close"}])
+        process.terminate.assert_not_called()
+        process.kill.assert_not_called()
 
     def test_status_turns_off_a_setup_that_stopped_without_browser_off(self):
         self.run_main("browser", "on")
+        pid = self.instance()["pid"]
         self.age_setup_record(31)
         self.run_main("status")
-        self.assertEqual(self.config_calls(), self.setup_settings("true") + self.setup_settings("false"))
+        self.assertEqual(self.config_calls()[2:], self.setup_settings(""))
         self.assertFalse(self.setup_record().exists())
+        self.assertFalse(self.browser_alive(pid))
+
+    def test_a_setup_of_the_real_profile_version_left_on_across_an_upgrade_is_turned_off_with_its_settings(self):
+        record = self.setup_record()
+        record.parent.mkdir(parents=True)
+        record.write_text("on", encoding="utf-8")
+        self.age_setup_record(31)
+        self.run_main("status")
+        self.assertEqual(self.config_calls(), self.setup_settings(""))
+        self.assertEqual(connections.REAL_PROFILE_SETTINGS,
+                         ("browser.use_real_profile", "browser.headed", "browser.real_profile_autoclose"))
+        self.assertFalse(record.exists())
 
     def test_status_leaves_a_running_setup_and_a_profile_without_one_alone(self):
         self.run_main("status")
         self.run_main("browser", "on")
         self.age_setup_record(29)
         self.run_main("status")
-        self.assertEqual(self.config_calls(), self.setup_settings("true"))
+        self.assertEqual(len(self.config_calls()), 2)
         self.assertTrue(self.setup_record().exists())
+        self.assertTrue(self.browser_alive(self.instance()["pid"]))
 
     def test_a_failed_browser_off_keeps_the_record_so_the_next_status_tries_again(self):
         self.run_main("browser", "on")
+        pid = self.instance()["pid"]
         self.environment["FAKE_CONFIG_FAILS"] = "1"
         code, _ = self.run_main("browser", "off")
         self.assertEqual(code, 1)
@@ -632,13 +817,13 @@ class ConnectionsTest(unittest.TestCase):
         self.environment["FAKE_CONFIG_FAILS"] = ""
         self.run_main("status")
         self.assertFalse(self.setup_record().exists())
+        self.assertFalse(self.browser_alive(pid))
 
-    def setting_values(self):
-        """The last value `config set` gave each setup setting."""
-        values = {}
-        for call in self.config_calls():
-            values[call[4]] = call[5]
-        return values
+    def setting_value(self):
+        """The last value `config set` gave browser.cdp_url, after checking that private addresses go with it."""
+        values = {call[4]: call[5] for call in self.config_calls()}
+        self.assertEqual(values["browser.allow_private_urls"], "true" if values["browser.cdp_url"] else "false")
+        return values["browser.cdp_url"]
 
     def contact_run(self, minutes_ago):
         record = self.home / "apt-scraper" / "contact-run"
@@ -648,15 +833,15 @@ class ConnectionsTest(unittest.TestCase):
         os.utime(record, (moment, moment))
 
     def off_with(self, during_off):
-        """Turns off a setup idle for 31 minutes and calls during_off once, between the first `config set ... false`
-        and the rest of the turn-off."""
+        """Turns off a setup idle for 31 minutes and calls during_off once, between clearing the setting and the rest
+        of the turn-off."""
         self.run_main("browser", "on")
         self.age_setup_record(31)
         original = connections.set_setup_browser
         calls = []
 
         def set_setup_browser(value):
-            if value == "false" and not calls:
+            if value == "" and not calls:
                 calls.append(value)
                 during_off()
             original(value)
@@ -675,7 +860,8 @@ class ConnectionsTest(unittest.TestCase):
             self.off_with(start_browser_on)
             turning_on.join(60)
         self.assertTrue(self.setup_record().exists())
-        self.assertEqual(self.setting_values(), dict.fromkeys(connections.SETUP_BROWSER_SETTINGS, "true"))
+        self.assertEqual(self.setting_value(), f"http://127.0.0.1:{self.instance()['port']}")
+        self.assertTrue(self.browser_alive(self.instance()["pid"]))
 
     def test_a_record_rewritten_while_a_stale_setup_is_turned_off_is_kept_and_the_browser_left_on(self):
         def rewrite_record():
@@ -685,18 +871,20 @@ class ConnectionsTest(unittest.TestCase):
         with mock.patch.dict(os.environ, self.environment):
             self.assertTrue(self.off_with(rewrite_record))
         self.assertTrue(self.setup_record().exists())
-        self.assertEqual(self.setting_values(), dict.fromkeys(connections.SETUP_BROWSER_SETTINGS, "true"))
+        self.assertEqual(self.setting_value(), f"http://127.0.0.1:{self.instance()['port']}")
+        self.assertEqual(len(self.launches()), 1)
+        self.assertTrue(self.browser_alive(self.instance()["pid"]))
 
     def test_browser_on_waits_for_a_listing_correspondence_run_until_it_ends_or_runs_too_long(self):
         self.contact_run(10)
         code, output = self.run_main("browser", "on")
         self.assertEqual(code, 4)
         self.assertIn("listing correspondence run", output)
-        self.assertEqual((self.config_calls(), self.setup_record().exists()), ([], False))
+        self.assertEqual((self.config_calls(), self.launches(), self.setup_record().exists()), ([], [], False))
         self.contact_run(61)
         code, _ = self.run_main("browser", "on")
         self.assertEqual(code, 0)
-        self.assertEqual(self.config_calls(), self.setup_settings("true"))
+        self.assertEqual(self.config_calls(), self.setup_settings(f"http://127.0.0.1:{self.instance()['port']}"))
 
     def test_the_contact_job_gate_records_the_run_it_wakes_and_clears_it_at_the_next_gate(self):
         record = self.home / "apt-scraper" / "contact-run"
@@ -709,6 +897,15 @@ class ConnectionsTest(unittest.TestCase):
         with mock.patch.dict(os.environ, self.environment):
             self.assertFalse(connections.contact_job_gate(True))
         self.assertFalse(record.exists())
+
+    def test_the_contact_job_gate_closes_the_browser_of_a_setup_that_stopped(self):
+        self.run_main("browser", "on")
+        pid = self.instance()["pid"]
+        self.age_setup_record(31)
+        with mock.patch.dict(os.environ, self.environment):
+            self.assertTrue(connections.contact_job_gate(True))
+        self.assertEqual(self.setting_value(), "")
+        self.assertFalse(self.browser_alive(pid))
 
     def test_browser_status_exits_0_only_while_no_setup_uses_the_browser(self):
         self.assertEqual(self.run_main("browser", "status")[0], 0)
@@ -747,11 +944,25 @@ class SkillTest(unittest.TestCase):
         self.assertIn("before your first browser action in every turn of the setup", browser[:turn_on])
         self.assertLess(self.text.index('connections.py" browser on'), self.text.index("browser_navigate`. The consent"))
         ending = browser[browser.index("Turn it off again"):browser.index('connections.py" browser off')]
-        for exit_path in ("after the final `check`", "when the user stops", "when a step fails",
-                          "without the user's logins"):
+        for exit_path in ("after the final `check`", "when the user stops", "when a step fails"):
             with self.subTest(exit_path):
                 self.assertIn(exit_path, ending)
         self.assertIn("run `browser off`", self.sections["Procedure"])
+
+    def test_the_window_is_the_users_own_browser_on_its_own_profile_signed_in_once(self):
+        browser = self.sections["The browser"]
+        self.assertIn("user's own default browser (Brave, Chrome, Edge or Chromium)", browser)
+        self.assertIn("signed out of everything the first time", browser)
+        self.assertIn("they sign in to Google and Telegram there once", browser)
+        self.assertIn("never in the chat", browser)
+        self.assertNotRegex(self.text, r"(?i)real_profile|close-profile|browser-profile|copy of|copies the profile")
+
+    def test_without_a_supported_browser_the_setup_says_what_to_install_and_never_uses_the_test_browser(self):
+        browser = self.sections["The browser"]
+        missing = browser[browser.index("- 5:"):browser.index("- Any other code")]
+        self.assertIn("install Brave, Google Chrome or Microsoft Edge", missing)
+        self.assertIn("stop the setup's browser steps", missing)
+        self.assertIn("Never do a setup step in the browser tools unless `browser on` exited 0 in this turn", browser)
 
     def test_nothing_reads_the_botfather_chat_while_it_shows_the_token(self):
         self.assertIn("take no snapshot, screenshot or `browser_vision` of the window", self.sections["Messaging gateway"])

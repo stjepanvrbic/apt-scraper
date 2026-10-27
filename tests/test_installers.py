@@ -212,6 +212,17 @@ def steps(installer: str) -> list[str]:
     return re.findall(pattern, text, re.MULTILINE)
 
 
+# Answers `config get` with the value FAKE_VALUES gives the key, "false" for any other, and logs every call.
+FAKE_CONFIG_HERMES = textwrap.dedent("""\
+    import json, os, sys
+    log, *arguments = sys.argv[1:]
+    with open(log, 'a') as calls:
+        calls.write(json.dumps(arguments) + '\\n')
+    if arguments[2:4] == ['config', 'get']:
+        print(json.loads(os.environ['FAKE_VALUES']).get(arguments[4], 'false'))
+    """)
+
+
 def section(installer: str, marker: str, end: str) -> str:
     text = (ROOT / installer).read_text(encoding='utf-8')
     start = text.index(marker)
@@ -509,19 +520,65 @@ class ProfileStepTests(unittest.TestCase):
 
 
 class BrowserSettingsTests(unittest.TestCase):
-    """The scheduled jobs share the profile's config, so neither the distribution nor the installers turn on the
-    user's own browser profile or a visible window: the account setup turns them on only while it runs."""
+    """The scheduled jobs share the profile's config, so neither the distribution nor the installers point the browser
+    tools at the account setup's browser: the setup does that only while it runs. The real-profile lane it replaced
+    is set nowhere."""
 
-    SETUP_ONLY = ('use_real_profile', 'headed', 'real_profile_autoclose')
+    SETUP_ONLY = ('cdp_url', 'allow_private_urls')
+    # The installers name these only to turn off what an account setup of ticket 0052 left on.
+    REAL_PROFILE = ('use_real_profile', 'headed', 'real_profile_autoclose')
 
     def test_the_distribution_config_and_the_installers_set_the_browser_backend_and_nothing_of_the_setup(self):
         config = (ROOT / 'profile' / 'config.yaml').read_text(encoding='utf-8')
         self.assertIn('\nbrowser:\n  backend: "off"\n', config)
         for name in ('profile/config.yaml', 'install.ps1', 'install.sh'):
             text = (ROOT / name).read_text(encoding='utf-8')
-            for setting in self.SETUP_ONLY:
+            for setting in self.SETUP_ONLY + (self.REAL_PROFILE if name == 'profile/config.yaml' else ()):
                 with self.subTest(name, setting=setting):
                     self.assertNotIn(setting, text)
+
+    def run_browser_step(self, installer: str, values: dict) -> list:
+        """The installer's Browser tools step against a fake hermes whose `config get` prints values."""
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        calls = folder / 'calls'
+        calls.touch()
+        (folder / 'hermes.py').write_text(FAKE_CONFIG_HERMES)
+        fake = [sys.executable, str(folder / 'hermes.py'), str(calls)]
+        environment = {**os.environ, 'FAKE_VALUES': json.dumps({'browser.backend': 'off', **values})}
+        if installer == 'install.ps1':
+            hermes = folder / 'hermes.cmd'
+            hermes.write_text('@' + ' '.join(f'"{part}"' for part in fake) + ' %*\r\n')
+            script = folder / 'step.ps1'
+            script.write_text("$ErrorActionPreference = 'Stop'\n$ProfileName = 'apt-scraper'\n"
+                              f"$hermes = '{hermes}'\nfunction Write-Step([string]$Message) {{ }}\n"
+                              + section(installer, RUNNERS, 'function Get-Version')
+                              + section(installer, "Write-Step 'Browser tools'", '# The search runs'),
+                              encoding='utf-8-sig')
+            command = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)]
+        else:
+            tools = folder / 'bin'
+            tools.mkdir()
+            launcher = ' '.join(f'"{Path(part).as_posix()}"' for part in fake)
+            (tools / 'hermes').write_text(f'#!/bin/sh\nexec {launcher} "$@"\n', newline='\n')
+            (tools / 'hermes').chmod(0o755)
+            script = folder / 'step.sh'
+            script.write_text("set -euo pipefail\nPROFILE_NAME=apt-scraper\nstep() { :; }\n"
+                              + section(installer, "step 'Browser tools'", '# The search runs'), newline='\n')
+            environment['PATH'] = f'{tools}{os.pathsep}{os.environ["PATH"]}'
+            command = [BASH, script.as_posix()]
+        result = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return [call[2:] for call in map(json.loads, calls.read_text().splitlines()) if call[2:4] == ['config', 'set']]
+
+    def test_the_installers_turn_off_real_profile_browsing_that_an_earlier_setup_left_on(self):
+        for installer in ('install.ps1', 'install.sh'):
+            with self.subTest(installer):
+                left_on = {'browser.use_real_profile': 'true', 'browser.headed': 'true'}
+                self.assertEqual(self.run_browser_step(installer, left_on),
+                                 [['config', 'set', 'browser.use_real_profile', 'false'],
+                                  ['config', 'set', 'browser.headed', 'false']])
+                self.assertEqual(self.run_browser_step(installer, {}), [])
         self.assertIn("config', 'set', 'browser.backend', 'off')", (ROOT / 'install.ps1').read_text(encoding='utf-8'))
         self.assertIn('config set browser.backend off', (ROOT / 'install.sh').read_text(encoding='utf-8'))
 
@@ -744,6 +801,7 @@ class QuestionTests(unittest.TestCase):
             "Get-NativeOutput claude @('auth', 'status') -AllowFailure",
             "Get-NativeOutput $hermes @('--version')",
             "Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', 'browser.backend')",
+            "Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', $key)",
             "Get-NativeOutput $hermes @('pm', 'env')",
             "Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', 'delegation.model')",
             "Get-NativeOutput $hermes @('-p', 'default', 'gateway', 'status') -AllowFailure",
