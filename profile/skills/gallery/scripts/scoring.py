@@ -358,6 +358,9 @@ def raw_values(listing, phrases, areas, density):
         verdict = (listing['judgments'].get(phrase) or {}).get('verdict')
         if verdict in ('has', 'rules out'):
             values[f'preference:{phrase}'] = float(verdict == 'has')
+    for phrase, judgment in listing.get('hypotheses', {}).items():
+        if judgment['verdict'] in ('has', 'rules out'):
+            values[f'hypothesis:{phrase}'] = float(judgment['verdict'] == 'has')
     return values
 
 
@@ -466,7 +469,7 @@ def sparse_row(head, sparse):
 
 
 def sparse_column(name):
-    return name.startswith(('tag:', 'rating_not_shown:'))
+    return name.startswith(('tag:', 'rating_not_shown:', 'hypothesis:'))
 
 
 def label(listing, sentiment):
@@ -545,7 +548,8 @@ def expand(row, size):
 
 
 def prior(model_design, scale):
-    return [0.0, *model_design.prior_mean], [INTERCEPT_PRECISION, *([1 / scale ** 2] * len(model_design.columns))]
+    return [0.0, *model_design.prior_mean], [INTERCEPT_PRECISION, *[
+        1 / (min(scale, 0.5) if column.name.startswith('hypothesis:') else scale) ** 2 for column in model_design.columns]]
 
 
 def linear(row, head, sparse):
@@ -873,6 +877,8 @@ def display(model_design, index, name):
         return f'in {key}' if raw[name] else f'outside {key}'
     if kind == 'preference':
         return f'has "{key}"' if raw[name] else f'rules out "{key}"'
+    if kind == 'hypothesis':
+        return f'{"has" if raw[name] else "rules out"} "{key}" (model\'s guess)'
     if name == 'near_favorites':
         here = model_design.coordinates[model_design.ids[index]]
         distances = [distance_km(here, model_design.coordinates[favorite]) for favorite in model_design.favorites
@@ -1010,6 +1016,7 @@ def rank_listings(inputs, seed, *, model=None):
                      for favorite, held in check.scores.items()},
     }, 'summary': {
         'ranked': len(ranked), 'waiting_for_features': len(unranked),
+        'labels': len(inputs['pairs']) + sum(label(listing, inputs['sentiments'].get(listing['id'])) is not None for listing in inputs['listings']),
         'favorites': len(model_design.favorites), 'held_out': held_out, **{f'held_out_{key}': value for key, value in summary_of(check.ranks).items()},
         'exploration': [model_design.ids[index] for index in exploring], 'seed': seed,
         'prior_scale': model.scale, 'unlabeled_weight': model.unlabeled_weight,

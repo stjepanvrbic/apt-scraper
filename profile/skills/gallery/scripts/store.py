@@ -578,6 +578,12 @@ class ListingStore:
                     GROUP BY s.listing_id, s.fingerprint, s.visit_id
                     HAVING SUM(s.kind = 'open') > 0 AND SUM(s.kind = 'close') > 0''')]
             compared = paired(pairs)
+            hypotheses = {}
+            for judgment in connection.execute('''SELECT j.*, h.phrase FROM hypothesis_judgments j
+                    JOIN hypotheses h ON h.id = j.hypothesis AND h.state = 'active'
+                    JOIN listings l ON l.id = j.listing_id AND l.fingerprint = j.fingerprint'''):
+                hypotheses.setdefault(judgment['listing_id'], {})[judgment['phrase']] = {
+                    'verdict': judgment['verdict'], 'evidence': judgment['evidence']}
             listings = []
             for row in connection.execute(f'''SELECT l.*, {RANKABLE} AS rankable FROM listings l
                     LEFT JOIN feedback f ON f.listing_id = l.id ORDER BY l.id'''):
@@ -590,6 +596,7 @@ class ListingStore:
                     'rankable': bool(row['rankable']),
                     'record': json.loads(record['extraction']) if record else None,
                     'judgments': json.loads(record['preferences']) if record else {},
+                    'hypotheses': hypotheses.get(identifier, {}),
                     'code': code.get(identifier, {}),
                     'areas': facts[identifier].get('areas') if identifier in facts else None,
                     'given_up': not record and attempts.get(extraction_read(identifier, row['fingerprint']), 0) >= READ_ATTEMPTS,
@@ -732,11 +739,11 @@ class ListingStore:
                                "WHERE rerank_id = ? AND state IN ('waiting', 'running')",
                                (json.dumps({'error': error}, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), rerank_id))
 
-    def save_review(self, rerank_id, ranks, reasons, result):
+    def save_review(self, rerank_id, ranks, reasons, result, *, connection=None):
         """Applies a saved review in one transaction: each listing in ranks gets its rank and each in reasons its
         reason, and the review is done with result. A listing whose content changed since the rerank keeps no rank, as
         after any rerank. Raises ValueError when a later rerank replaced the review or it ended."""
-        with self.connect(write=True) as connection:
+        with self.connect(write=True) if connection is None else nullcontext(connection) as connection:
             review = connection.execute('SELECT state FROM reviews WHERE rerank_id = ?', (rerank_id,)).fetchone()
             if not review or review['state'] not in ('waiting', 'running'):
                 raise ValueError(f'The review of rerank {rerank_id} no longer waits: a later rerank replaced it or it ended.')
@@ -809,8 +816,15 @@ class ListingStore:
                     raise ValueError(f'The reading of note {note_id}: {error}') from None
             connection.executemany('''INSERT INTO preference_readings VALUES (?, ?, ?, ?) ON CONFLICT(kind, phrase)
                 DO UPDATE SET features = excluded.features, read_at = excluded.read_at''', rows)
-            connection.executemany('''INSERT INTO note_readings VALUES (?, ?, ?) ON CONFLICT(note_id)
-                DO UPDATE SET reading = excluded.reading, read_at = excluded.read_at''', readings)
+            for note_id, reading, read_at in readings:
+                previous = connection.execute('SELECT reading FROM note_readings WHERE note_id = ?', (note_id,)).fetchone()
+                current = json.loads(reading)
+                earlier = json.loads(previous['reading']) if previous else None
+                if current != earlier and (current['sentiment'] in ('positive', 'negative') or earlier and earlier['sentiment'] in ('positive', 'negative')):
+                    identifier = connection.execute('SELECT listing_id FROM notes WHERE id = ?', (note_id,)).fetchone()[0]
+                    self.record_learning_event(connection, 'note', identifier, current['sentiment'])
+                connection.execute('''INSERT INTO note_readings VALUES (?, ?, ?) ON CONFLICT(note_id)
+                    DO UPDATE SET reading = excluded.reading, read_at = excluded.read_at''', (note_id, reading, read_at))
 
     def answer_pair(self, chosen, other):
         """Records the user's answer to a pairwise question: chosen over other."""

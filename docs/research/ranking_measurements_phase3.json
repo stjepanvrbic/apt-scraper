@@ -1,0 +1,160 @@
+{
+  "data": "synthetic fixture; scripted proposals and known judgments, not model output",
+  "new_labels": 20,
+  "requested_passes": 21,
+  "reranks_with_new_labels": 21,
+  "remote_model_calls": 0,
+  "budget": {
+    "text_batches": 3,
+    "visual_listing_reads": 50,
+    "full_resolution_photos_per_visual_listing": 6
+  },
+  "assessments": [
+    {
+      "id": "0e2645ea70ac53be25ba7aa06cfd2fa4a56e46627841bbec6d89d6deee920ef5",
+      "phrase": "original wood trim",
+      "state": "active",
+      "labels": 20,
+      "weight": 0.3290813690854763,
+      "weight_interval": [
+        -0.6350053178336117,
+        1.2931680560045644
+      ],
+      "weight_interval_method": "95% Laplace normal interval when a column exists",
+      "survives": true,
+      "comparisons": {
+        "rank": [
+          [
+            48,
+            50
+          ],
+          [
+            26,
+            26
+          ],
+          [
+            21,
+            24
+          ],
+          [
+            30,
+            31
+          ],
+          [
+            39,
+            44
+          ],
+          [
+            38,
+            40
+          ],
+          [
+            13,
+            17
+          ],
+          [
+            47,
+            50
+          ],
+          [
+            45,
+            48
+          ],
+          [
+            21,
+            21
+          ],
+          [
+            33,
+            39
+          ],
+          [
+            49,
+            52
+          ],
+          [
+            16,
+            21
+          ],
+          [
+            43,
+            55
+          ],
+          [
+            14,
+            15
+          ],
+          [
+            41,
+            51
+          ],
+          [
+            57,
+            59
+          ],
+          [
+            48,
+            58
+          ],
+          [
+            13,
+            58
+          ],
+          [
+            27,
+            30
+          ]
+        ],
+        "pair": []
+      },
+      "rank_summary": {
+        "with_median": 35.5,
+        "with_interval": [
+          23.5,
+          44.0
+        ],
+        "without_median": 42.0,
+        "without_interval": [
+          28.0,
+          50.5
+        ],
+        "mean_improvement": 6.0,
+        "improvement_interval": [
+          2.85,
+          10.85
+        ]
+      }
+    },
+    {
+      "id": "172ab5f4bdaeaf0505c7c79d02df1b248cdcd5cfe25b69eb566e4427867213d2",
+      "phrase": "hand painted tile",
+      "state": "retired",
+      "labels": 20,
+      "weight": 0,
+      "weight_interval": null,
+      "weight_interval_method": "95% Laplace normal interval when a column exists",
+      "survives": false,
+      "comparisons": {
+        "rank": [],
+        "pair": []
+      }
+    },
+    {
+      "id": "0853c2550c82c3ae114b97ce48ffd4a9b84c0dcbc287aa35b73e24aa03fdc24b",
+      "phrase": "white kitchen cabinet doors",
+      "state": "retired",
+      "labels": 20,
+      "weight": 0,
+      "weight_interval": null,
+      "weight_interval_method": "95% Laplace normal interval when a column exists",
+      "survives": false,
+      "comparisons": {
+        "rank": [],
+        "pair": []
+      }
+    }
+  ],
+  "real_garden_proposal": "not run, real store absent",
+  "real_twenty_label_survival": "not run, real store absent",
+  "promotion": "automatic hypothesis generation stays outside the installed review job"
+}

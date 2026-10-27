@@ -29,7 +29,7 @@ export function useRerank() {
     mutationFn: () => request<RerankSummary>('/api/rerank', {}),
     onSuccess: async summary => {
       await client.cancelQueries({ queryKey: rerankKey });
-      client.setQueryData<RerankState>(rerankKey, { running: false, last_rerank: summary });
+      client.setQueryData<RerankState>(rerankKey, previous => ({ running: false, last_rerank: summary, hypotheses: previous?.hypotheses ?? [] }));
     },
     onError: () => { void client.invalidateQueries({ queryKey: rerankKey }); },
   });
@@ -40,5 +40,12 @@ export function useRerank() {
     catch { return; }
     finally { saving.current = false; }
   };
-  return { query, mutation, run, running: mutation.isPending || !!query.data?.running };
+  const hypothesis = useMutation({
+    mutationKey: ['gallery', 'hypothesis'],
+    mutationFn: ({ id, decision }: { id: string; decision: 'confirm' | 'reject' }) => request(`/api/hypotheses/${encodeURIComponent(id)}/${decision}`, {}),
+    onSuccess: async () => {
+      await Promise.all([client.invalidateQueries({ queryKey: rerankKey }), client.invalidateQueries({ queryKey: ['gallery'] })]);
+    },
+  });
+  return { query, mutation, hypothesis, run, running: mutation.isPending || !!query.data?.running };
 }

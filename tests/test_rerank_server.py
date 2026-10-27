@@ -17,7 +17,7 @@ from test_feature_record import extraction
 class RerankServerTests(GalleryServerCase):
     def test_rerank_returns_the_check_and_waiting_review_and_persists_the_order(self):
         fill(self.store, 30, 5)
-        self.assertEqual(self.request('/api/rerank'), {'running': False, 'last_rerank': None})
+        self.assertEqual(self.request('/api/rerank'), {'running': False, 'last_rerank': None, 'hypotheses': []})
         summary = self.request('/api/rerank', {})
         self.assertEqual((summary['ranked'], len(summary['held_out'])), (30, 5))
         self.assertEqual(summary['review']['state'], 'waiting')
