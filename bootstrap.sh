@@ -7,20 +7,31 @@ set -euo pipefail
 
 REPOSITORY_URL=https://github.com/stjepanvrbic/apt-scraper.git
 REPOSITORY="$HOME/Library/Application Support/apt-scraper/repo"
+# The Xcode command line tools take minutes to install from Apple's dialog.
+COMMAND_LINE_TOOLS_WAIT_SECONDS=${COMMAND_LINE_TOOLS_WAIT_SECONDS:-3600}
+COMMAND_LINE_TOOLS_POLL_SECONDS=${COMMAND_LINE_TOOLS_POLL_SECONDS:-5}
 
 step() { printf '\033[36m==> %s\033[0m\n' "$1"; }
 
 # bash runs a piped script while it reads it, so everything happens in main, called on the last line:
 # a cut-off download runs nothing.
 main() {
-    local git_error
+    local git_error waited=0
     if ! git_error=$(git --version 2>&1); then
-        if xcode-select --install; then
-            echo 'Git comes with the Xcode command line tools. Install them in the dialog that opened, then run this again.' >&2
-        else
+        if ! xcode-select --install; then
             printf 'Git does not run: %s\n' "$git_error" >&2
+            exit 1
         fi
-        exit 1
+        # Apple's installer runs in its own dialog; the tools appear once it finishes, so this waits for them.
+        step 'Git comes with the Xcode command line tools. Press Install in the dialog that opened; this continues once they are installed.'
+        until git --version >/dev/null 2>&1; do
+            if [ "$waited" -ge "$COMMAND_LINE_TOOLS_WAIT_SECONDS" ]; then
+                echo 'The Xcode command line tools did not get installed. Install them in the dialog, then run this again.' >&2
+                exit 1
+            fi
+            sleep "$COMMAND_LINE_TOOLS_POLL_SECONDS"
+            waited=$((waited + COMMAND_LINE_TOOLS_POLL_SECONDS))
+        done
     fi
 
     if [ -d "$REPOSITORY/.git" ]; then

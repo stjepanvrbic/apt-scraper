@@ -20,7 +20,7 @@ macOS, in Terminal:
 curl -fsSL https://raw.githubusercontent.com/stjepanvrbic/apt-scraper/main/bootstrap.sh | bash
 ```
 
-The line installs Git if it is missing, with winget on Windows. It then downloads apt-scraper to `%LOCALAPPDATA%\apt-scraper\repo` on Windows or `~/Library/Application Support/apt-scraper/repo` on macOS and runs the installer from there. On a Mac without the Xcode command line tools, which include Git, the line opens their installer and stops. Install them and paste the line again. The line works only while this repository is public on GitHub.
+The line installs Git if it is missing, with winget on Windows. It then downloads apt-scraper to `%LOCALAPPDATA%\apt-scraper\repo` on Windows or `~/Library/Application Support/apt-scraper/repo` on macOS and runs the installer from there. On a Mac without the Xcode command line tools, which include Git, the line opens their installer: press Install in the dialog, and the line continues once they are installed. The line works only while this repository is public on GitHub.
 
 The installer:
 
