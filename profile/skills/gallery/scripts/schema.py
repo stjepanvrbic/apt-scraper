@@ -6,6 +6,9 @@ from pathlib import Path
 from code_features import store_all_code_features
 from scoring import compose_reason, feature_reason
 
+LISTING_ID = r'[A-Za-z0-9:._-]{1,200}'
+FINGERPRINT = r'[a-f0-9]{64}'
+
 
 def content_fingerprint(listing):
     content = {key: value for key, value in listing.items() if key not in ('id', 'first_seen', 'status')}

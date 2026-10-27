@@ -390,6 +390,19 @@ class JobTests(ReviewTestCase):
             self.assertEqual(ranking.run(), 0)
         return output.getvalue().strip().splitlines()
 
+    def inbox_file(self, rerank_id=None):
+        return (self.home / 'cache/inbox/review').resolve() / f'review-{rerank_id or self.summary["id"]}.json'
+
+    def write(self, value, rerank_id=None):
+        file = self.inbox_file(rerank_id)
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(json.dumps(value), encoding='utf-8')
+        return file
+
+    def task_text(self, lines):
+        line = next(line for line in lines if line.startswith('Review task file: '))
+        return Path(line.removeprefix('Review task file: ')).read_text(encoding='utf-8')
+
     def test_the_job_wakes_the_agent_for_a_waiting_review_and_gives_up_after_three_attempts(self):
         for attempt in range(1, REVIEW_ATTEMPTS + 1):
             lines = self.run_job()
@@ -399,7 +412,9 @@ class JobTests(ReviewTestCase):
             text = task_file.read_text(encoding='utf-8')
             task = json.loads(text.split('```json\n')[1].split('\n```')[0])
             self.assertEqual(task['rerank'], self.summary['id'])
-            self.assertIn(f'ranking.py" review-save "{(self.home / "cache/scratch").resolve().as_posix()}/review-{self.summary["id"]}.json"', text)
+            self.assertIn(f'`write_file` to `{self.inbox_file().as_posix()}`', text)
+            self.assertNotIn('terminal', text)
+            self.assertNotIn('The rejected save', text)
             self.assertEqual(self.store.last_rerank()['review']['attempts'], attempt)
         lines = self.run_job()
         self.assertEqual(lines[-1], '{"wakeAgent": false}')
@@ -409,15 +424,96 @@ class JobTests(ReviewTestCase):
         self.assertIsNone(self.store.review_snapshot(self.summary['id']))
         self.assertEqual(self.run_job(), ['No review waits. The latest review is failed.', '{"wakeAgent": false}'])
 
+    def test_the_next_run_saves_the_review_the_agent_wrote_into_the_inbox(self):
+        self.run_job()
+        file = self.write(self.review(findings=['Favorites rank poorly.']))
+        lines = self.run_job()
+        self.assertEqual(lines, [f'Saved {file.name}: no moves.',
+                                 'No review waits. The latest review is done.', '{"wakeAgent": false}'])
+        self.assertFalse(file.exists())
+        review = self.store.last_rerank()['review']
+        self.assertEqual((review['state'], review['result']['findings']), ('done', ['Favorites rank poorly.']))
+
+    def test_a_rejected_review_stays_in_the_inbox_and_its_task_is_handed_again_with_the_error_for_correction(self):
+        self.run_job()
+        move = {'id': self.by_rank(1), 'to_rank': 99, 'reason': MOVE_REASON, 'confidence': 0.5}
+        file = self.write(self.review(moves=[move]))
+        lines = self.run_job()
+        self.assertEqual(lines[-1], '{"wakeAgent": true}')
+        self.assertEqual(lines[0], f'Rejected {file.name}, handed again for correction.')
+        self.assertTrue(file.exists())
+        self.assertEqual(self.ranks(), {identifier: entry['rank'] for identifier, entry in self.ranked.items()})
+        text = self.task_text(lines)
+        self.assertIn('The last save of this task was rejected and nothing was saved. ', text)
+        self.assertIn('whole number from 1 to 24', text)
+        self.assertIn(f'The rejected file is still `{file.as_posix()}`. Read it whole with `read_file` before you change it', text)
+        self.assertEqual(self.store.last_rerank()['review']['state'], 'running')
+        self.write(self.review(moves=[{**move, 'to_rank': self.free_rank(range(3, 20))}]))
+        lines = self.run_job()
+        self.assertEqual(lines[-1], '{"wakeAgent": false}')
+        self.assertFalse(file.exists())
+        self.assertEqual(self.store.last_rerank()['review']['state'], 'done')
+
+    def test_a_listing_id_no_path_can_hold_is_rejected_and_the_review_handed_again_until_corrected(self):
+        self.run_job()
+        file = self.write(self.review(reasons=[{'id': 'ab:c*?', 'reason': 'Has [hardwood floors].'}]))
+        lines = self.run_job()
+        self.assertEqual((lines[0], lines[-1]), (f'Rejected {file.name}, handed again for correction.', '{"wakeAgent": true}'))
+        self.assertTrue(file.exists())
+        text = self.task_text(lines)
+        self.assertIn(json.dumps('reasons: "ab:c*?" is not one of the listings of the task.'), text)
+        self.assertIn(f'The rejected file is still `{file.as_posix()}`', text)
+        self.write(self.review())
+        self.assertEqual(self.run_job()[0], f'Saved {file.name}: no moves.')
+        self.assertEqual(self.store.last_rerank()['review']['state'], 'done')
+
+    def test_a_folder_written_at_the_review_files_name_is_removed_and_the_review_handed_again(self):
+        self.run_job()
+        file = self.inbox_file()
+        (file / 'x').parent.mkdir(parents=True)
+        (file / 'x').write_text('{}', encoding='utf-8')
+        lines = self.run_job()
+        self.assertEqual((lines[0], lines[-1]), (f'Rejected {file.name}, handed again for correction.', '{"wakeAgent": true}'))
+        self.assertFalse(file.exists())
+        text = self.task_text(lines)
+        self.assertIn(f'{file.name} was a folder, not a file', text)
+        self.assertIn(f'Nothing is left at `{file.as_posix()}`. Write the whole file there with `write_file`', text)
+        self.assertEqual(self.store.last_rerank()['review']['state'], 'running')
+        self.write(self.review())
+        self.assertEqual(self.run_job()[0], f'Saved {file.name}: no moves.')
+        self.assertEqual(self.store.last_rerank()['review']['state'], 'done')
+
+    def test_a_review_rejected_on_its_last_attempt_fails_with_the_error(self):
+        self.write(self.review(findings=['x'] * 11))
+        for _ in range(REVIEW_ATTEMPTS + 1):
+            lines = self.run_job()
+        self.assertEqual(lines[-1], '{"wakeAgent": false}')
+        review = self.store.last_rerank()['review']
+        self.assertEqual(review['state'], 'failed')
+        self.assertIn('not saved in 3 attempts. The last one was rejected: ', review['result']['error'])
+        self.assertIn('at most 10', review['result']['error'])
+        self.assertFalse(self.inbox_file().exists())
+
+    def test_a_review_the_store_cannot_take_now_stays_for_the_next_run_and_wakes_nobody(self):
+        self.run_job()
+        file = self.write(self.review())
+        with mock.patch.object(ranking, 'save_review', side_effect=sqlite3.OperationalError('database is locked')):
+            lines = self.run_job()
+        self.assertEqual(lines, ['The review in the inbox could not be saved now, so it stays for the next run. OperationalError: database is locked',
+                                 '{"wakeAgent": false}'])
+        self.assertTrue(file.exists())
+        review = self.store.last_rerank()['review']
+        self.assertEqual((review['state'], review['attempts']), ('running', 1))
+        self.assertEqual(self.run_job()[-2:], ['No review waits. The latest review is done.', '{"wakeAgent": false}'])
+
     def test_the_job_removes_the_task_and_review_files_of_earlier_reranks(self):
         self.run_job()
-        scratch = self.home / 'cache' / 'scratch'
-        scratch.mkdir(parents=True, exist_ok=True)
-        (scratch / f'review-{self.summary["id"]}.json').write_text('{}', encoding='utf-8')
+        stale = self.write(self.review(findings=['x'] * 11))
         later = rerank(self.store, seed=1)
-        self.run_job()
+        lines = self.run_job()
+        self.assertEqual(lines[0], f'Rejected {stale.name}.')
         self.assertEqual(sorted(path.name for path in (self.store.path.parent / 'review').iterdir()), [f'review-{later["id"]}.md'])
-        self.assertEqual(list(scratch.glob('review-*.json')), [])
+        self.assertFalse(stale.exists())
 
     def test_the_job_does_not_wake_the_agent_without_a_waiting_review(self):
         save_review(self.store, self.review())
@@ -455,28 +551,27 @@ class CommandTests(ReviewTestCase):
         return subprocess.run([sys.executable, str(ROOT / 'profile/scripts/review-run.py')], capture_output=True, text=True, timeout=120,
                               env={**os.environ, 'HERMES_HOME': str(self.home)})
 
-    def test_the_job_script_and_review_save_through_the_command_line(self):
-        gate = self.run_gate()
-        self.assertEqual(gate.returncode, 0, gate.stderr)
-        self.assertEqual(gate.stdout.strip().splitlines()[-1], '{"wakeAgent": true}')
-        scratch = self.home / 'cache' / 'scratch'
-        scratch.mkdir(parents=True)
-        file = scratch / f'review-{self.summary["id"]}.json'
+    def gate_lines(self):
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip().splitlines()
+
+    def test_the_job_script_saves_rejects_and_saves_the_corrected_review_through_the_command_line(self):
+        self.assertEqual(self.gate_lines()[-1], '{"wakeAgent": true}')
+        file = self.home / 'cache/inbox/review' / f'review-{self.summary["id"]}.json'
+        file.parent.mkdir(parents=True)
         file.write_text(json.dumps(self.review(moves=[{'id': self.by_rank(1), 'to_rank': 99, 'reason': MOVE_REASON, 'confidence': 0.5}])), encoding='utf-8')
-        rejected = self.run_script('review-save', str(file))
-        self.assertEqual(rejected.returncode, 1)
-        self.assertIn('whole number from 1 to 24', rejected.stderr)
+        rejected = self.gate_lines()
+        self.assertEqual(rejected[-1], '{"wakeAgent": true}')
+        self.assertEqual(rejected[0], f'Rejected {file.name}, handed again for correction.')
+        self.assertIn('whole number from 1 to 24', (self.store.path.parent / 'review' / f'review-{self.summary["id"]}.md').read_text(encoding='utf-8'))
         self.assertTrue(file.exists())
         file.write_text(json.dumps(self.review(findings=['Favorites rank poorly.'])), encoding='utf-8')
-        saved = self.run_script('review-save', str(file))
-        self.assertEqual(saved.returncode, 0, saved.stderr)
-        self.assertEqual(json.loads(saved.stdout)['findings'], ['Favorites rank poorly.'])
+        self.assertEqual(self.gate_lines()[-1], '{"wakeAgent": false}')
         self.assertFalse(file.exists())
         status = json.loads(self.run_script('status').stdout)
         self.assertEqual(status['last_rerank']['review']['state'], 'done')
-        outside = self.home / 'review.json'
-        outside.write_text('{}', encoding='utf-8')
-        self.assertIn('scratch directory', self.run_script('review-save', str(outside)).stderr)
+        self.assertEqual(status['last_rerank']['review']['result']['findings'], ['Favorites rank poorly.'])
 
     def test_the_job_script_fails_with_the_error_on_stderr_when_the_store_does_not_open(self):
         with closing(sqlite3.connect(self.store.path)) as connection:
@@ -493,10 +588,14 @@ class ShippedJobTests(unittest.TestCase):
         jobs = {job['id']: job for job in json.loads((ROOT / 'profile/cron/jobs.json').read_text(encoding='utf-8'))['jobs']}
         job = jobs['apt-scraper-review']
         self.assertEqual((job['skills'], job['schedule'], job['deliver']), (['ranking'], 'every 1m', 'local'))
-        self.assertEqual(set(job['enabled_toolsets']), {'terminal', 'file'})
         self.assertTrue((ROOT / 'profile/scripts' / job['script']).is_file())
         self.assertIn("cron', 'resume', 'apt-scraper-review'", (ROOT / 'install.ps1').read_text(encoding='utf-8'))
         self.assertIn('cron resume apt-scraper-review', (ROOT / 'install.sh').read_text(encoding='utf-8'))
+
+    def test_the_review_session_has_the_file_tools_and_no_terminal(self):
+        job = next(job for job in json.loads((ROOT / 'profile/cron/jobs.json').read_text(encoding='utf-8'))['jobs'] if job['id'] == 'apt-scraper-review')
+        self.assertEqual(job['enabled_toolsets'], ['file', 'no_mcp'])
+        self.assertNotIn('terminal', (ROOT / 'profile/skills/ranking/review.md').read_text(encoding='utf-8'))
 
 
 class MigrationTests(unittest.TestCase):

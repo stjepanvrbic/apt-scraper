@@ -14,38 +14,38 @@
     {
       "id": "apt-scraper-search",
       "name": "Listing search",
-      "prompt": "Above is the report of this hour's apartment search. If it lists listings that wait for a judgment of the must-haves, judge them as the search skill's section \"Judging must-haves\" says, and keep going with the next batch from pending until none waits. Do not contact anyone and do not change any settings. End with one line saying how many listings you judged.",
+      "prompt": "Above is the report of this hour's apartment search. If it names judgment task files, judge their listings as the search skill's section \"Judging must-haves\" says, one task file after another, until you have written the judgments of every task file. Do not contact anyone and do not change any settings. End with one line saying how many listings you judged.",
       "skills": ["search"],
       "script": "search-run.py",
       "schedule": "every 1h",
       "schedule_display": "every 1h",
       "deliver": "local",
       "failure_deliver": "origin",
-      "enabled_toolsets": ["terminal", "file"]
+      "enabled_toolsets": ["file", "no_mcp"]
     },
     {
       "id": "apt-scraper-features",
       "name": "Listing features",
-      "prompt": "Above is the report of the listing features job. Follow the listing-features skill: run every extraction task in the report as its section \"Running extraction tasks\" says. Then, if the report says notes or stated preferences wait for a reading, read them as its section \"Reading notes and preferences\" says. Then, if listings wait for judgments of preferences, run their judgment tasks as its section \"Judging preferences stated later\" says. Never look at a listing's photos or read a task file yourself. Do not contact listing agents and do not change any settings. End with one line saying how many listings were extracted, how many notes and preferences were read and how many listings were judged.",
+      "prompt": "Above is the report of the listing features job. Follow the listing-features skill: run every extraction task in the report as its section \"Running extraction tasks\" says. Then, if the report names a readings task file, read the notes and preferences as its section \"Reading notes and preferences\" says. Then, if the report has judgment calls, run them as its section \"Judging preferences stated later\" says. Never look at a listing's photos or read an extraction or judgment task file yourself. Do not contact listing agents and do not change any settings. End with one line saying how many listings were extracted, how many notes and preferences were read and how many listings were judged.",
       "skills": ["listing-features"],
       "script": "features-run.py",
       "schedule": "every 10m",
       "schedule_display": "every 10m",
       "deliver": "local",
       "failure_deliver": "origin",
-      "enabled_toolsets": ["terminal", "file", "vision", "delegation"]
+      "enabled_toolsets": ["file", "vision", "delegation", "no_mcp"]
     },
     {
       "id": "apt-scraper-review",
       "name": "Ranking review",
-      "prompt": "Above is the report of the ranking review job. Follow the ranking skill's section \"Review pass\": read the review task file the report names with read_file, write the review it asks for and save it with the command it gives, then stop. If the report shows a script error instead of a task file, report that error to the user through the messaging gateway and stop. Do not contact anyone else, do not change any settings and run no other ranking command. End with the one line the task file asks for.",
+      "prompt": "Above is the report of the ranking review job. Follow the ranking skill's section \"Review pass\": read the review task file the report names with read_file, write the review it asks for to the file it names with write_file, then stop. If the report shows a script error instead of a task file, end with that error as your final answer. Do not contact anyone and do not change any settings. End with the one line the task file asks for.",
       "skills": ["ranking"],
       "script": "review-run.py",
       "schedule": "every 1m",
       "schedule_display": "every 1m",
       "deliver": "local",
       "failure_deliver": "origin",
-      "enabled_toolsets": ["terminal", "file"]
+      "enabled_toolsets": ["file", "no_mcp"]
     }
   ]
 }
