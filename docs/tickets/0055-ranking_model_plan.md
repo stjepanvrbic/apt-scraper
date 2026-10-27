@@ -26,10 +26,10 @@ Phase 0, measure:
 
 Phase 1, priors and recency:
 
-- [ ] Columns are grouped (quality ratings, size and layout ratings, kitchen, bathroom, flags, categories, tags, price and size, location, judgments and hypotheses), each group's prior scale is set by maximizing the Laplace evidence, and tags and hypotheses have a per-column scale with a floor.
-- [ ] Composite columns for finish, light and space, with the components as deviations under a tighter scale, and the explanation names the composite and the component that deviates most.
-- [ ] Labels are weighted by age with a half-life chosen prequentially, with a floor, and hyperparameters are tuned prequentially only from 10 labels on; below that, the defaults.
-- [ ] Measured: on simulated users with 20 labels, pairwise accuracy on held-out pairs at least 0.05 above the model on `main`, averaged over 200 runs; on each real store, prequential median held-out rank no worse by more than 2 and better on at least one; the 300-listing, 50-favorite rerank under 2 s CPU. If simulation shows no gain, the priors stay and Result says why.
+- [x] Columns are grouped (quality ratings, size and layout ratings, kitchen, bathroom, flags, categories, tags, price and size, location, judgments and hypotheses), each group's prior scale is set by maximizing the Laplace evidence, and tags and hypotheses have a per-column scale with a floor.
+- [x] Composite columns for finish, light and space, with the components as deviations under a tighter scale, and the explanation names the composite and the component that deviates most.
+- [x] Labels are weighted by age with a half-life chosen prequentially, with a floor, and hyperparameters are tuned prequentially only from 10 labels on; below that, the defaults.
+- [x] Measured: on simulated users with 20 labels, pairwise accuracy on held-out pairs at least 0.05 above the model on `main`, averaged over 200 runs; on each real store, prequential median held-out rank no worse by more than 2 and better on at least one; the 300-listing, 50-favorite rerank under 2 s CPU. If simulation shows no gain, the priors stay and Result says why.
 
 Phase 2, labels worth more:
 
@@ -75,6 +75,11 @@ The scoring core stays on the standard library through phase 3. Phase 4 brings n
 Phases 0 to 2 change no visible UI but the Compare questions and the "why" line; the "why" line, the hypothesis prompts in Rankings and "learning from N labels" have their frontend done by a separate design-focused agent, as the umbrella says.
 
 ## Deviations
+
+
+- Phase 1: the candidate stays in `tests/ranking_priors.py`; the installed `fit_model` and its priors are unchanged because both the simulation and CPU gates failed. Composite display and action-date capture are shared with the experiment, but the installed design creates no composite columns.
+- Evidence optimization uses up to 20 monotonic fixed-point steps with backtracking, not a claimed global optimum. Tags and hypotheses use per-column scales directly, with a 0.1 standard-deviation floor; a separate multiplicative group scale would be unidentifiable without another constraint. Composite components have a tighter default scale of 0.25.
+- Half-life selection uses log loss on the last ten already-observed Compare answers, choosing among no decay, 90, 30 and 7 days. Before ten answers it keeps no decay; the weak-negative weight stays 0.05. Synthetic answers arrive one per day with stationary tastes. Real action dates are captured where known; old favorite dates are not invented. No real recency benefit is claimed.
 
 - Owner decision, 2026-10-27: attempt Phase 4 regardless of the hypothesis result. Downloads are allowed only for that isolated encoder experiment, within its size gate. Real-photo gates without a cached dataset and the blind test remain owner-run, unchecked items. Phase 5 is not authorized.
 
@@ -135,3 +140,14 @@ Real-store evidence: [inventory and replay](../research/ranking_real_store_phase
 Re-review: the frozen-feedback rescorer now rejects inconsistent run counts, truncated curves/trajectories and non-finite accuracies before fitting. A regression test distinguishes displayed rank 1 from refitted ranks 1 and 3 under two alternative models. Both actual exposure and counterfactual model quality are reported.
 
 Re-review verification: 676 Python tests and 317 subtests passed, zero skipped (299.77 s); full headless Playwright 40 passed, zero skipped (1.7 min); gallery lint and Ruff pass. The synthetic chronological fixture has displayed median 16 [2, 21] and refitted median 14 [2, 19], showing the exploration-order difference explicitly.
+
+### Phase 1: rejected prior candidate
+
+`python tests/ranking_candidate_experiment.py docs/research/ranking_measurements_phase0.json docs/research/ranking_measurements_phase1.json` evaluates the exact same 200 users, first 20 answers and 100 held-out pairs per user from the checksummed feedback artifact.
+
+- Baseline accuracy 0.64145 [0.63070, 0.65175]. Candidate 0.62215 [0.61100, 0.63320]. Paired change -0.01930 [-0.02610, -0.01280], against the required +0.05. Intervals are 95% bootstrap over users, 2,000 resamples.
+- Candidate full rerank on 300 listings and 50 favorites, including store read/write and leave-one-out: 3.140625 CPU seconds, least of three, against under 2 seconds. The installed baseline measured 1.00 s in Phase 0.
+- Real-store median-rank comparison: not run, authorized copies are absent. No claim of better ranks on a real store.
+- Stop condition fired: the simulation shows no gain. Priors, composites and decay stay out of the installed fit, as on `main`. The experiment remains reproducible for a real-data reassessment. The independent random rating fixture does not model the correlations in real apartment finishes, so this rejects promotion on available evidence, not every possible grouped prior.
+
+Seven targeted prior/date tests pass: exact preservation of stated-prior scores through the composite transform, a tighter default deviation scale, nondecreasing Laplace evidence, scale floors, defaults below ten labels, recency floors without aging unlabeled rows, missing components, component explanations, and known versus unknown action dates. The measurement module's twelve tests pass. Final Git Bash full suite: 674 tests and 317 subtests passed, zero skipped (289.93 s); `ruff check .` clean. An earlier full run had 673 passes and one diagnostic timing failure at 2.015625 s; the isolated check and the final full run passed with the 2-second limit unchanged. No owner store, Hermes root, credentials or listing site was used.

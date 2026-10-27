@@ -14,7 +14,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from code_features import FEATURES, configured_transit_feed, store_all_code_features, store_code_features
-from learning import compress, encode
+from learning import compress, encode, label_clock
 from schema import FINGERPRINT, LISTING_ID, MIGRATIONS, content_fingerprint, migrate
 from queries import RANKABLE, RANKING_EXCLUSION, answered_pairs, browse, paired, snapshot, user_noted, validate_page
 from record import SEED_TAGS, known_spelling, validate_extraction, validate_judgments
@@ -597,7 +597,8 @@ class ListingStore:
                     'favorite': bool(choice and choice['favorite']), 'dismissed': dismissed, 'contact': identifier in contacts,
                     'user_notes': identifier in noted, 'paired': identifier in compared,
                 })
-        return {'listings': listings, 'settings': settings, 'preference_readings': preference_readings,
+            clock = label_clock(connection, listings, pairs)
+        return {'listings': listings, 'settings': settings, 'preference_readings': preference_readings, **clock,
                 'note_readings': {note: reading for note, (_, reading) in note_readings.items()},
                 'sentiments': {listing_id: reading['sentiment'] for listing_id, reading in note_readings.values()}, 'pairs': pairs,
                 'tags': tags, 'implicit_visits': visits}

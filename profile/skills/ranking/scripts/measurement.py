@@ -196,6 +196,7 @@ def simulate(inputs, selector, fitter=fit_model, *, runs=200, labels=40, seed=0)
         taste = dict(zip(base.ids, (dot(row, weights) for row in base.rows)))
         held_pairs = [generator.sample(base.ids, 2) for _ in range(100)]
         state = copy.deepcopy(blank)
+        state.update(pair_days=[], as_of_day=0)
         curve = []
         for count in range(labels + 1):
             if count in curves:
@@ -211,6 +212,8 @@ def simulate(inputs, selector, fitter=fit_model, *, runs=200, labels=40, seed=0)
             first, second = asked[0]['listings']
             chosen, other = (first, second) if taste[first] - taste[second] + generator.gauss(0, 0.3) > 0 else (second, first)
             state['pairs'].append((chosen, other))
+            state['pair_days'].append(count)
+            state['as_of_day'] = count + 1
             for listing in state['listings']:
                 listing['paired'] = listing['paired'] or listing['id'] in (chosen, other)
         run_curves.append(curve)
