@@ -10,6 +10,7 @@ PLUGIN_NAME=claude-subscription-directsdk
 MINIMUM_CLAUDE_VERSION=2.1.284
 MINIMUM_HERMES_VERSION=0.22.5
 PROFILE_SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/profile"
+HERMES_ROOT="$HOME/.hermes"
 export PATH="$HOME/.local/bin:$PATH"
 
 step() { printf '\033[36m==> %s\033[0m\n' "$1"; }
@@ -47,15 +48,27 @@ elif version_below "$(hermes --version)" "$MINIMUM_HERMES_VERSION"; then
 fi
 
 # Reinstalling from this checkout keeps working after the clone moves, which
-# `hermes profile update` does not. The user's config.yaml is kept.
+# `hermes profile update` does not. Hermes installs a distribution only into a live profile, so a
+# missing name, or one that was deleted and is marked in profiles/.deleted, is created first, without
+# what the deleted profile or a failed install left behind. Only a profile this distribution installed
+# before keeps the user's config.yaml; any other gets the distribution's.
 step "Hermes profile '$PROFILE_NAME'"
-config="$HOME/.hermes/profiles/$PROFILE_NAME/config.yaml"
+profile_home="$HERMES_ROOT/profiles/$PROFILE_NAME"
+config="$profile_home/config.yaml"
+deleted=false
+if [ -e "$HERMES_ROOT/profiles/.deleted/$PROFILE_NAME" ]; then deleted=true; fi
+keep_config=false
+if ! $deleted && [ -f "$profile_home/distribution.yaml" ] && [ -f "$config" ]; then keep_config=true; fi
+if $deleted; then rm -rf "$profile_home"; fi
+if [ ! -e "$profile_home" ]; then
+    hermes profile create "$PROFILE_NAME" --no-alias
+    rm -f "$config"
+fi
 saved_config=$(mktemp)
-had_config=false
-if [ -f "$config" ]; then cp "$config" "$saved_config"; had_config=true; fi
+if $keep_config; then cp "$config" "$saved_config"; fi
 install_status=0
 hermes profile install "$PROFILE_SOURCE" --force --yes || install_status=$?
-if $had_config; then cp "$saved_config" "$config"; fi
+if $keep_config; then cp "$saved_config" "$config"; fi
 rm -f "$saved_config"
 [ "$install_status" -eq 0 ] || exit "$install_status"
 
@@ -77,7 +90,6 @@ if [ -z "$python" ]; then
     echo 'Hermes reports no Python of its own in `hermes pm env`.' >&2
     exit 1
 fi
-profile_home="$HOME/.hermes/profiles/$PROFILE_NAME"
 HERMES_HOME="$profile_home" "$python" "$profile_home/scripts/search-run.py" install
 
 # Hermes installs a profile's shipped cron jobs paused. The listing correspondence job wakes the

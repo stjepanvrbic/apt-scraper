@@ -10,6 +10,7 @@ $PluginName = 'claude-subscription-directsdk'
 $MinimumClaudeVersion = [version]'2.1.284'
 $MinimumHermesVersion = [version]'0.22.5'
 $ProfileSource = Join-Path $PSScriptRoot 'profile'
+$HermesRoot = "$env:LOCALAPPDATA\hermes"
 
 function Write-Step([string]$Message) { Write-Host "==> $Message" -ForegroundColor Cyan }
 
@@ -70,16 +71,26 @@ if (-not (Test-Path $hermes)) {
 }
 
 # Reinstalling from this checkout keeps working after the clone moves, which
-# `hermes profile update` does not. The user's config.yaml is kept.
+# `hermes profile update` does not. Hermes installs a distribution only into a live profile, so a
+# missing name, or one that was deleted and is marked in profiles\.deleted, is created first, without
+# what the deleted profile or a failed install left behind. Only a profile this distribution installed
+# before keeps the user's config.yaml; any other gets the distribution's.
 Write-Step "Hermes profile '$ProfileName'"
-$config = "$env:LOCALAPPDATA\hermes\profiles\$ProfileName\config.yaml"
+$profileHome = "$HermesRoot\profiles\$ProfileName"
+$config = "$profileHome\config.yaml"
+$deleted = Test-Path "$HermesRoot\profiles\.deleted\$ProfileName"
+$keepConfig = -not $deleted -and (Test-Path "$profileHome\distribution.yaml") -and (Test-Path $config)
+if ($deleted -and (Test-Path $profileHome)) { Remove-Item -Recurse -Force $profileHome }
+if (-not (Test-Path $profileHome)) {
+    Invoke-Checked $hermes @('profile', 'create', $ProfileName, '--no-alias')
+    Remove-Item $config -Force -ErrorAction Ignore
+}
 $savedConfig = [IO.Path]::GetTempFileName()
-$hadConfig = Test-Path $config
-if ($hadConfig) { Copy-Item $config $savedConfig -Force }
+if ($keepConfig) { Copy-Item $config $savedConfig -Force }
 try {
     Invoke-Checked $hermes @('profile', 'install', $ProfileSource, '--force', '--yes')
 } finally {
-    if ($hadConfig) { Copy-Item $savedConfig $config -Force }
+    if ($keepConfig) { Copy-Item $savedConfig $config -Force }
     Remove-Item $savedConfig
 }
 
@@ -94,7 +105,6 @@ Write-Step 'Search environment'
 $hermesPath = (Invoke-Native $hermes @('pm', 'env') | Out-String | ConvertFrom-Json).PATH -split ';'
 $python = $hermesPath | ForEach-Object { Join-Path $_ 'python.exe' } | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $python) { throw 'Hermes reports no Python of its own in `hermes pm env`.' }
-$profileHome = "$env:LOCALAPPDATA\hermes\profiles\$ProfileName"
 $savedHome = $env:HERMES_HOME
 $env:HERMES_HOME = $profileHome
 try {
