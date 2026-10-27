@@ -44,7 +44,7 @@ sys.path.insert(0, str(SKILLS / 'contact' / 'scripts'))
 
 from contact import NotConnected, tell_user, usable  # noqa: E402
 from geodata import SourceUnavailable, fetch_stations  # noqa: E402
-from inbox import apply, batches, correction, discard, inbox_directory, load_batches, save_batches  # noqa: E402
+from inbox import apply, batches, correction, discard, inbox_directory, listing_key, load_batches, save_batches  # noqa: E402
 from record import CATEGORIES, FLAGS, NOT_SHOWN, RATINGS, ROOM_TYPES, UNIT_LEVELS, choices, validate_judgments  # noqa: E402
 from scoring import labeled, stated_phrases  # noqa: E402
 from store import READ_ATTEMPTS, ListingStore, extraction_read, store_path  # noqa: E402
@@ -513,9 +513,7 @@ class Features:
     def save(self, value):
         if not isinstance(value, dict) or set(value) != {'id', 'fingerprint', 'record'}:
             raise ValueError('The file must hold a JSON object with exactly id, fingerprint and record.')
-        if not isinstance(value['id'], str) or not isinstance(value['fingerprint'], str):
-            raise ValueError('id and fingerprint must be the text given in the task file.')
-        directory = work_directory(self.workspace, value['id'], value['fingerprint'])
+        directory = work_directory(self.workspace, *listing_key(value, 'The record'))
         try:
             manifest = json.loads((directory / 'task.json').read_text(encoding='utf-8'))
         except FileNotFoundError:
@@ -555,8 +553,7 @@ class Features:
         for entry in value['judgments']:
             if not isinstance(entry, dict) or set(entry) != {'id', 'fingerprint', 'preferences'} or not isinstance(entry['preferences'], dict):
                 raise ValueError('Each judgment needs exactly id, fingerprint and preferences, an object.')
-            if not isinstance(entry['id'], str) or not isinstance(entry['fingerprint'], str):
-                raise ValueError("Each judgment's id and fingerprint are the text the task file gives.")
+            listing_key(entry, 'Each judgment')
             given = {phrase for _, identifier, _, phrase in handed if identifier == entry['id']}
             if entry['id'] not in waiting or waiting[entry['id']][0] != entry['fingerprint']:
                 if entry['id'] not in waiting and not given:

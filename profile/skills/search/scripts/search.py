@@ -29,7 +29,7 @@ from string import Template
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'gallery' / 'scripts'))
 
-from inbox import apply, batches, correction, discard, inbox_directory, load_batches, save_batches  # noqa: E402
+from inbox import apply, batches, correction, discard, inbox_directory, listing_key, load_batches, save_batches  # noqa: E402
 from matching import INSIDE, OUTSIDE, PENDING, evaluate, required, unjudged  # noqa: E402
 from schema import content_fingerprint  # noqa: E402
 from sites import site_for, site_named  # noqa: E402
@@ -299,8 +299,7 @@ class Search:
         for entry in entries:
             if not isinstance(entry, dict) or set(entry) != {'id', 'fingerprint', 'must_haves'} or not isinstance(entry['must_haves'], dict):
                 raise ValueError('Each judgment needs exactly id, fingerprint and must_haves, an object.')
-            if not isinstance(entry['id'], str) or not isinstance(entry['fingerprint'], str):
-                raise ValueError("Each judgment's id and fingerprint are the text the task file gives.")
+            listing_key(entry, 'Each judgment')
             allowed = required(criteria, self.store.features(entry['id']))
             for phrase, value in entry['must_haves'].items():
                 if phrase not in allowed:

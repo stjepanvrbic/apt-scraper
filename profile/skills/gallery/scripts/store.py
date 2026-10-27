@@ -14,7 +14,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from code_features import FEATURES, configured_transit_feed, store_all_code_features, store_code_features
-from schema import MIGRATIONS, content_fingerprint, migrate
+from schema import FINGERPRINT, LISTING_ID, MIGRATIONS, content_fingerprint, migrate
 from queries import RANKABLE, RANKING_EXCLUSION, answered_pairs, browse, paired, snapshot, user_noted, validate_page
 from record import SEED_TAGS, known_spelling, validate_extraction, validate_judgments
 from scoring import reading_vocabulary, stated_phrases, validate_note_reading, validate_preference_reading
@@ -66,7 +66,7 @@ def validate_listing(listing):
                 raise ValueError(f'{field} must be text or null.')
             listing[field] = listing[field].strip() or None
     require_text(listing['id'], 'id')
-    if not re.fullmatch(r'[A-Za-z0-9:._-]{1,200}', listing['id']):
+    if not re.fullmatch(LISTING_ID, listing['id']):
         raise ValueError('Listing id must use letters, digits, colons, dots, underscores or hyphens.')
     if isinstance(listing['price'], str):
         listing['price_note'] = require_text(listing['price'], 'Price description', limit=1000)
@@ -608,7 +608,7 @@ class ListingStore:
                 raise ValueError('Signal fields do not match its kind.')
             for name in fields:
                 require_text(event[name], name, limit=200)
-            if not re.fullmatch('[a-f0-9]{64}', event['fingerprint']):
+            if not re.fullmatch(FINGERPRINT, event['fingerprint']):
                 raise ValueError('Signal fingerprint must identify listing content.')
             try:
                 occurred = datetime.fromisoformat(event['occurred_at'])

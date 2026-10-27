@@ -394,7 +394,7 @@ class SearchRunTests(unittest.TestCase):
             search.judge([{'id': 'fake:1', 'fingerprint': item['fingerprint'], 'must_haves': {'Elevator': True}}])
         with self.assertRaisesRegex(ValueError, 'true, false or null'):
             search.judge([{'id': 'fake:1', 'fingerprint': item['fingerprint'], 'must_haves': {'Dogs allowed': 'yes'}}])
-        result = search.judge([{'id': 'fake:1', 'fingerprint': 'old', 'must_haves': {'Dogs allowed': True}}])
+        result = search.judge([{'id': 'fake:1', 'fingerprint': '0' * 64, 'must_haves': {'Dogs allowed': True}}])
         self.assertEqual(result, {'saved': 0, 'stale': ['fake:1'], 'shown': 0, 'outside': 0})
         result = search.judge([{'id': 'fake:1', 'fingerprint': item['fingerprint'], 'must_haves': {'Dogs allowed': False}}])
         self.assertEqual(result, {'saved': 1, 'stale': [], 'shown': 0, 'outside': 1})
@@ -453,6 +453,39 @@ class SearchRunTests(unittest.TestCase):
         report = self.search()
         self.assertEqual((report['error'], report['rejected'], report['wake']), (None, ['judgments-batch-1.json'], True))
         self.assertIn("id and fingerprint are the text the task file gives", Path(report['tasks'][0]).read_text(encoding='utf-8'))
+
+    def test_a_fingerprint_no_path_can_hold_is_rejected_and_handed_again_until_corrected(self):
+        self.site.results = {'North': [1], 'South': []}
+        [listings] = self.task_listings(self.search())
+        file = self.write_judgments('judgments-batch-1.json', [{**listings[0], 'fingerprint': 'ab:c*?'}])
+        report = self.search()
+        self.assertEqual((report['error'], report['rejected'], report['wake']), (None, ['judgments-batch-1.json'], True))
+        self.assertTrue(file.exists())
+        text = Path(report['tasks'][0]).read_text(encoding='utf-8')
+        self.assertIn(json.dumps('Each judgment: "ab:c*?" is not a fingerprint. Copy the fingerprint from the task file.'), text)
+        self.assertIn(f'The rejected file is still `{file.as_posix()}`', text)
+        self.write_judgments(file.name, listings)
+        report = self.search()
+        self.assertEqual((report['saved'], report['rejected'], report['error']), (1, [], None))
+        self.assertFalse(file.exists())
+        self.assertEqual(self.shown(), ['fake:1'])
+
+    def test_a_folder_written_at_the_judgments_files_name_is_removed_and_the_task_handed_again(self):
+        self.site.results = {'North': [1], 'South': []}
+        [listings] = self.task_listings(self.search())
+        file = self.directory / 'inbox' / 'judgments-batch-1.json'
+        (file / 'x').parent.mkdir(parents=True)
+        (file / 'x').write_text('{}', encoding='utf-8')
+        report = self.search()
+        self.assertEqual((report['error'], report['rejected'], report['wake']), (None, ['judgments-batch-1.json'], True))
+        self.assertFalse(file.exists())
+        text = Path(report['tasks'][0]).read_text(encoding='utf-8')
+        self.assertIn('judgments-batch-1.json was a folder, not a file', text)
+        self.assertIn(f'Nothing is left at `{file.as_posix()}`. Write the whole file there with `write_file`', text)
+        self.write_judgments(file.name, listings)
+        report = self.search()
+        self.assertEqual((report['saved'], report['rejected'], report['error']), (1, [], None))
+        self.assertEqual(self.shown(), ['fake:1'])
 
     def test_a_rejected_judgments_file_whose_listings_no_longer_wait_is_deleted(self):
         self.site.results = {'North': [1], 'South': []}

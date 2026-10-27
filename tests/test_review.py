@@ -396,6 +396,35 @@ class JobTests(ReviewTestCase):
         self.assertFalse(file.exists())
         self.assertEqual(self.store.last_rerank()['review']['state'], 'done')
 
+    def test_a_listing_id_no_path_can_hold_is_rejected_and_the_review_handed_again_until_corrected(self):
+        self.run_job()
+        file = self.write(self.review(reasons=[{'id': 'ab:c*?', 'reason': 'Has [hardwood floors].'}]))
+        lines = self.run_job()
+        self.assertEqual((lines[0], lines[-1]), (f'Rejected {file.name}, handed again for correction.', '{"wakeAgent": true}'))
+        self.assertTrue(file.exists())
+        text = self.task_text(lines)
+        self.assertIn(json.dumps('reasons: "ab:c*?" is not one of the listings of the task.'), text)
+        self.assertIn(f'The rejected file is still `{file.as_posix()}`', text)
+        self.write(self.review())
+        self.assertEqual(self.run_job()[0], f'Saved {file.name}: no moves.')
+        self.assertEqual(self.store.last_rerank()['review']['state'], 'done')
+
+    def test_a_folder_written_at_the_review_files_name_is_removed_and_the_review_handed_again(self):
+        self.run_job()
+        file = self.inbox_file()
+        (file / 'x').parent.mkdir(parents=True)
+        (file / 'x').write_text('{}', encoding='utf-8')
+        lines = self.run_job()
+        self.assertEqual((lines[0], lines[-1]), (f'Rejected {file.name}, handed again for correction.', '{"wakeAgent": true}'))
+        self.assertFalse(file.exists())
+        text = self.task_text(lines)
+        self.assertIn(f'{file.name} was a folder, not a file', text)
+        self.assertIn(f'Nothing is left at `{file.as_posix()}`. Write the whole file there with `write_file`', text)
+        self.assertEqual(self.store.last_rerank()['review']['state'], 'running')
+        self.write(self.review())
+        self.assertEqual(self.run_job()[0], f'Saved {file.name}: no moves.')
+        self.assertEqual(self.store.last_rerank()['review']['state'], 'done')
+
     def test_a_review_rejected_on_its_last_attempt_fails_with_the_error(self):
         self.write(self.review(findings=['x'] * 11))
         for _ in range(REVIEW_ATTEMPTS + 1):
