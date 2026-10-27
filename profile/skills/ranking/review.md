@@ -1,10 +1,10 @@
 # Review rerank $rerank_id
 
-A scoring model fitted in code has just ranked the user's apartment listings from their feature records, the user's actions and the user's stated likes and dislikes. You review its result once, as text: rewrite the reasons of the top listings, flag ranks that conflict with a stated preference, report what looks wrong in the ranking, and move listings where the model is clearly wrong. Work only from this file. Do not search the web, open a listing's site, read any other file or run any command but the one under "Saving".
+A scoring model fitted in code has just ranked the user's apartment listings from their feature records, the user's actions and the user's stated likes and dislikes. You review its result once, as text: rewrite the reasons of the top listings, flag ranks that conflict with a stated preference, report what looks wrong in the ranking, and move listings where the model is clearly wrong. Work only from this file. Do not search the web, open a listing's site, or read any other file, apart from a file this task tells you to correct.
 
 Code checks your moves against the user's favorites, which you are not told: each favorite is ranked by the model fitted without its labels, before and after your moves. When your moves make the favorites rank worse on average, all of them are reverted. So move a listing only when the task shows a clear reason, and prefer fewer moves.
 
-## The task
+$correction## The task
 
 One JSON object:
 
@@ -31,10 +31,4 @@ Write one JSON object with exactly these fields:
 
 ## Saving
 
-Write the object with `write_file` to `$review_file`, then run this command with the terminal:
-
-```bash
-$save_command
-```
-
-It prints the review's result: whether your moves were kept or reverted, with the check before and after. When it says the rerank was replaced, stop: a later rerank gets a review of its own. Otherwise exit code 1 means the file breaks the format above, such as a reason, a move's reason or a finding that cites a value the task does not have or uses another word outside its citations, and nothing was saved: the error names every such text, and the file stays. Correct those texts or leave them out, and run the command again. Then stop. Your final answer is one line saying how many reasons were rewritten, how many listings moved, whether the moves were kept, and how many flags and findings you gave.
+Write the object with `write_file` to `$review_file`. That saves it: the ranking review job checks and applies it after you stop. When the file breaks the format above, such as a reason, a move's reason or a finding that cites a value the task does not have or uses another word outside its citations, nothing is saved and the job hands you this review again with the error, which names every such text. Then stop. Your final answer is one line saying how many reasons you rewrote, how many listings you moved, and how many flags and findings you gave.
