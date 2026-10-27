@@ -40,7 +40,7 @@ python "${HERMES_SKILL_DIR}/scripts/features.py" compare-asked
 
 ## The Compare invitation
 
-Once the interview is complete and two listings have a feature record, the user is asked once to answer 5 to 8 questions in the gallery's Compare tab, until they answer one. The job sends the invitation through the messaging gateway when it is connected. Otherwise the gallery shows it, and `status` reports `ask_to_compare` from the first records until a conversation has asked: ask the user then, as the profile's instructions say, and run `compare-asked`.
+Once the interview is complete and two listings have a feature record, the user is asked once to answer 5 to 8 questions in the gallery's Compare tab, until they answer one. The job sends the invitation through the messaging gateway when it is connected. Otherwise the gallery shows it, and `status` reports `ask_to_compare` from the first records until a conversation has asked: ask the user then, as the profile's instructions say, and run `compare-asked`. When the job could not send it, `ask_to_compare` is true as well, and it is not one of the `problems`.
 
 ## Running extraction tasks
 
@@ -75,7 +75,6 @@ When the user states a preference after a listing was extracted and its reading 
 ## Problems `status` reports
 
 - A run or a step of it that failed: the message says what failed. Tell the user that apt-scraper needs an update if it repeats.
-- The invitation to answer questions in the Compare tab could not be delivered: ask the user yourself to answer 5 to 8 of them, then run `compare-asked`. The job then shows the invitation in the gallery instead of sending it.
 - Listings extraction gave up on after three attempts: tell the user which, that they are ranked only from their price, size and the other facts code reads until their content changes, and offer to retry.
 - Preferences that could not be judged for some listings: tell the user, and offer to retry.
 - Notes or stated preferences that could not be read: tell the user they do not count in the ranking yet, and offer to retry.

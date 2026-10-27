@@ -208,11 +208,19 @@ class StructuredReasonMigrationTests(StoreTestCase):
         return ' '.join(sentences)
 
     def test_a_reason_the_model_wrote_gets_its_lists_back_and_one_a_review_rewrote_keeps_its_text(self):
+        """A listing ranked from code features only that got its record after the rerank keeps its code-only mark."""
         fill(self.store, 30, 3)
         self.store.upsert_listing(listing(id='zillow:waiting', title='Waiting'))
+        photos = [f'https://photos.example.com/given-up/{index}.jpg' for index in range(4)]
+        given_up = self.store.upsert_listing(listing(id='zillow:given-up', title='Given up', photos=photos))
+        for _ in range(READ_ATTEMPTS):
+            self.store.record_read_attempts([extraction_read('zillow:given-up', given_up['content_fingerprint'])], [])
         rerank(self.store, seed=1)
         ranked = self.store.ranked_listings()
         reasons = {identifier: entry['reason'] for identifier, entry in ranked.items()}
+        self.assertTrue(reasons['zillow:given-up']['code_only'])
+        self.store.save_extraction('zillow:given-up', given_up['content_fingerprint'], extraction(4, ['Lots of daylight', 'Carpet']),
+                                   photos=photos, phrases=['Lots of daylight', 'Carpet'])
         reviewed = next(identifier for identifier, entry in ranked.items() if entry['exploration'])
         with self.store.connect(write=True) as connection:
             for identifier, reason in reasons.items():

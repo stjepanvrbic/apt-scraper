@@ -1,16 +1,18 @@
+import io
 import json
 import os
 import sqlite3
 import subprocess
 import sys
 import threading
-from contextlib import closing
+from contextlib import closing, redirect_stdout
 from unittest import mock
 from urllib.request import Request, urlopen
 
 from test_features_run import ROOT, SCRIPT, FeaturesTestCase
+import features
 from contact import NotConnected
-from schema import MIGRATIONS, compare_invitations
+from schema import MIGRATIONS, compare_invitation
 from server import make_server
 from store import ListingStore, extraction_read
 
@@ -28,6 +30,13 @@ class CompareInvitationTests(FeaturesTestCase):
     def asks(self, gateway=NotConnected('gateway offline')):
         with mock.patch('contact.require', side_effect=gateway):
             return self.features.status()['ask_to_compare']
+
+    def status_command(self):
+        """The exit code and report of `features.py status` as a conversation runs it, with the gateway connected."""
+        output = io.StringIO()
+        with mock.patch('contact.require'), redirect_stdout(output):
+            code = features.main(['status'])
+        return code, json.loads(output.getvalue())
 
     def test_without_a_connected_gateway_the_gallery_shows_it_and_the_next_conversation_asks_once(self):
         self.assertFalse(self.store.compare_invitation()['due'])
@@ -90,11 +99,12 @@ class CompareInvitationTests(FeaturesTestCase):
         self.assertEqual(self.manifest(task)['id'], waiting)
         self.assertEqual(self.store.read_attempts(), {})
         self.assertEqual(self.state.load()['handed'], [extraction_read(waiting, self.manifest(task)['fingerprint'])])
-        [problem] = self.features.status()['problems']
-        self.assertIn('Compare', problem)
-        self.assertIn('gateway offline', problem)
+        self.assertIn('Compare tab could not be delivered', report)
+        self.assertIn('gateway offline', report)
+        self.assertEqual(self.features.status()['problems'], [])
         self.assertEqual(self.delivered(), set())
-        self.assertFalse(self.asks(gateway=None))
+        self.assertIn('gateway offline', self.store.compare_invitation()['failed']['reason'])
+        self.assertTrue(self.asks(gateway=None))
         self.save(task)
         with mock.patch('contact.require'), mock.patch('features.tell_user', return_value={'success': True}) as send:
             report, wake = self.run_cron()
@@ -103,17 +113,27 @@ class CompareInvitationTests(FeaturesTestCase):
         self.assertEqual(self.store.read_attempts(), {})
         self.assertEqual(self.features.status()['problems'], [])
         self.assertEqual(self.delivered(), {'gateway'})
+        self.assertIsNone(self.store.compare_invitation()['failed'])
+        self.assertFalse(self.asks(gateway=None))
 
     def test_a_conversation_that_asked_after_a_failed_send_leaves_the_gallery_to_show_it_without_another_message(self):
         self.prepare_records()
         with mock.patch('contact.require'), mock.patch('features.tell_user', side_effect=RuntimeError('gateway offline')):
             self.run_job()
+        code, report = self.status_command()
+        self.assertEqual((code, report['problems'], report['ask_to_compare']), (0, [], True))
         self.assertEqual(self.features.compare_asked(), {'recorded': True})
+        self.assertIsNone(self.store.compare_invitation()['failed'])
+        for _ in range(2):
+            code, report = self.status_command()
+            self.assertEqual((code, report['problems'], report['ask_to_compare']), (0, [], False))
         with mock.patch('contact.require'), mock.patch('features.tell_user') as send:
             self.run_job()
         send.assert_not_called()
         self.assertEqual(self.delivered(), {'conversation', 'gallery'})
         self.assertFalse(self.asks())
+        code, report = self.status_command()
+        self.assertEqual((code, report['problems'], report['ask_to_compare']), (0, [], False))
 
     def test_a_failing_gateway_check_leaves_the_report_wake_and_handed_reads_intact(self):
         self.prepare_records()
@@ -127,10 +147,13 @@ class CompareInvitationTests(FeaturesTestCase):
         self.assertEqual(self.manifest(task)['id'], waiting)
         self.assertEqual(self.state.load()['handed'], [extraction_read(waiting, self.manifest(task)['fingerprint'])])
         self.assertNotIn('Extraction failed', report)
-        [problem] = self.features.status()['problems']
-        self.assertIn('Compare', problem)
-        self.assertIn('timed out', problem)
+        self.assertIn('Compare tab could not be delivered', report)
+        self.assertEqual(self.features.status()['problems'], [])
+        self.assertIn('timed out', self.store.compare_invitation()['failed']['reason'])
         self.assertEqual(self.delivered(), set())
+        self.assertTrue(self.asks(gateway=None))
+        self.assertEqual(self.features.compare_asked(), {'recorded': True})
+        self.assertEqual((self.store.compare_invitation()['failed'], self.asks(gateway=None)), (None, False))
 
     def test_invitation_waits_for_interview_and_two_eligible_records(self):
         self.prepare_records()
@@ -171,8 +194,8 @@ class CompareInvitationTests(FeaturesTestCase):
         self.prepare_records()
         self.state.update(compare_invited_at='2026-10-20T12:00:00+00:00')
         with closing(sqlite3.connect(self.store.path)) as connection, connection:
-            connection.execute('DROP TABLE compare_invitations')
-            connection.execute(f'PRAGMA user_version = {MIGRATIONS.index(compare_invitations)}')
+            connection.execute('DROP TABLE compare_invitation')
+            connection.execute(f'PRAGMA user_version = {MIGRATIONS.index(compare_invitation)}')
         self.store = self.features.store = ListingStore(self.store.path)
         self.assertEqual(self.store.compare_invitation()['delivered'], {'gateway': '2026-10-20T12:00:00+00:00'})
         with mock.patch('contact.require'), mock.patch('features.tell_user') as send:

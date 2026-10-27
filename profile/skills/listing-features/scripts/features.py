@@ -223,9 +223,10 @@ class Features:
 
     def run(self):
         """One pass of the job: the stations, the extraction tasks, the reads waiting for the agent, and then the
-        Compare invitation. A step that fails becomes one of the run's problems without stopping the others. The reads
-        handed to the agent are recorded once the report that hands them over is complete, and the invitation comes
-        after that, so the messaging gateway cannot change the report, the wake or the attempts."""
+        Compare invitation. A step that fails becomes one of the run's problems without stopping the others, except the
+        invitation, whose failure its record in the store holds. The reads handed to the agent are recorded once the
+        report that hands them over is complete, and the invitation comes after that, so the messaging gateway cannot
+        change the report, the wake or the attempts."""
         if self.store.missing_settings():
             self.state.update(problems=[])
             return ['The interview is not complete, so no listing is extracted.'], False
@@ -238,8 +239,7 @@ class Features:
         reading_lines, readings = self.reading_report(work, judgment_batches)
         handed = [extraction_read(listing['id'], listing['content_fingerprint']) for listing in tasks] + readings
         self.state.update(problems=problems, handed=handed, judgment_batches=judgment_batches)
-        problems += self.deliver_compare_invitation(problems)
-        return [*lines, *extraction_lines, *reading_lines, *problems], bool(handed)
+        return [*lines, *extraction_lines, *reading_lines, *problems, *self.deliver_compare_invitation()], bool(handed)
 
     @staticmethod
     def step(problems, name, action):
@@ -304,25 +304,30 @@ class Features:
         reads += [note_read(note) for note in work['notes']] + [preference_read(*item) for item in work['unread']]
         return lines, reads
 
-    def deliver_compare_invitation(self, problems):
+    def deliver_compare_invitation(self):
         """Delivers the Compare invitation once it is due and neither the gateway nor the gallery has: through the
         messaging gateway when it is connected and no conversation has asked yet, otherwise in the gallery, whose
-        invitation the next conversation passes on. A failure is recorded as one of the run's problems and returned, and
-        the invitation stays pending for the next run."""
+        invitation the next conversation passes on. A send or gateway check that fails is recorded in the invitation's
+        record, so a conversation asks while the invitation stays pending and the next run tries again, and the
+        report's line about it is returned. The record is the only place that holds it, so the first delivery on any
+        surface ends it."""
         try:
             invitation = self.store.compare_invitation()
-            if invitation['due'] and not {'gateway', 'gallery'} & set(invitation['delivered']):
+            if not invitation['due'] or {'gateway', 'gallery'} & set(invitation['delivered']):
+                return []
+            surface = 'gallery'
+            try:
                 if 'conversation' not in invitation['delivered'] and usable('gateway'):
                     tell_user(COMPARE_INVITATION)
-                    self.store.deliver_compare_invitation('gateway')
-                else:
-                    self.store.deliver_compare_invitation('gallery')
+                    surface = 'gateway'
+            except Exception as error:
+                self.store.fail_compare_invitation(failure(error))
+                raise
+            self.store.deliver_compare_invitation(surface)
             return []
         except Exception as error:
-            problem = (f'The invitation to answer questions in the Compare tab could not be delivered, '
-                       f'so the next run tries again. {failure(error)}')
-            self.state.update(problems=[*problems, problem])
-            return [problem]
+            return [f'The invitation to answer questions in the Compare tab could not be delivered, so the next conversation '
+                    f'asks and the next run tries again. {failure(error)}']
 
     def refresh_stations(self):
         """Fetches the rapid-transit stations of the transit feed once, and again only when the feed changes. A feed is tens
@@ -350,16 +355,17 @@ class Features:
         return {'recorded': self.store.deliver_compare_invitation('conversation')}
 
     def ask_to_compare(self):
-        """Whether a conversation should ask the user to answer Compare questions: the invitation is due, neither the
-        gateway nor a conversation has delivered it, and the gallery has, or the job's next run will deliver it there,
-        because the gateway is not connected. The gateway is checked only before the job has delivered the invitation,
-        so a conversation between the first records and that run asks too. A gateway check that fails counts as no
-        gateway, since the job's run could not send through it either."""
+        """Whether a conversation should ask the user to answer Compare questions, from the invitation's record: it is
+        due, neither the gateway nor a conversation has delivered it, and the gallery has, the job's last attempt failed,
+        or the job's next run will deliver it in the gallery, because the gateway is not connected. The gateway is
+        checked only while the record says nothing else, so a conversation between the first records and the job's
+        next run asks too. A gateway check that fails counts as no gateway, since the job's run could not send through
+        it either."""
         invitation = self.store.compare_invitation()
         delivered = set(invitation['delivered'])
         if not invitation['due'] or delivered & {'gateway', 'conversation'}:
             return False
-        if 'gallery' in delivered:
+        if 'gallery' in delivered or invitation['failed']:
             return True
         try:
             return not usable('gateway')

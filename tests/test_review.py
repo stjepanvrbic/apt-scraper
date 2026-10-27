@@ -19,7 +19,8 @@ from rerank import REVIEW_ATTEMPTS, pending_review, rerank, save_review  # noqa:
 from record import SEED_TAGS  # noqa: E402
 from review import REVIEW_WORDS, REVIEWED, adjustments, checked_text, citable_values, held_out_ranks, reviewed_order  # noqa: E402
 from schema import MIGRATIONS, review_pass  # noqa: E402
-from store import ListingStore  # noqa: E402
+from store import READ_ATTEMPTS, ListingStore, extraction_read  # noqa: E402
+from test_feature_record import extraction  # noqa: E402
 from test_gallery_store import listing  # noqa: E402
 from test_rerank import ROOT, SCRIPT, SETTINGS, StoreTestCase, fill  # noqa: E402
 
@@ -239,6 +240,37 @@ class ReviewPassTests(ReviewTestCase):
             save_review(self.store, self.review(flags=[{'id': self.by_rank(1), 'kind': 'dislike', 'preference': 'Galley kitchen'}]))
         result = save_review(self.store, self.review(flags=[{'id': self.by_rank(1), 'kind': 'dislike', 'preference': 'Carpet'}]))
         self.assertEqual([flag['preference'] for flag in result['flags']], ['Carpet'])
+
+    def test_a_record_saved_after_the_rerank_stays_out_of_the_task_the_citations_and_the_stored_reason(self):
+        """A listing the rerank ranked from code features only keeps that rerank's view through its review."""
+        photos = [f'https://photos.example.com/given-up/{index}.jpg' for index in range(4)]
+        saved = self.store.upsert_listing(listing(id='zillow:given-up', title='Given up', photos=photos))
+        for _ in range(READ_ATTEMPTS):
+            self.store.record_read_attempts([extraction_read('zillow:given-up', saved['content_fingerprint'])], [])
+        self.summary = rerank(self.store, seed=1)
+        self.ranked = self.store.ranked_listings()
+        self.assertTrue(self.ranked['zillow:given-up']['reason']['code_only'])
+        self.assertLessEqual(self.ranked['zillow:given-up']['rank'], REVIEWED)
+        reviewed = self.store.review_snapshot(self.summary['id'])
+        value = extraction(4, ['Lots of daylight', 'Carpet'], traits=['rooftop hot tub'], concerns=['street noise'])
+        self.store.save_extraction('zillow:given-up', saved['content_fingerprint'], value, photos=photos, phrases=['Lots of daylight', 'Carpet'])
+        self.assertEqual(self.store.review_snapshot(self.summary['id']), reviewed)
+        task = pending_review(self.store)
+        [entry] = [item for item in task['listings'] if item['id'] == 'zillow:given-up']
+        self.assertIsNone(entry['record'])
+        self.assertNotIn('rooftop hot tub', json.dumps(task, ensure_ascii=False))
+        self.assertEqual(task['state']['extraction_given_up'], ['Given up'])
+        self.assertEqual(task['state']['tags'], reviewed['inputs']['tags'])
+        for review, error in [(self.review(reasons=[{'id': 'zillow:given-up', 'reason': 'For it: [rooftop hot tub].'}]),
+                               'The reason of zillow:given-up is rejected: the record does not state "rooftop hot tub"'),
+                              (self.review(findings=['The model weighs [rooftop hot tub] too little.']),
+                               'Finding 1 is rejected: the task does not state "rooftop hot tub"')]:
+            with self.subTest(error=error), self.assertRaisesRegex(ValueError, error):
+                save_review(self.store, review)
+        stated = next(part['value'] for part in self.ranked['zillow:given-up']['explanation']['contributions'] if part['value'])
+        save_review(self.store, self.review(reasons=[{'id': 'zillow:given-up', 'reason': f'Worth it for [{stated}].'}]))
+        self.assertEqual(self.store.listing('zillow:given-up')['reason'], {**self.ranked['zillow:given-up']['reason'],
+                                                                            'features': {'text': f'Worth it for {stated}.'}})
 
     def test_flags_and_findings_are_in_the_result_and_in_status(self):
         flagged = self.by_rank(4)

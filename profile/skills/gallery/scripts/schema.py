@@ -134,7 +134,14 @@ def notes_session_per_database(connection):
         WHERE status = 'running'""")
 
 
-EARLIER_REASON_MARKS = ('Shown to learn your taste. ', 'Ranked from code features only, because extraction failed 3 times. ')
+EARLIER_EXPLORATION_MARK = 'Shown to learn your taste. '
+EARLIER_CODE_ONLY_MARK = 'Ranked from code features only, because extraction failed 3 times. '
+
+
+def earlier_marks(text):
+    """Whether a reason stored as text carried the code-only mark its rerank wrote, and the text without its marks."""
+    text = text.removeprefix(EARLIER_EXPLORATION_MARK)
+    return text.startswith(EARLIER_CODE_ONLY_MARK), text.removeprefix(EARLIER_CODE_ONLY_MARK)
 
 
 def earlier_feature_text(features):
@@ -149,26 +156,24 @@ def structured_reasons(connection):
     """A reason becomes the parts compose_reason gives, so each value it names renders as one item of its list. A
     ranked listing's reason is built again from its explanation: the part that names its features becomes the model's
     lists when the text is the one the model wrote, and stays the text when a review rewrote it. A reason without an
-    explanation, a sample listing's, keeps its text as that part. Listings without a rank lose their stored reason,
-    because why a listing is not ranked is derived when it is read."""
-    rows = connection.execute('''SELECT r.listing_id, r.rank, r.reason, r.explanation, records.listing_id AS record FROM ranking r
-        LEFT JOIN feature_records records ON records.listing_id = r.listing_id AND records.fingerprint = r.fingerprint''').fetchall()
-    for row in rows:
+    explanation, a sample listing's, keeps its text as that part. The code-only mark is the one the text carries,
+    which the rerank wrote, since the listing may have got its record after it. Listings without a rank lose their
+    stored reason, because why a listing is not ranked is derived when it is read."""
+    for row in connection.execute('SELECT listing_id, rank, reason, explanation FROM ranking').fetchall():
         if row['rank'] is None or row['reason'] is None:
             reason = None
         elif row['explanation']:
             explanation = json.loads(row['explanation'])
             similar_favorite = explanation['similar_favorite']
-            text = row['reason']
-            for mark in EARLIER_REASON_MARKS:
-                text = text.removeprefix(mark)
+            code_only, text = earlier_marks(row['reason'])
             if similar_favorite:
                 text = text.removesuffix(f' Most like your favorite {similar_favorite["title"]}.')
             model = feature_reason(explanation['contributions'])
-            reason = compose_reason(model if text == earlier_feature_text(model) else {'text': text}, code_only=row['record'] is None,
+            reason = compose_reason(model if text == earlier_feature_text(model) else {'text': text}, code_only=code_only,
                                     similar_favorite=similar_favorite)
         else:
-            reason = compose_reason({'text': row['reason']}, code_only=False, similar_favorite=None)
+            code_only, text = earlier_marks(row['reason'])
+            reason = compose_reason({'text': text}, code_only=code_only, similar_favorite=None)
         connection.execute('UPDATE ranking SET reason = ? WHERE listing_id = ?',
                            (json.dumps(reason, ensure_ascii=False) if reason else None, row['listing_id']))
 
@@ -181,21 +186,21 @@ def reviews_with_inputs(connection):
                         datetime.now(timezone.utc).isoformat()))
 
 
-def compare_invitations(connection):
-    """The Compare invitation's deliveries move into the store, where the gallery reads them. The listing features job
-    recorded a sent invitation as compare_invited_at in features.json next to the database, which counts as delivered
-    through the gateway."""
-    connection.execute('''CREATE TABLE compare_invitations (
-        surface TEXT PRIMARY KEY CHECK (surface IN ('gateway', 'gallery', 'conversation')), delivered_at TEXT NOT NULL)''')
+def compare_invitation(connection):
+    """The Compare invitation's delivery state becomes one record in the store, which the job, the gallery and the
+    conversations all read: when each surface delivered it, and the last attempt that failed while none had. The
+    listing features job recorded a sent invitation as compare_invited_at in features.json next to the database, which
+    counts as delivered through the gateway."""
+    connection.execute('''CREATE TABLE compare_invitation (id INTEGER PRIMARY KEY CHECK (id = 1),
+        gateway TEXT, gallery TEXT, conversation TEXT, failed_at TEXT, failure TEXT)''')
     database = next(row[2] for row in connection.execute('PRAGMA database_list') if row[1] == 'main')
     job_state = Path(database).parent / 'features.json'
     invited_at = json.loads(job_state.read_text(encoding='utf-8')).get('compare_invited_at') if database and job_state.exists() else None
-    if invited_at:
-        connection.execute("INSERT INTO compare_invitations VALUES ('gateway', ?)", (invited_at,))
+    connection.execute('INSERT INTO compare_invitation (id, gateway) VALUES (1, ?)', (invited_at,))
 
 
 MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals,
-              notes_session_per_database, structured_reasons, reviews_with_inputs, compare_invitations)
+              notes_session_per_database, structured_reasons, reviews_with_inputs, compare_invitation)
 
 
 def migrate(connection):

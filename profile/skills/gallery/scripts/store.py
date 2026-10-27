@@ -30,6 +30,7 @@ PREFERENCES = ('likes', 'dislikes')
 PLACE_FIELDS = ('name', 'address')
 IMPORTANCE = ('low', 'medium', 'high')
 READ_ATTEMPTS = 3
+COMPARE_SURFACES = ('gateway', 'gallery', 'conversation')
 
 
 class TimeZoneDataMissing(RuntimeError):
@@ -545,8 +546,8 @@ class ListingStore:
         None, its judgments of stated preferences, its code-derived features, the criteria areas whose search found it
         or None, whether extraction gave up on it, whether it is ranked (available, inside the criteria and not
         dismissed), its rank from the latest rerank when its content has not changed since, and the user's actions on it; the settings; the readings of the stated preferences by (kind,
-        phrase) and of the user's notes by note id; each listing's latest note sentiment; and the pairwise answers as
-        (chosen, other). Completed visits are included only for the rerank's diagnostic check."""
+        phrase) and of the user's notes by note id; each listing's latest note sentiment; the pairwise answers as
+        (chosen, other); and the tag list. Completed visits are included only for the rerank's diagnostic check."""
         with self.connect() as connection:
             connection.execute('BEGIN')
             settings = {row['name']: json.loads(row['value']) for row in connection.execute('SELECT * FROM settings')}
@@ -566,6 +567,7 @@ class ListingStore:
             preference_readings = {(row['kind'], row['phrase']): json.loads(row['features'])
                                    for row in connection.execute('SELECT * FROM preference_readings')}
             pairs = answered_pairs(connection)
+            tags = sorted(self.known_tags(connection))
             visits = []
             if include_signals:
                 visits = [dict(row) for row in connection.execute('''SELECT s.listing_id, s.visit_id,
@@ -596,7 +598,7 @@ class ListingStore:
         return {'listings': listings, 'settings': settings, 'preference_readings': preference_readings,
                 'note_readings': {note: reading for note, (_, reading) in note_readings.items()},
                 'sentiments': {listing_id: reading['sentiment'] for listing_id, reading in note_readings.values()}, 'pairs': pairs,
-                'implicit_visits': visits}
+                'tags': tags, 'implicit_visits': visits}
 
     def record_signals(self, events):
         """Stores an atomic, retryable batch without changing the gallery's content revision."""
@@ -837,11 +839,12 @@ class ListingStore:
         connection.execute('UPDATE pairwise_skips SET remaining = remaining - 1')
 
     def compare_invitation(self):
-        """The invitation to answer the first pairwise questions: whether it is due, because the interview is complete,
-        at least two listings the ranking can compare have a feature record of their current content and the user has
-        given no pairwise answer yet, and when each surface delivered it, by surface: gateway (the messaging gateway),
-        gallery (shown in the gallery while it is due) and conversation (asked in a conversation with the agent).
-        Sample listings do not count."""
+        """The invitation to answer the first pairwise questions, one record every surface reads: whether it is due,
+        because the interview is complete, at least two listings the ranking can compare have a feature record of their
+        current content and the user has given no pairwise answer yet; when each surface delivered it, by surface:
+        gateway (the messaging gateway), gallery (shown in the gallery while it is due) and conversation (asked in a
+        conversation with the agent); and the last attempt that failed, {'at', 'reason'}, while no surface has
+        delivered it since, otherwise None. Sample listings do not count."""
         missing = self.missing_settings()
         with self.connect() as connection:
             connection.execute('BEGIN')
@@ -849,15 +852,28 @@ class ListingStore:
                 JOIN feature_records records ON records.listing_id = l.id AND records.fingerprint = l.fingerprint
                 WHERE {RANKABLE} AND l.id NOT LIKE 'sample:%' ''').fetchone()[0]
             answered = connection.execute('SELECT 1 FROM pairwise_answers LIMIT 1').fetchone()
-            delivered = {row['surface']: row['delivered_at'] for row in connection.execute('SELECT * FROM compare_invitations')}
-        return {'due': not missing and comparable >= 2 and not answered, 'delivered': delivered}
+            row = connection.execute('SELECT * FROM compare_invitation').fetchone()
+        return {'due': not missing and comparable >= 2 and not answered,
+                'delivered': {surface: row[surface] for surface in COMPARE_SURFACES if row[surface]},
+                'failed': {'at': row['failed_at'], 'reason': row['failure']} if row['failed_at'] else None}
 
     def deliver_compare_invitation(self, surface):
-        """Records that surface delivered the invitation to answer the first pairwise questions, and returns whether
-        this is the first time it did."""
+        """Records that surface delivered the invitation to answer the first pairwise questions, which ends any failed
+        attempt, and returns whether this is the first time it did."""
+        if surface not in COMPARE_SURFACES:
+            raise ValueError(f'{surface} is not a surface of the Compare invitation.')
         with self.connect(write=True) as connection:
-            return bool(connection.execute('INSERT OR IGNORE INTO compare_invitations VALUES (?, ?)',
-                                           (surface, datetime.now(timezone.utc).isoformat())).rowcount)
+            first = connection.execute(f'SELECT {surface} IS NULL FROM compare_invitation').fetchone()[0]
+            connection.execute(f'UPDATE compare_invitation SET {surface} = COALESCE({surface}, ?), failed_at = NULL, failure = NULL',
+                               (datetime.now(timezone.utc).isoformat(),))
+            return bool(first)
+
+    def fail_compare_invitation(self, reason):
+        """Records an attempt to deliver the invitation that failed, and why, unless a surface delivered it already."""
+        with self.connect(write=True) as connection:
+            connection.execute('UPDATE compare_invitation SET failed_at = ?, failure = ? '
+                               'WHERE gateway IS NULL AND gallery IS NULL AND conversation IS NULL',
+                               (datetime.now(timezone.utc).isoformat(), reason))
 
     def skip_pair(self, first, second):
         """Suppresses this pair until twenty other questions have been answered or skipped."""
