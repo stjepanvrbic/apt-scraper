@@ -1,6 +1,5 @@
 """Experimental grouped priors, evaluated before changing the installed scoring model."""
 
-import copy
 import math
 from dataclasses import replace
 from statistics import fmean, pstdev
@@ -152,19 +151,9 @@ def choose_half_life(history):
     return min(HALF_LIVES, key=losses.get)
 
 
-def pair_history(inputs):
-    history = []
-    for index, (chosen, other) in enumerate(inputs['pairs']):
-        snapshot = copy.deepcopy(inputs)
-        snapshot['pairs'] = inputs['pairs'][:index]
-        snapshot['pair_days'] = inputs.get('pair_days', [])[:index]
-        snapshot['as_of_day'] = inputs.get('pair_days', [0] * len(inputs['pairs']))[index]
-        history.append({'kind': 'pair', 'listing': chosen, 'other': other, 'inputs': snapshot})
-    return history
-
-
 def tuned_candidate(inputs):
-    return fit_candidate(inputs, half_life=choose_half_life(pair_history(inputs)))
+    history = [event for event in inputs.get('history', []) if event['kind'] == 'pair']
+    return fit_candidate(inputs, half_life=choose_half_life(history))
 
 
 def composite_reason(model, identifier, name):

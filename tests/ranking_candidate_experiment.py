@@ -11,7 +11,7 @@ from statistics import fmean
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/ranking/scripts'))
 
-from measurement import bootstrap, utilities
+from measurement import bootstrap, pair_accuracy, record_simulated_pair, simulation_start, store_report, utilities
 from learning import decode
 from ranking_priors import tuned_candidate
 from test_rerank import SETTINGS, fill, least_cpu_seconds
@@ -23,17 +23,14 @@ from implicit_signals import diagnostic
 
 def evaluate(arguments):
     encoded, trajectory = arguments
-    state = decode(encoded)
-    state['pairs'] = trajectory['pairs'][:20]
-    state['pair_days'] = list(range(20))
-    state['as_of_day'] = 20
-    paired = {identifier for pair in state['pairs'] for identifier in pair}
-    for listing in state['listings']:
-        listing['paired'] = listing['id'] in paired
+    state = simulation_start(decode(encoded))
+    history = []
+    for chosen, other in trajectory['pairs'][:20]:
+        record_simulated_pair(state, chosen, other, history)
+    state['history'] = history
     values = utilities(tuned_candidate(state))
     taste = trajectory['taste']
-    return fmean(0.5 if values[a] == values[b] else (values[a] > values[b]) == (taste[a] > taste[b])
-                 for a, b in trajectory['held_pairs'])
+    return pair_accuracy(values, taste, trajectory['held_pairs'])
 
 
 def candidate_rerank(store):
@@ -50,6 +47,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('baseline', type=Path)
     parser.add_argument('output', type=Path)
+    parser.add_argument('--store', type=Path, help='Optional working copy for actual-label replay; never the live profile database.')
     args = parser.parse_args()
     original = json.loads(args.baseline.read_text())['simulation']
     compressed = (args.baseline.parent / original['feedback_file']).read_bytes()
@@ -75,9 +73,11 @@ def main():
               'improvement': fmean(improvement), 'improvement_interval': bootstrap(improvement, fmean),
               'bar': 0.05, 'simulation_bar_met': fmean(improvement) >= 0.05,
               'rerank_cpu_seconds': seconds, 'cpu_bar_met': seconds < 2,
-              'real_store_check': 'not run, no authorized real store copy',
+              'real_store_check': 'Actual-label replay is separate from the simulated-user comparison.',
               'production': 'priors stay as on main', 'stop_condition_fired': fmean(improvement) <= 0,
               'baseline_runs': baseline, 'candidate_runs': candidate}
+    if args.store:
+        report['real_store'] = {'baseline': store_report(args.store), 'candidate': store_report(args.store, fitter=tuned_candidate)}
     args.output.write_text(json.dumps(report, indent=2) + '\n')
 
 

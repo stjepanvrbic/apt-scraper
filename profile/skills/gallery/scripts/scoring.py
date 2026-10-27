@@ -845,6 +845,8 @@ def display(model_design, index, name):
             return None
         average = fmean(value for _, value in known)
         component, value = max(known, key=lambda item: abs(item[1] - average))
+        if value == average:
+            return f'{composite} {average:g} of 5'
         direction = 'above' if value >= average else 'below'
         return f'{composite} {average:g} of 5, {rating_words(component)} {direction} the rest'
     listing, raw = model_design.listings[model_design.ids[index]], model_design.raw[index]

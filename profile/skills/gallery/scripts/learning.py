@@ -29,6 +29,8 @@ def label_clock(connection, listings, pairs):
 
     dated = {(row['listing'], row['kind']): day(row['occurred_at']) for row in connection.execute(
         "SELECT listing, kind, occurred_at FROM learning_events WHERE kind IN ('favorite', 'dismiss', 'contact') ORDER BY id")}
+    for row in connection.execute('SELECT listing_id, requested_at FROM contacts'):
+        dated.setdefault((row['listing_id'], 'contact'), day(row['requested_at']))
     noted = {row['listing_id']: day(row['created_at']) for row in connection.execute(
         'SELECT n.listing_id, n.created_at FROM notes n JOIN note_readings r ON r.note_id = n.id ORDER BY n.id')}
     label_days = {}

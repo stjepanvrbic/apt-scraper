@@ -49,10 +49,10 @@ def utilities(model):
 
 def replay(events, fitter=fit_model):
     held_out, known_positive, answers, excluded, ties = [], [], [], 0, 0
-    for event in events:
+    for index, event in enumerate(events):
         if event['kind'] not in ('favorite', 'contact', 'pair'):
             continue
-        inputs = event['inputs']
+        inputs = {**event['inputs'], 'history': events[:index]}
         values = utilities(fitter(inputs))
         identifier = event['listing']
         if event['kind'] == 'pair':
@@ -136,7 +136,7 @@ def store_report(source, experiment=None, fitter=fit_model):
         with store.connect() as connection:
             events = [{**dict(row), 'inputs': decode(row['inputs'])} for row in connection.execute('SELECT * FROM learning_events ORDER BY id')]
         result = {'listings': len(inputs['listings']), 'events': len(events), 'prequential': replay(events, fitter),
-                  'leave_one_out': leave_one_out(fitter(inputs)).ranks,
+                  'leave_one_out': leave_one_out(fitter({**inputs, 'history': events})).ranks,
                   'history_limit': 'Only journaled actions have their original records, settings and candidate sets. Older labels cannot be replayed.'}
         if experiment:
             result['garden'] = garden(inputs, experiment, fitter)
@@ -178,12 +178,30 @@ def agreement(first, second):
             'below_0.7': [name for name, value in means.items() if value < 0.7]}
 
 
-def simulate(inputs, selector, fitter=fit_model, *, runs=200, labels=40, seed=0):
-    """Independent sparse tastes; noisy answers to displayed pairs; fixed unseen evaluation pairs per run."""
+def simulation_start(inputs):
     blank = copy.deepcopy(inputs)
-    blank.update(pairs=[], note_readings={}, sentiments={})
+    blank.update(pairs=[], note_readings={}, sentiments={}, label_days={}, pair_days=[], as_of_day=0)
+    blank.pop('history', None)
     for listing in blank['listings']:
         listing.update(favorite=False, dismissed=False, contact=False, user_notes=False, paired=False)
+    return blank
+
+
+def record_simulated_pair(state, chosen, other, history):
+    """Records are fixed during simulation; copy only the state an answer can change."""
+    before = {**state, 'pairs': state['pairs'][:], 'pair_days': state['pair_days'][:],
+              'listings': [dict(listing) for listing in state['listings']]}
+    history.append({'kind': 'pair', 'listing': chosen, 'other': other, 'inputs': before})
+    state['pair_days'].append(len(state['pairs']))
+    state['pairs'].append((chosen, other))
+    state['as_of_day'] = len(state['pairs'])
+    for listing in state['listings']:
+        listing['paired'] = listing['paired'] or listing['id'] in (chosen, other)
+
+
+def simulate(inputs, selector, fitter=fit_model, *, runs=200, labels=40, seed=0):
+    """Independent sparse tastes; noisy answers to displayed pairs; fixed unseen evaluation pairs per run."""
+    blank = simulation_start(inputs)
     base = design(blank)
     if len(base.ids) < 4 or not base.columns:
         raise ValueError('Simulation needs at least four listings with varying features.')
@@ -196,26 +214,22 @@ def simulate(inputs, selector, fitter=fit_model, *, runs=200, labels=40, seed=0)
         taste = dict(zip(base.ids, (dot(row, weights) for row in base.rows)))
         held_pairs = [generator.sample(base.ids, 2) for _ in range(100)]
         state = copy.deepcopy(blank)
-        state.update(pair_days=[], as_of_day=0)
-        curve = []
+        curve, history = [], []
         for count in range(labels + 1):
+            context = {**state, 'history': history}
             if count in curves:
-                values = utilities(fitter(state))
+                values = utilities(fitter(context))
                 accuracy = pair_accuracy(values, taste, held_pairs)
                 curves[count].append(accuracy)
                 curve.append(accuracy)
             if count == labels:
                 break
-            asked = selector(state, 1, [*state['pairs'], *held_pairs])
+            asked = selector(context, 1, [*state['pairs'], *held_pairs])
             if not asked:
                 raise ValueError('The selector exhausted pairs before the requested label count.')
             first, second = asked[0]['listings']
             chosen, other = (first, second) if taste[first] - taste[second] + generator.gauss(0, 0.3) > 0 else (second, first)
-            state['pairs'].append((chosen, other))
-            state['pair_days'].append(count)
-            state['as_of_day'] = count + 1
-            for listing in state['listings']:
-                listing['paired'] = listing['paired'] or listing['id'] in (chosen, other)
+            record_simulated_pair(state, chosen, other, history)
         run_curves.append(curve)
         trajectories.append({'pairs': state['pairs'], 'held_pairs': held_pairs, 'taste': taste})
     return {'runs': runs, 'seed': seed, 'labels': labels, 'curves': [
