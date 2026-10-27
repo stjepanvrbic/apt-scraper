@@ -36,14 +36,14 @@ def browse(connection, view, page, page_size):
     connection.execute('BEGIN')
     total = connection.execute('SELECT COUNT(*) ' + joins + where).fetchone()[0]
     rows = connection.execute(f"""SELECT json_object({summary}) AS data, json_extract(l.data, '$.photos[0]') AS photo,
-        r.rank, r.reason, COALESCE(r.exploration, 0) AS exploration, r.fingerprint = l.fingerprint AS analysis_current,
+        l.fingerprint AS content_fingerprint, r.rank, r.reason, COALESCE(r.exploration, 0) AS exploration, r.fingerprint = l.fingerprint AS analysis_current,
         COALESCE(f.favorite, 0) AS favorite, COALESCE(f.dismissed, 0) AS dismissed,
         c.status AS contact_status, c.channel AS contact_channel, c.error AS contact_error {viewing}
         {joins} {where} ORDER BY {order} LIMIT ? OFFSET ?""", (page_size, (page - 1) * page_size)).fetchall()
     items = []
     for row in rows:
         item = json.loads(row['data'])
-        item.update(photos=[row['photo']] if row['photo'] else [], rank=row['rank'], reason=json.loads(row['reason']) if row['reason'] else None, exploration=bool(row['exploration']),
+        item.update(content_fingerprint=row['content_fingerprint'], photos=[row['photo']] if row['photo'] else [], rank=row['rank'], reason=json.loads(row['reason']) if row['reason'] else None, exploration=bool(row['exploration']),
                     analysis_current=bool(row['analysis_current']), favorite=bool(row['favorite']), dismissed=bool(row['dismissed']),
                     contact={'status': row['contact_status'], 'channel': row['contact_channel'], 'error': row['contact_error']} if row['contact_status'] else None,
                     correspondence=[], correspondence_total=0, viewing=None)

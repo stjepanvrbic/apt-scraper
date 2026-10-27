@@ -33,10 +33,10 @@ Phase 1, priors and recency:
 
 Phase 2, labels worth more:
 
-- [ ] The 5 to 8 cold-start questions are chosen by the same selector on the prior covariance, so they differ most on the features the stated preferences do not pin down.
-- [ ] The gallery logs card impressions (a card visible for at least one second) next to the other implicit signals, and the harness forms skip-above pairs from them as a diagnostic.
-- [ ] Favorite and dismiss offer a one-line "why", read by the note reading into the prior.
-- [ ] Measured: in simulation, labels needed to reach 0.75 pairwise accuracy fall by at least 25% against the selector on `main`; on the owner's store, once 40 Compare answers exist, prequential pairwise accuracy at least 0.65 with the lower 90% bound above 0.5. If the selector does not cut the label count in simulation, the selector on `main` stays and Result says why.
+- [x] The 5 to 8 cold-start questions are chosen by the same selector on the prior covariance, so they differ most on the features the stated preferences do not pin down.
+- [x] The gallery logs card impressions (a card visible for at least one second) next to the other implicit signals, and the harness forms skip-above pairs from them as a diagnostic.
+- [x] Favorite and dismiss offer a one-line "why", read by the note reading into the prior.
+- [x] Measured: in simulation, labels needed to reach 0.75 pairwise accuracy fall by at least 25% against the selector on `main`; on the owner's store, once 40 Compare answers exist, prequential pairwise accuracy at least 0.65 with the lower 90% bound above 0.5. If the selector does not cut the label count in simulation, the selector on `main` stays and Result says why.
 
 Phase 3, hypotheses:
 
@@ -75,6 +75,10 @@ The scoring core stays on the standard library through phase 3. Phase 4 brings n
 Phases 0 to 2 change no visible UI but the Compare questions and the "why" line; the "why" line, the hypothesis prompts in Rankings and "learning from N labels" have their frontend done by a separate design-focused agent, as the umbrella says.
 
 ## Deviations
+
+- Phase 2: the prior-only selector is an experimental candidate, not the installed policy, because its label-efficiency bar was not established. Its baseline is the variance selector delivered in Phase 0, fixed by the saved feedback artifact rather than changing as PRs merge. The candidate asks up to eight disjoint prior questions, uses one quarter of the variance for columns with stated prior means, then returns to the posterior selector.
+- A card impression requires at least half the card in the viewport for one continuous second, with a visible document and no open details drawer. It records content fingerprint, seen rank and page visit, once per mounted content/rank; failed replies retry with the same event id while the card remains mounted. Skip-above pairs use only prior impressions from the selected card's visit and exclude stale content, future events and explicitly labeled alternatives. They remain diagnostics at weight 0.1, never fit rows.
+- The small frontend changes reuse the current Mantine components in this implementation. No separate design worker was launched from the delegated implementation task. Reasons are optional inline fields, saved through the existing user-note route; existing note reading handles them without another model path.
 
 
 - Phase 1: the candidate stays in `tests/ranking_priors.py`; the installed `fit_model` and its priors are unchanged because both the simulation and CPU gates failed. Composite display and action-date capture are shared with the experiment, but the installed design creates no composite columns.
@@ -159,3 +163,14 @@ Review correction for Phase 1: the tuner no longer reconstructs past states from
 The refreshed synthetic prior report is run `f580db55f8362e73`; the real-feature simulation is run `e072d6f741d8ac0f`, both dated 2026-10-27 UTC. Each report records its command and the least-of-three CPU timing rule. All 400 frozen trajectories have scorable historical pairs, so excluding unscorable journal events does not change these measured accuracies. A regression now covers nine scorable answers plus a missing-record answer (default retained), and ten scorable answers followed by a missing-record answer (only the ten usable snapshots compared).
 
 Final verification after these review fixes: full Git Bash Python suite 689 tests and 317 subtests passed (289.32 s), zero skips; Ruff passes. The production and gallery files are unchanged from the passing 40-test headless run, gallery lint and build.
+
+### Phase 2: impressions and reasons, cold-start candidate not promoted
+
+`python tests/ranking_selector_experiment.py docs/research/ranking_measurements_phase0.json docs/research/ranking_measurements_phase2.json` evaluates 200 users with the same corpus, seeds, tastes, noise and held-out pairs as the baseline. The horizon was fixed at 40 answers.
+
+- At 20 labels: prior-only cold start 0.63350 [0.62420, 0.64295], baseline 0.64145 [0.63070, 0.65175]. At 40: candidate 0.69075 [0.67995, 0.70190], baseline 0.69080 [0.68020, 0.70160]. Paired difference at 40 is -0.00005 [-0.00905, 0.00935]. Intervals are 95% bootstrap over users.
+- Neither mean curve reaches 0.75, so both label thresholds are greater than 40. A 25% reduction is not demonstrated; no reduction percentage is invented. The literal no-reduction stop condition cannot be distinguished from censoring. Under the owner's unmet-bar rule, the new selector stays out and the existing variance selector remains.
+- Owner-store accuracy at 40 Compare answers: not run. The authorized source directory has no database to copy. No real interval is claimed.
+- Impressions and their skip-above diagnostic, optional favorite/dismiss reasons, content identity in card summaries, and the data migration are implemented. The existing implicit-dwell diagnostic and scoring fit are unchanged.
+
+Verification: four new Python label/impression tests and the existing Compare, invitation and implicit-signal modules passed together (35 tests, 40 subtests). Headless Playwright covers the one-second and hidden-page threshold, optional reason save/skip/retry, desktop and mobile accessibility, and unchanged details signals. Final Git Bash suite: 678 tests and 317 subtests passed, zero skipped (284.80 s). Full headless Playwright: 43 passed, zero skipped (2.0 min). Build, gallery lint, `ruff check .` and the mechanical UI check pass. Desktop and mobile screenshots were inspected. No listing-site requests or owner database access occurred.

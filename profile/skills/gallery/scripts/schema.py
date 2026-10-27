@@ -215,8 +215,23 @@ def compress_learning_events(connection):
         connection.execute('UPDATE learning_events SET inputs = ? WHERE id = ?', (compress(text), identifier))
 
 
+def card_impressions(connection):
+    connection.execute('ALTER TABLE implicit_signals RENAME TO earlier_signals')
+    connection.execute('''CREATE TABLE implicit_signals (
+        event_id TEXT PRIMARY KEY, visit_id TEXT NOT NULL, listing_id TEXT NOT NULL REFERENCES listings(id),
+        fingerprint TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('open', 'dwell', 'photo', 'close', 'impression')),
+        occurred_at TEXT NOT NULL, duration_ms INTEGER, photo_url TEXT, shown_rank INTEGER,
+        CHECK ((kind = 'dwell' AND duration_ms >= 0 AND photo_url IS NULL AND shown_rank IS NULL)
+            OR (kind = 'photo' AND photo_url IS NOT NULL AND duration_ms IS NULL AND shown_rank IS NULL)
+            OR (kind IN ('open', 'close') AND duration_ms IS NULL AND photo_url IS NULL AND shown_rank IS NULL)
+            OR (kind = 'impression' AND duration_ms IS NULL AND photo_url IS NULL AND (shown_rank IS NULL OR shown_rank > 0))))''')
+    connection.execute('INSERT INTO implicit_signals SELECT *, NULL FROM earlier_signals')
+    connection.execute('DROP TABLE earlier_signals')
+    connection.execute('CREATE INDEX implicit_signals_listing_visit ON implicit_signals(listing_id, fingerprint, visit_id)')
+
+
 MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals,
-              notes_session_per_database, structured_reasons, reviews_with_inputs, compare_invitation, learning_events, compress_learning_events)
+              notes_session_per_database, structured_reasons, reviews_with_inputs, compare_invitation, learning_events, compress_learning_events, card_impressions)
 
 
 def migrate(connection):

@@ -9,6 +9,7 @@ import sqlite3
 import sys
 import tempfile
 from contextlib import closing
+from datetime import datetime
 from pathlib import Path
 from statistics import NormalDist, fmean, median
 
@@ -16,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'gallery/scripts'))
 
 from learning import decode, encode  # noqa: E402
 from record import CATEGORIES, FLAGS, RATINGS  # noqa: E402
-from scoring import design, dot, fit_model, label, leave_one_out, ranked_order, scores  # noqa: E402
+from scoring import design, dot, fit_model, label, labeled, leave_one_out, ranked_order, scores  # noqa: E402
 from store import ListingStore  # noqa: E402
 
 PAIR_TIE_POLICY = 'Chance credit for tied model scores or tied latent tastes; bootstrap over runs.'
@@ -45,6 +46,27 @@ def wilson(correct, total, confidence=0.95):
 
 def utilities(model):
     return dict(zip(model.design.ids, scores(model.design.likelihood_rows, model.fit.weights, model.design.dense_count)))
+
+
+def skip_above(events):
+    pairs = []
+    for event in events:
+        if event['kind'] != 'favorite' or not event['inputs'].get('impressions'):
+            continue
+        timestamp = datetime.fromisoformat(event['occurred_at'])
+        listings = {listing['id']: listing for listing in event['inputs']['listings']}
+        seen = [item for item in event['inputs']['impressions'] if item['shown_rank'] is not None
+                and datetime.fromisoformat(item['occurred_at']) <= timestamp
+                and item['listing_id'] in listings and listings[item['listing_id']]['fingerprint'] == item['fingerprint']]
+        own = [item for item in seen if item['listing_id'] == event['listing']]
+        if not own:
+            continue
+        selected = max(own, key=lambda item: datetime.fromisoformat(item['occurred_at']))
+        skipped = {item['listing_id'] for item in seen if item['visit_id'] == selected['visit_id']
+                   and item['shown_rank'] < selected['shown_rank'] and item['listing_id'] != event['listing']
+                   and not labeled(listings[item['listing_id']])}
+        pairs.extend({'chosen': event['listing'], 'other': identifier, 'weight': 0.1} for identifier in sorted(skipped))
+    return pairs
 
 
 def replay(events, fitter=fit_model):
@@ -89,7 +111,8 @@ def replay(events, fitter=fit_model):
             'pairwise_answers': pair_count, 'pairwise_scored': len(answers), 'pairwise_ties': ties,
             'pairwise_unscorable': pair_count - len(answers) - ties, 'pairwise_accuracy': fmean(answers) if answers else None,
             'pairwise_interval': wilson(sum(answers), len(answers)),
-            'pairwise_interval_90': wilson(sum(answers), len(answers), 0.90), 'excluded': excluded}
+            'pairwise_interval_90': wilson(sum(answers), len(answers), 0.90), 'excluded': excluded,
+            'skip_above_diagnostic': skip_above(events)}
 
 
 def garden(inputs, experiment, fitter=fit_model):

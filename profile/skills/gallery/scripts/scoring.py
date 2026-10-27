@@ -1038,6 +1038,11 @@ def questions(inputs, hyperparameters, count, answered):
     posterior variance of their feature difference,
     each listing in at most one question, without pairs already answered either way."""
     model = fit_model(inputs, hyperparameters)
+    return select_questions(model, count, answered)
+
+
+def select_questions(model, count, answered):
+    """Select disjoint informative pairs from a fitted model or its prior."""
     model_design, fit_result = model.design, model.fit
     order = ranked_order(model_design, fit_result.weights)[:QUESTION_CANDIDATES]
     values = scores(model_design.likelihood_rows, fit_result.weights, model_design.dense_count)

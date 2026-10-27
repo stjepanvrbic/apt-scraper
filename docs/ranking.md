@@ -249,3 +249,11 @@ The store journals the pre-action feature records, settings, readings, labels an
 `tests/ranking_priors.py` evaluates grouped evidence scales, finish/light/space composites and age weights without changing the installed fit. `tests/ranking_candidate_experiment.py <baseline-report.json> <report.json>` uses the baseline's checksummed frozen answers and held-out pairs, so the comparison changes the model rather than the feedback. Its half-life choices use original pre-action journal snapshots from prior Compare outcomes, never reconstructed current state or the outcome being predicted. Without ten usable historical snapshots it retains the default. Frozen simulations provide their own explicit static-record history. The store snapshots include known action dates; a historical favorite without a recorded date keeps full weight.
 
 The measured candidate lost 0.01915 pairwise accuracy at 20 labels (95% interval -0.02540 to -0.01270) and took 2.23 CPU seconds for the 300-listing rerank. It therefore stays outside the installed fit. The candidate's composite explanations name the average rating and the component that differs most; the standard design continues to use its existing columns.
+
+### Card impressions and reasons
+
+A Rankings card records an impression after at least half of it remains visible for one continuous second. Hidden pages and cards behind the details drawer do not count. The event keeps the content fingerprint, seen rank and page visit. The measurement replay forms diagnostic skip-above pairs only against unlabeled listings seen higher in the same visit before a favorite. Neither these pairs nor impressions enter the installed fit.
+
+Favorite and dismiss offer an optional one-line reason. Save reason writes a normal user note, which the existing note-reading job reads into sentiment and feature preferences. Skip leaves the action saved without a note; a failed save keeps the text for retry.
+
+The prior-only cold-start experiment is in `tests/ranking_selector_experiment.py`. Neither its mean curve nor the baseline reached 0.75 accuracy within 40 answers over 200 simulated users, so a 25% label reduction was not established. The installed variance selector stays unchanged.

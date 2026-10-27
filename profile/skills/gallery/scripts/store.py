@@ -542,7 +542,7 @@ class ListingStore:
                     for row in connection.execute('''SELECT c.*, l.first_seen FROM code_features c
                         JOIN listings l ON l.id = c.listing_id AND l.fingerprint = c.fingerprint ORDER BY c.listing_id''')}
 
-    def ranking_inputs(self, *, include_signals=False, connection=None):
+    def ranking_inputs(self, *, include_signals=False, include_impressions=False, connection=None):
         """Everything a rerank reads, from one snapshot of the store: each listing with its current feature record or
         None, its judgments of stated preferences, its code-derived features, the criteria areas whose search found it
         or None, whether extraction gave up on it, whether it is ranked (available, inside the criteria and not
@@ -598,10 +598,13 @@ class ListingStore:
                     'user_notes': identifier in noted, 'paired': identifier in compared,
                 })
             clock = label_clock(connection, listings, pairs)
+            impressions = [dict(row) for row in connection.execute('''SELECT s.listing_id, s.fingerprint, s.visit_id,
+                s.shown_rank, s.occurred_at FROM implicit_signals s JOIN listings l ON l.id = s.listing_id
+                AND l.fingerprint = s.fingerprint WHERE kind = 'impression' ORDER BY s.rowid''')] if include_impressions else []
         return {'listings': listings, 'settings': settings, 'preference_readings': preference_readings, **clock,
                 'note_readings': {note: reading for note, (_, reading) in note_readings.items()},
                 'sentiments': {listing_id: reading['sentiment'] for listing_id, reading in note_readings.values()}, 'pairs': pairs,
-                'tags': tags, 'implicit_visits': visits}
+                'tags': tags, 'implicit_visits': visits, 'impressions': impressions}
 
     def record_signals(self, events):
         """Stores an atomic, retryable batch without changing the gallery's content revision."""
@@ -610,9 +613,9 @@ class ListingStore:
         fields = {'event_id', 'visit_id', 'listing_id', 'fingerprint', 'kind', 'occurred_at'}
         rows = []
         for event in events:
-            if not isinstance(event, dict) or event.get('kind') not in ('open', 'dwell', 'photo', 'close'):
-                raise ValueError('Signal kind must be open, dwell, photo or close.')
-            extra = {'duration_ms'} if event['kind'] == 'dwell' else {'photo_url'} if event['kind'] == 'photo' else set()
+            if not isinstance(event, dict) or event.get('kind') not in ('open', 'dwell', 'photo', 'close', 'impression'):
+                raise ValueError('Signal kind must be open, dwell, photo, close or impression.')
+            extra = {'duration_ms'} if event['kind'] == 'dwell' else {'photo_url'} if event['kind'] == 'photo' else {'rank'} if event['kind'] == 'impression' else set()
             if set(event) != fields | extra:
                 raise ValueError('Signal fields do not match its kind.')
             for name in fields:
@@ -627,6 +630,9 @@ class ListingStore:
                 raise ValueError('Signal occurred_at must include a timezone.')
             duration = event.get('duration_ms')
             photo = event.get('photo_url')
+            rank = event.get('rank')
+            if rank is not None and (type(rank) is not int or rank < 1):
+                raise ValueError('Signal rank must be a positive integer or null.')
             if event['kind'] == 'dwell' and (type(duration) is not int or not 0 <= duration <= 86400000):
                 raise ValueError('Signal duration_ms must be an integer from 0 to 86400000.')
             if event['kind'] == 'photo':
@@ -634,7 +640,7 @@ class ListingStore:
                 if not re.fullmatch(r'/media/[A-Za-z0-9._-]+', photo):
                     require_url(photo)
             rows.append((event['event_id'], event['visit_id'], event['listing_id'], event['fingerprint'],
-                         event['kind'], event['occurred_at'], duration, photo))
+                         event['kind'], event['occurred_at'], duration, photo, rank))
         with self.connect() as connection:
             connection.execute('BEGIN IMMEDIATE')
             recorded = 0
@@ -645,7 +651,7 @@ class ListingStore:
                     if tuple(previous) != row:
                         raise ValueError('Signal event_id already records a different event.')
                     continue
-                connection.execute('INSERT INTO implicit_signals VALUES (?, ?, ?, ?, ?, ?, ?, ?)', row)
+                connection.execute('INSERT INTO implicit_signals VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', row)
                 recorded += 1
             return recorded
 
@@ -1126,7 +1132,7 @@ class ListingStore:
     def record_learning_event(self, connection, kind, listing, other=None):
         connection.execute('INSERT INTO learning_events (occurred_at, kind, listing, other, inputs) VALUES (?, ?, ?, ?, ?)',
                            (datetime.now(timezone.utc).isoformat(), kind, listing, other,
-                            compress(encode(self.ranking_inputs(connection=connection)))))
+                            compress(encode(self.ranking_inputs(connection=connection, include_impressions=True)))))
 
     def correspond(self, listing_id, direction, channel, text, *, external_message_id, external_thread_id=None):
         text = require_text(text, 'Message')
