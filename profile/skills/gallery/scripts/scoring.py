@@ -1016,8 +1016,8 @@ def state_findings(model_design, weights):
 
 
 def questions(inputs, hyperparameters, count, answered):
-    """Up to count pairwise questions: pairs of ranked listings among the QUESTION_CANDIDATES best whose order the
-    posterior is least sure of, that is whose probability of one ranking above the other is closest to one half,
+    """Up to count pairwise questions: pairs among the QUESTION_CANDIDATES best ranked listings with the largest
+    posterior variance of their feature difference,
     each listing in at most one question, without pairs already answered either way."""
     model = fit_model(inputs, hyperparameters)
     model_design, fit_result = model.design, model.fit
@@ -1031,15 +1031,17 @@ def questions(inputs, hyperparameters, count, answered):
             if frozenset((model_design.ids[first], model_design.ids[second])) in answered:
                 continue
             deviation = math.sqrt(sum((left - right) ** 2 for left, right in zip(spread[first], spread[second])))
-            probability = 0.5 * (1 + math.erf((values[first] - values[second]) / (deviation * math.sqrt(2)))) if deviation else 1.0
-            pairs.append((abs(probability - 0.5), model_design.ids[first], model_design.ids[second], probability))
+            if deviation <= 1e-12:
+                continue
+            probability = 0.5 * (1 + math.erf((values[first] - values[second]) / (deviation * math.sqrt(2))))
+            pairs.append((-deviation ** 2, model_design.ids[first], model_design.ids[second], probability))
     chosen, used = [], set()
-    for certainty, first, second, probability in sorted(pairs):
+    for negative_variance, first, second, probability in sorted(pairs):
         if len(chosen) == count:
             break
         if first in used or second in used:
             continue
         used |= {first, second}
-        chosen.append({'listings': [first, second], 'probability_first_above': probability})
+        chosen.append({'listings': [first, second], 'probability_first_above': probability, 'variance': -negative_variance})
     return chosen
 

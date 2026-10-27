@@ -1,0 +1,94 @@
+{
+  "listings": 63,
+  "events": 0,
+  "prequential": {
+    "held_out": [],
+    "known_positive_actions": [],
+    "rank_definition": "Refitted model rank over the historical candidate set, for model comparisons.",
+    "displayed_median_rank": null,
+    "displayed_median_interval": null,
+    "median_rank": null,
+    "median_interval": null,
+    "top_20": null,
+    "top_20_interval": null,
+    "pairwise_answers": 0,
+    "pairwise_scored": 0,
+    "pairwise_ties": 0,
+    "pairwise_unscorable": 0,
+    "pairwise_accuracy": null,
+    "pairwise_interval": null,
+    "pairwise_interval_90": null,
+    "excluded": 0
+  },
+  "leave_one_out": {},
+  "history_limit": "Only journaled actions have their original records, settings and candidate sets. Older labels cannot be replayed.",
+  "feature_records": 31,
+  "label_counts": {
+    "favorites": 0,
+    "dismissals": 0,
+    "contacts": 0,
+    "notes": 0,
+    "compare_answers": 0
+  },
+  "garden_original_favorites_present": [],
+  "garden_original_favorites_missing": [
+    "2064093099",
+    "2079514484",
+    "2106063102",
+    "441025098",
+    "455063308"
+  ],
+  "source": "authorized profile workspace copy; source opened only through plain file copy",
+  "snapshot_bytes_300_listings": {
+    "rows": 50,
+    "compressed_min": 63844,
+    "compressed_max": 63866,
+    "compressed_mean": 63859.56,
+    "raw_min": 746072,
+    "raw_max": 746121,
+    "raw_mean": 746096.5
+  },
+  "photo_inventory": {
+    "listed_urls": 976,
+    "stored_room_annotations": 462,
+    "retest_listings_prepared": 20,
+    "retest_unique_photos": 286,
+    "downloaded_urls_cached_once": 287
+  },
+  "extraction_retest": {
+    "status": "not run",
+    "reason": "Isolated HERMES_HOME cannot boot: no dependency environment is committed for this install; run hermes pm repair",
+    "prepared_calls": 40,
+    "runtime_issue": "https://github.com/NousResearch/hermes-agent/issues/143476"
+  },
+  "current_feature_records": 31,
+  "rankable": 28,
+  "snapshot_cost": {
+    "samples": 20,
+    "snapshot_bytes_raw": 173739,
+    "snapshot_bytes_compressed": 30573,
+    "snapshot_read_seconds": {
+      "median": 0.0021969000226818025,
+      "interval_95": [
+        0.002144700032658875,
+        0.0022227499866858125
+      ],
+      "range": [
+        0.0020208999048918486,
+        0.0028258999809622765
+      ]
+    },
+    "write_transaction_read_and_compress_seconds": {
+      "median": 0.004933100019115955,
+      "interval_95": [
+        0.004864899965468794,
+        0.004961049999110401
+      ],
+      "range": [
+        0.004712300025857985,
+        0.006178000010550022
+      ]
+    },
+    "note": "No feedback was invented or saved; measured snapshot preparation under a write transaction on a disposable copy."
+  }
+}

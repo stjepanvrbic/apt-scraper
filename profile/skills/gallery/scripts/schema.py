@@ -1,5 +1,6 @@
 import hashlib
 import json
+from learning import compress
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -202,8 +203,20 @@ def compare_invitation(connection):
     connection.execute('INSERT INTO compare_invitation (id, gateway) VALUES (1, ?)', (invited_at,))
 
 
+def learning_events(connection):
+    connection.execute('''CREATE TABLE learning_events (id INTEGER PRIMARY KEY, occurred_at TEXT NOT NULL,
+        kind TEXT NOT NULL, listing TEXT NOT NULL, other TEXT, inputs BLOB NOT NULL)''')
+
+
+def compress_learning_events(connection):
+    identifiers = [row[0] for row in connection.execute("SELECT id FROM learning_events WHERE typeof(inputs) = 'text'")]
+    for identifier in identifiers:
+        text = connection.execute('SELECT inputs FROM learning_events WHERE id = ?', (identifier,)).fetchone()[0]
+        connection.execute('UPDATE learning_events SET inputs = ? WHERE id = ?', (compress(text), identifier))
+
+
 MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals,
-              notes_session_per_database, structured_reasons, reviews_with_inputs, compare_invitation)
+              notes_session_per_database, structured_reasons, reviews_with_inputs, compare_invitation, learning_events, compress_learning_events)
 
 
 def migrate(connection):

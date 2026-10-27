@@ -6,7 +6,7 @@ Commands:
                                      summary with each favorite's held-out rank. The rerank's review then waits.
   ranking.py status                  the latest rerank's summary with its review, and the shown listings not ranked since
   ranking.py explain ID              a listing's rank, reason and full explanation
-  ranking.py questions [--count N]   the pairwise questions the model is least sure of
+  ranking.py questions [--count N]   pairs with the largest posterior feature-difference variance
   ranking.py run                     one pass of the scheduled job apt-scraper-review: saves the review the agent
                                      wrote into the job's inbox, writes the task of a waiting review for the agent and
                                      ends with a line that tells Hermes whether to wake it. Fails only when it cannot

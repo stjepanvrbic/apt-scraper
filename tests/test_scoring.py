@@ -158,14 +158,14 @@ class PairwiseTests(unittest.TestCase):
         after = ranks(rank_listings(inputs(listings, pairs=[(lower, higher)]), seed=1))
         self.assertLess(after[lower], after[higher])
 
-    def test_questions_pair_the_listings_whose_order_is_least_sure_without_repeating_a_listing_or_an_answered_pair(self):
+    def test_questions_maximize_difference_variance_without_repeating_a_listing_or_an_answered_pair(self):
         listings = neighborhood(30)
         asked = questions(inputs(listings), DEFAULT_HYPERPARAMETERS, 5, [])
         self.assertEqual(len(asked), 5)
         named = [identifier for question in asked for identifier in question['listings']]
         self.assertEqual(len(named), len(set(named)))
-        certainties = [abs(question['probability_first_above'] - 0.5) for question in asked]
-        self.assertEqual(certainties, sorted(certainties))
+        variances = [question['variance'] for question in asked]
+        self.assertEqual(variances, sorted(variances, reverse=True))
         again = questions(inputs(listings), DEFAULT_HYPERPARAMETERS, 5, [tuple(reversed(asked[0]['listings']))])
         self.assertNotIn(set(asked[0]['listings']), [set(question['listings']) for question in again])
 

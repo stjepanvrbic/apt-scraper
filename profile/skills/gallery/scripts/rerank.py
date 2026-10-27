@@ -74,7 +74,7 @@ def save_review(store, value):
 
 
 def pairwise_questions(store, count):
-    """Up to count pairwise questions on the listings whose order the model is least sure of, fitted with the prior
+    """Up to count pairwise questions on the listings with the largest posterior difference variance, fitted with the prior
     scale and weak-negative weight of the latest rerank."""
     last = store.last_rerank()
     hyperparameters = (last['prior_scale'], last['unlabeled_weight']) if last else DEFAULT_HYPERPARAMETERS
