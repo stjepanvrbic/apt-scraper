@@ -1,7 +1,7 @@
 ---
 title: The installer installs the profile under a name that was deleted before
 type: Bug
-state: In Progress
+state: Done
 priority: 1
 assignee: agent
 milestone:
@@ -20,7 +20,7 @@ Running the installer after `hermes profile delete apt-scraper` installs the pro
 - [x] `config.yaml` is kept across a rerun only when the profile was installed from this distribution before (`distribution.yaml` present); otherwise the distribution's `config.yaml` is installed.
 - [x] A half-copied profile directory from a failed install does not stop the next run.
 - [x] `tests/test_installers.py` covers the deleted-name case and the config rule against the fake `hermes`.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
@@ -56,7 +56,7 @@ Verified on Windows at `699d8de`:
 
 Not run: the installers end to end, and anything on macOS.
 
-Delivered on `fix/installer_deleted_profile` in [PR #41](https://github.com/stjepanvrbic/apt-scraper/pull/41), open against `main`, not merged.
+Delivered on `fix/installer_deleted_profile` in [PR #41](https://github.com/stjepanvrbic/apt-scraper/pull/41), merged to `main` as a984306 after one review round with no blocking findings.
 
 ## Comments
 
