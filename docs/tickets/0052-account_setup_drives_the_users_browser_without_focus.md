@@ -1,7 +1,7 @@
 ---
 title: The account setup drives the user's own browser without needing the foreground
 type: Bug
-state: In Progress
+state: Done
 priority: 1
 assignee: agent
 milestone:
@@ -24,7 +24,7 @@ The Google and Telegram parts of the account setup run in the user's own browser
 - [x] After `hermes profile install --force` through the installer, the saved interview and the connection results are still there and the next conversation continues the setup from them: `settings.py status` and `connections.py status` read what the previous install saved. Verify on a throwaway profile, and make the installer or the skill resume rather than restart.
 - [x] A Google Cloud project `apt-scraper` that the earlier attempt may have created is reused, not duplicated: the project step checks the picker first.
 - [x] Tests cover the skill's rules (no `computer_use` on web pages, the browser keys set by both installers) with the existing test style; no test drives a real Google or Telegram page, opens the owner's browser, or snapshots the owner's browser profile.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
@@ -70,6 +70,7 @@ Verification must not touch the owner's browser, browser profile or Hermes profi
 
 ## Result
 
+- Delivered in [PR #45](https://github.com/stjepanvrbic/apt-scraper/pull/45), merged to `main` as 4c17a86 after two review rounds: the first blocked the profile-wide browser keys, the second two hand-off races between the contact job and the setup, both fixed before the merge.
 - `profile/config.yaml` sets `browser.backend: "off"`. Both installers have a step "Browser tools" that sets it while `config get` prints an empty backend. Neither the profile nor the installers set `use_real_profile`, `headed` or `real_profile_autoclose`.
 - `connections.py` has `browser on|off` and the 30-minute stale reset in `status`. `contact.py due` runs the same reset and keeps the contact job asleep while a setup uses the browser.
 - The `account-connections` skill (1.4.0) has a section "The browser" that covers:
