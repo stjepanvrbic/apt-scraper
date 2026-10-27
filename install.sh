@@ -77,6 +77,14 @@ rm -f "$saved_config"
 step 'Google Workspace skill'
 hermes -p "$PROFILE_NAME" skills install google-workspace --yes
 
+# The account setup and the contact forms use Hermes's built-in browser tools, which Hermes replaces
+# with browser_exec while browser.backend is unset. A kept config.yaml gains the setting only when it
+# names no backend of its own.
+step 'Browser tools'
+if [ -z "$(hermes -p "$PROFILE_NAME" config get browser.backend)" ]; then
+    hermes -p "$PROFILE_NAME" config set browser.backend off
+fi
+
 # The search runs curl_cffi in an environment of its own, built from hash-pinned wheels with the Python
 # Hermes runs cron scripts with, which `hermes pm env` puts on PATH.
 step 'Search environment'

@@ -2,11 +2,13 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -41,6 +43,11 @@ import json, os, sys
 with open(os.environ["FAKE_LOG"], "a", encoding="utf-8") as log:
     log.write(json.dumps(["hermes", *sys.argv[1:]]) + "\\n")
 arguments = sys.argv[1:]
+if arguments[2:4] == ["config", "set"]:
+    if os.environ.get("FAKE_CONFIG_FAILS"):
+        print("Error: config.yaml is not writable", file=sys.stderr)
+        sys.exit(1)
+    sys.exit(0)
 if arguments[:2] == ["send", "--list"]:
     if os.environ.get("FAKE_LIST_OUTPUT"):
         print(os.environ["FAKE_LIST_OUTPUT"])
@@ -87,7 +94,7 @@ class ConnectionsTest(unittest.TestCase):
             "FAKE_LOG": str(self.log),
         }
         for name in ("FAKE_PLATFORMS", "FAKE_SEND_ERRORS", "FAKE_IMSG_CHATS_ERROR", "FAKE_IMSG_SEND_ERROR",
-                     "FAKE_IMSG_SEND_HANGS", "FAKE_LIST_OUTPUT"):
+                     "FAKE_IMSG_SEND_HANGS", "FAKE_LIST_OUTPUT", "FAKE_CONFIG_FAILS"):
             self.environment[name] = ""
         self.write_tool("hermes", FAKE_HERMES)
         self.install_google_skill(GOOGLE_API_OK)
@@ -565,6 +572,189 @@ class ConnectionsTest(unittest.TestCase):
         _, output = self.run_main("check", "imessage", "--handle", "+15551234567")
 
         self.assertRegex(output, r"The test text did not finish within [23] seconds\.")
+
+    # The account setup's browser settings are on only between `browser on` and `browser off`, or for
+    # SETUP_BROWSER_IDLE after the last `browser on`.
+
+    def setup_record(self):
+        return self.home / "apt-scraper" / "setup-browser"
+
+    def setup_settings(self, value):
+        return [["-p", "apt-scraper", "config", "set", key, value] for key in connections.SETUP_BROWSER_SETTINGS]
+
+    def config_calls(self):
+        return [call for call in self.calls("hermes") if call[2:4] == ["config", "set"]]
+
+    def age_setup_record(self, minutes):
+        moment = time.time() - minutes * 60
+        os.utime(self.setup_record(), (moment, moment))
+
+    def test_browser_on_records_the_setup_and_turns_on_the_real_profile_in_a_visible_window(self):
+        code, output = self.run_main("browser", "on")
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.config_calls(), self.setup_settings("true"))
+        self.assertTrue(self.setup_record().exists())
+        self.assertEqual(connections.SETUP_BROWSER_SETTINGS,
+                         ("browser.use_real_profile", "browser.headed", "browser.real_profile_autoclose"))
+
+    def test_browser_off_turns_the_settings_off_and_removes_the_record(self):
+        self.run_main("browser", "on")
+        code, output = self.run_main("browser", "off")
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.config_calls(), self.setup_settings("true") + self.setup_settings("false"))
+        self.assertFalse(self.setup_record().exists())
+
+    def test_status_turns_off_a_setup_that_stopped_without_browser_off(self):
+        self.run_main("browser", "on")
+        self.age_setup_record(31)
+        self.run_main("status")
+        self.assertEqual(self.config_calls(), self.setup_settings("true") + self.setup_settings("false"))
+        self.assertFalse(self.setup_record().exists())
+
+    def test_status_leaves_a_running_setup_and_a_profile_without_one_alone(self):
+        self.run_main("status")
+        self.run_main("browser", "on")
+        self.age_setup_record(29)
+        self.run_main("status")
+        self.assertEqual(self.config_calls(), self.setup_settings("true"))
+        self.assertTrue(self.setup_record().exists())
+
+    def test_a_failed_browser_off_keeps_the_record_so_the_next_status_tries_again(self):
+        self.run_main("browser", "on")
+        self.environment["FAKE_CONFIG_FAILS"] = "1"
+        code, _ = self.run_main("browser", "off")
+        self.assertEqual(code, 1)
+        self.assertTrue(self.setup_record().exists())
+        self.age_setup_record(31)
+        code, output = self.run_main("status")
+        self.assertIn("Gmail", output)
+        self.assertTrue(self.setup_record().exists())
+        self.environment["FAKE_CONFIG_FAILS"] = ""
+        self.run_main("status")
+        self.assertFalse(self.setup_record().exists())
+
+    def setting_values(self):
+        """The last value `config set` gave each setup setting."""
+        values = {}
+        for call in self.config_calls():
+            values[call[4]] = call[5]
+        return values
+
+    def contact_run(self, minutes_ago):
+        record = self.home / "apt-scraper" / "contact-run"
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text("run", encoding="utf-8")
+        moment = time.time() - minutes_ago * 60
+        os.utime(record, (moment, moment))
+
+    def off_with(self, during_off):
+        """Turns off a setup idle for 31 minutes and calls during_off once, between the first `config set ... false`
+        and the rest of the turn-off."""
+        self.run_main("browser", "on")
+        self.age_setup_record(31)
+        original = connections.set_setup_browser
+        calls = []
+
+        def set_setup_browser(value):
+            if value == "false" and not calls:
+                calls.append(value)
+                during_off()
+            original(value)
+
+        with mock.patch.object(connections, "set_setup_browser", set_setup_browser):
+            return connections.setup_browser_running()
+
+    def test_browser_on_while_a_stale_setup_is_turned_off_waits_and_leaves_the_browser_on_with_its_record(self):
+        turning_on = threading.Thread(target=connections.setup_browser_on)
+
+        def start_browser_on():
+            turning_on.start()
+            turning_on.join(3)
+
+        with mock.patch.dict(os.environ, self.environment):
+            self.off_with(start_browser_on)
+            turning_on.join(60)
+        self.assertTrue(self.setup_record().exists())
+        self.assertEqual(self.setting_values(), dict.fromkeys(connections.SETUP_BROWSER_SETTINGS, "true"))
+
+    def test_a_record_rewritten_while_a_stale_setup_is_turned_off_is_kept_and_the_browser_left_on(self):
+        def rewrite_record():
+            self.setup_record().write_text("on again", encoding="utf-8")
+            os.utime(self.setup_record())
+
+        with mock.patch.dict(os.environ, self.environment):
+            self.assertTrue(self.off_with(rewrite_record))
+        self.assertTrue(self.setup_record().exists())
+        self.assertEqual(self.setting_values(), dict.fromkeys(connections.SETUP_BROWSER_SETTINGS, "true"))
+
+    def test_browser_on_waits_for_a_listing_correspondence_run_until_it_ends_or_runs_too_long(self):
+        self.contact_run(10)
+        code, output = self.run_main("browser", "on")
+        self.assertEqual(code, 4)
+        self.assertIn("listing correspondence run", output)
+        self.assertEqual((self.config_calls(), self.setup_record().exists()), ([], False))
+        self.contact_run(61)
+        code, _ = self.run_main("browser", "on")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.config_calls(), self.setup_settings("true"))
+
+    def test_the_contact_job_gate_records_the_run_it_wakes_and_clears_it_at_the_next_gate(self):
+        record = self.home / "apt-scraper" / "contact-run"
+        with mock.patch.dict(os.environ, self.environment):
+            self.assertTrue(connections.contact_job_gate(True))
+            self.assertTrue(record.exists())
+            self.assertFalse(connections.contact_job_gate(False))
+            self.assertFalse(record.exists())
+        self.run_main("browser", "on")
+        with mock.patch.dict(os.environ, self.environment):
+            self.assertFalse(connections.contact_job_gate(True))
+        self.assertFalse(record.exists())
+
+    def test_browser_status_exits_0_only_while_no_setup_uses_the_browser(self):
+        self.assertEqual(self.run_main("browser", "status")[0], 0)
+        self.run_main("browser", "on")
+        self.assertEqual(self.run_main("browser", "status")[0], connections.NOT_CONNECTED)
+        self.run_main("browser", "off")
+        self.assertEqual(self.run_main("browser", "status")[0], 0)
+
+
+class SkillTest(unittest.TestCase):
+    """The account-connections skill drives web pages with Hermes's browser tools, never with computer use."""
+
+    def setUp(self):
+        self.text = (SCRIPTS.parent / "SKILL.md").read_text(encoding="utf-8")
+        self.sections = {part.split("\n", 1)[0]: part for part in re.split(r"^## ", self.text, flags=re.M)[1:]}
+
+    def test_the_google_and_telegram_steps_use_the_browser_tools_and_open_nothing_in_the_users_own_windows(self):
+        for name in ("Google: Gmail and Calendar", "Messaging gateway"):
+            with self.subTest(name):
+                section = self.sections[name]
+                self.assertIn("browser_navigate", section)
+                self.assertNotRegex(section, r"(?i)computer[ _-]use|cmd /c start|\bopen \"|address bar|t\.me/")
+
+    def test_computer_use_is_named_only_for_what_no_browser_can_do(self):
+        lines = [line for line in self.text.splitlines() if re.search(r"(?i)computer[ _-]use", line)]
+        self.assertTrue(lines)
+        for line in lines:
+            with self.subTest(line[:60]):
+                self.assertRegex(line, r"Terminal|terminal program")
+        self.assertIn("Never use `computer_use` on a web page", self.sections["The browser"])
+
+    def test_the_users_browser_is_turned_on_before_the_browser_steps_and_off_however_the_setup_ends(self):
+        browser = self.sections["The browser"]
+        turn_on = browser.index('connections.py" browser on')
+        self.assertLess(turn_on, browser.index('connections.py" browser off'))
+        self.assertIn("before your first browser action in every turn of the setup", browser[:turn_on])
+        self.assertLess(self.text.index('connections.py" browser on'), self.text.index("browser_navigate`. The consent"))
+        ending = browser[browser.index("Turn it off again"):browser.index('connections.py" browser off')]
+        for exit_path in ("after the final `check`", "when the user stops", "when a step fails",
+                          "without the user's logins"):
+            with self.subTest(exit_path):
+                self.assertIn(exit_path, ending)
+        self.assertIn("run `browser off`", self.sections["Procedure"])
+
+    def test_nothing_reads_the_botfather_chat_while_it_shows_the_token(self):
+        self.assertIn("take no snapshot, screenshot or `browser_vision` of the window", self.sections["Messaging gateway"])
 
 
 if __name__ == "__main__":

@@ -508,6 +508,24 @@ class ProfileStepTests(unittest.TestCase):
                 self.assertTrue((self.profile / 'memories').is_dir())
 
 
+class BrowserSettingsTests(unittest.TestCase):
+    """The scheduled jobs share the profile's config, so neither the distribution nor the installers turn on the
+    user's own browser profile or a visible window: the account setup turns them on only while it runs."""
+
+    SETUP_ONLY = ('use_real_profile', 'headed', 'real_profile_autoclose')
+
+    def test_the_distribution_config_and_the_installers_set_the_browser_backend_and_nothing_of_the_setup(self):
+        config = (ROOT / 'profile' / 'config.yaml').read_text(encoding='utf-8')
+        self.assertIn('\nbrowser:\n  backend: "off"\n', config)
+        for name in ('profile/config.yaml', 'install.ps1', 'install.sh'):
+            text = (ROOT / name).read_text(encoding='utf-8')
+            for setting in self.SETUP_ONLY:
+                with self.subTest(name, setting=setting):
+                    self.assertNotIn(setting, text)
+        self.assertIn("config', 'set', 'browser.backend', 'off')", (ROOT / 'install.ps1').read_text(encoding='utf-8'))
+        self.assertIn('config set browser.backend off', (ROOT / 'install.sh').read_text(encoding='utf-8'))
+
+
 class QuestionTests(unittest.TestCase):
     """A question that a command asks on the console shows before the installer waits for its answer."""
 
@@ -725,6 +743,7 @@ class QuestionTests(unittest.TestCase):
             "Get-NativeOutput claude @('--version')",
             "Get-NativeOutput claude @('auth', 'status') -AllowFailure",
             "Get-NativeOutput $hermes @('--version')",
+            "Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', 'browser.backend')",
             "Get-NativeOutput $hermes @('pm', 'env')",
             "Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', 'delegation.model')",
             "Get-NativeOutput $hermes @('-p', 'default', 'gateway', 'status') -AllowFailure",

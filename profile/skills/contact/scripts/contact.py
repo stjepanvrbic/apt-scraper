@@ -14,7 +14,8 @@ Commands:
   contact.py close LISTING        end the contact
   contact.py fail LISTING ERROR   mark the contact failed with the reason the gallery shows
   contact.py due                  record new replies from Gmail and iMessage, bring the calendar up to date with
-                                  the viewings, then print the cron wake gate
+                                  the viewings, then print the cron wake gate, closed while the account setup
+                                  uses the browser
 
 FILE is a JSON object in the scratch directory, deleted once it is used. Every send and every calendar write
 first runs `connections.py require` for its channel and goes ahead only if it exits 0. An agreed viewing becomes
@@ -517,7 +518,17 @@ def command_due(store):
         print(f'{starts} new contact request{"" if starts == 1 else "s"}')
     if replies:
         print(f'{replies} repl{"y" if replies == 1 else "ies"} to answer')
-    print(json.dumps({'wakeAgent': bool(due)}))
+    # The account setup's browser carries the user's logins in a visible window, and this job's contact forms
+    # would get it too, so the job waits while a setup uses it, and the setup waits for a run to end.
+    try:
+        wake = connections.contact_job_gate(bool(due))
+    except (RuntimeError, OSError, connections.CommandTimedOut, connections.OutOfTime) as error:
+        print(f"The account setup's browser could not be checked: {error}")
+        wake = False
+    else:
+        if due and not wake:
+            print('Waiting while the account setup uses the browser.')
+    print(json.dumps({'wakeAgent': wake}))
     return 0
 
 
