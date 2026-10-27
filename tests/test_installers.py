@@ -71,6 +71,41 @@ FAKE_GIT = textwrap.dedent("""\
     """)
 
 
+# Stands in for hermes's profile commands on the Hermes root in HERMES_HOME, as Hermes 0.22.5 runs them
+# (hermes_cli/profiles.py, hermes_cli/profile_distribution.py). It logs every call to the file in argv[1].
+# `profile create` refuses an existing directory, clears the name's deletion mark and writes a config.yaml
+# of its own. `profile install --force` copies the payload, then fails on a name marked deleted.
+FAKE_HERMES = textwrap.dedent("""\
+    import json, os, shutil, sys
+    from pathlib import Path
+    log, *arguments = sys.argv[1:]
+    with open(log, 'a') as calls:
+        calls.write(json.dumps(arguments) + '\\n')
+    profiles = Path(os.environ['HERMES_HOME']) / 'profiles'
+    if arguments[:2] == ['profile', 'create']:
+        profile = profiles / arguments[2]
+        if profile.exists():
+            sys.exit(f"Error: A profile named '{arguments[2]}' already exists.")
+        (profiles / '.deleted' / arguments[2]).unlink(missing_ok=True)
+        profile.mkdir(parents=True)
+        (profile / 'config.yaml').write_text('created by profile create\\n')
+    elif arguments[:2] == ['profile', 'install']:
+        source = Path(arguments[2])
+        profile = profiles / source.name
+        profile.mkdir(parents=True, exist_ok=True)
+        for entry in source.iterdir():
+            if entry.is_dir():
+                shutil.copytree(entry, profile / entry.name, dirs_exist_ok=True)
+            else:
+                shutil.copy2(entry, profile / entry.name)
+        if (profiles / '.deleted' / source.name).exists() or os.environ.get('FAKE_HERMES_INSTALL_FAILS'):
+            sys.exit(f'FileNotFoundError: Named profile home does not exist: {profile}.')
+    """)
+DISTRIBUTION_CONFIG = 'model: from the distribution\n'
+USER_CONFIG = 'model: chosen by the user\n'
+CREATE = ['profile', 'create', 'apt-scraper', '--no-alias']
+
+
 def steps(installer: str) -> list[str]:
     text = (ROOT / installer).read_text(encoding='utf-8')
     pattern = r"Write-Step '([^']+)'" if installer.endswith('.ps1') else r"^ *step '([^']+)'"
@@ -206,6 +241,148 @@ class InstallerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('does not exist', result.stderr + result.stdout)
         self.assertEqual((opened, recorded), ('', ''))
+
+
+class ProfileStepTests(unittest.TestCase):
+    """Each installer's profile step, run alone against a fake hermes on a Hermes root in a temporary directory."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.folder = Path(directory.name)
+        self.root = self.folder / 'root'
+        self.profile = self.root / 'profiles' / 'apt-scraper'
+        self.mark = self.root / 'profiles' / '.deleted' / 'apt-scraper'
+        self.source = self.folder / 'checkout' / 'apt-scraper'
+        self.source.mkdir(parents=True)
+        (self.source / 'config.yaml').write_text(DISTRIBUTION_CONFIG)
+        (self.source / 'distribution.yaml').write_text('name: apt-scraper\n')
+        (self.source / 'SOUL.md').write_text('soul\n')
+        self.calls = self.folder / 'calls'
+        (self.folder / 'hermes.py').write_text(FAKE_HERMES)
+        self.fake = [sys.executable, str(self.folder / 'hermes.py'), str(self.calls)]
+
+    def run_step(self, installer: str, install_fails: bool = False) -> subprocess.CompletedProcess:
+        self.calls.unlink(missing_ok=True)
+        environment = {**os.environ, 'HERMES_HOME': str(self.root)}
+        if install_fails:
+            environment['FAKE_HERMES_INSTALL_FAILS'] = '1'
+        if installer == 'install.ps1':
+            hermes = self.folder / 'hermes.cmd'
+            hermes.write_text('@' + ' '.join(f'"{part}"' for part in self.fake) + ' %*\r\n')
+            script = self.folder / 'step.ps1'
+            script.write_text(textwrap.dedent(f"""\
+                $ErrorActionPreference = 'Stop'
+                $ProfileName = 'apt-scraper'
+                $ProfileSource = '{self.source}'
+                $HermesRoot = '{self.root}'
+                $hermes = '{hermes}'
+                function Write-Step([string]$Message) {{ }}
+                """) + section(installer, 'function Invoke-Native', 'function Get-Version')
+                + section(installer, 'Write-Step "Hermes profile', '# The account connections use'), encoding='utf-8-sig')
+            command = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)]
+        else:
+            tools = self.folder / 'bin'
+            tools.mkdir(exist_ok=True)
+            fake = ' '.join(f'"{Path(part).as_posix()}"' for part in self.fake)
+            (tools / 'hermes').write_text(f'#!/bin/sh\nexec {fake} "$@"\n', newline='\n')
+            (tools / 'hermes').chmod(0o755)
+            script = self.folder / 'step.sh'
+            script.write_text("set -euo pipefail\nPROFILE_NAME=apt-scraper\nstep() { :; }\n"
+                              f"PROFILE_SOURCE='{self.source.as_posix()}'\nHERMES_ROOT='{self.root.as_posix()}'\n"
+                              + section(installer, 'step "Hermes profile', '# The account connections use'), newline='\n')
+            environment['PATH'] = f'{tools}{os.pathsep}{os.environ["PATH"]}'
+            command = [BASH, script.as_posix()]
+        return subprocess.run(command, env=environment, capture_output=True, text=True, timeout=60)
+
+    def calls_made(self) -> list[list[str]]:
+        """The calls, with the checkout's path spelled one way: bash on Windows passes it with forward slashes."""
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+        return [[str(self.source) if Path(argument) == self.source else argument for argument in call]
+                for call in calls]
+
+    def install(self) -> list[str]:
+        return ['profile', 'install', str(self.source), '--force', '--yes']
+
+    def assert_installed(self, result: subprocess.CompletedProcess, calls: list[list[str]], config: str):
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.calls_made(), calls)
+        self.assertEqual((self.profile / 'config.yaml').read_text(), config)
+        self.assertTrue((self.profile / 'distribution.yaml').is_file())
+        self.assertFalse(self.mark.exists())
+
+    def mark_deleted(self):
+        """What `hermes profile delete` leaves: the name marked in profiles/.deleted and its directory removed."""
+        self.mark.parent.mkdir(parents=True, exist_ok=True)
+        self.mark.write_text('deleted\n')
+        shutil.rmtree(self.profile, ignore_errors=True)
+
+    def installed_by_the_user(self):
+        """A profile this distribution installed, whose config.yaml the user changed."""
+        self.profile.mkdir(parents=True)
+        (self.profile / 'distribution.yaml').write_text('name: apt-scraper\n')
+        (self.profile / 'config.yaml').write_text(USER_CONFIG)
+
+    def test_the_installers_create_a_missing_profile_and_install_the_distribution_config(self):
+        for installer in ('install.ps1', 'install.sh'):
+            with self.subTest(installer):
+                shutil.rmtree(self.root, ignore_errors=True)
+                result = self.run_step(installer)
+                self.assert_installed(result, [CREATE, self.install()], DISTRIBUTION_CONFIG)
+
+    def test_the_installers_install_the_profile_under_a_name_that_was_deleted(self):
+        for installer in ('install.ps1', 'install.sh'):
+            with self.subTest(installer):
+                shutil.rmtree(self.root, ignore_errors=True)
+                self.installed_by_the_user()
+                self.mark_deleted()
+                result = self.run_step(installer)
+                self.assert_installed(result, [CREATE, self.install()], DISTRIBUTION_CONFIG)
+
+    def test_the_installers_replace_what_a_failed_install_left_under_a_deleted_name(self):
+        for installer in ('install.ps1', 'install.sh'):
+            with self.subTest(installer):
+                shutil.rmtree(self.root, ignore_errors=True)
+                self.mark_deleted()
+                # The earlier installer: Hermes copies the payload, then refuses the deleted name.
+                bare = subprocess.run([*self.fake, *self.install()], capture_output=True, text=True,
+                                      env={**os.environ, 'HERMES_HOME': str(self.root)})
+                self.assertIn('Named profile home does not exist', bare.stderr)
+                (self.profile / 'config.yaml').write_text(USER_CONFIG)
+                (self.profile / 'leftover').write_text('')
+                result = self.run_step(installer)
+                self.assert_installed(result, [CREATE, self.install()], DISTRIBUTION_CONFIG)
+                self.assertFalse((self.profile / 'leftover').exists())
+
+    def test_the_installers_keep_the_config_of_a_profile_they_installed_before(self):
+        for installer in ('install.ps1', 'install.sh'):
+            with self.subTest(installer):
+                shutil.rmtree(self.root, ignore_errors=True)
+                self.installed_by_the_user()
+                result = self.run_step(installer)
+                self.assert_installed(result, [self.install()], USER_CONFIG)
+
+    def test_the_installers_keep_the_config_of_a_profile_they_installed_before_when_the_install_fails(self):
+        for installer in ('install.ps1', 'install.sh'):
+            with self.subTest(installer):
+                shutil.rmtree(self.root, ignore_errors=True)
+                self.installed_by_the_user()
+                result = self.run_step(installer, install_fails=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.calls_made(), [self.install()])
+                self.assertEqual((self.profile / 'config.yaml').read_text(), USER_CONFIG)
+
+    def test_the_installers_install_the_distribution_config_over_a_leftover_without_distribution_yaml(self):
+        for installer in ('install.ps1', 'install.sh'):
+            with self.subTest(installer):
+                shutil.rmtree(self.root, ignore_errors=True)
+                self.profile.mkdir(parents=True)
+                (self.profile / 'config.yaml').write_text(USER_CONFIG)
+                (self.profile / 'memories').mkdir()
+                result = self.run_step(installer)
+                # A name never deleted is live, so Hermes installs into it. What is there stays.
+                self.assert_installed(result, [self.install()], DISTRIBUTION_CONFIG)
+                self.assertTrue((self.profile / 'memories').is_dir())
 
 
 class ExclusiveServer(http.server.HTTPServer):
