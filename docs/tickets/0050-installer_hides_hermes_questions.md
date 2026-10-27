@@ -1,7 +1,7 @@
 ---
 title: The installer hides the questions Hermes asks on the console
 type: Bug
-state: In Progress
+state: Done
 priority: 1
 assignee: agent
 milestone:
@@ -20,7 +20,7 @@ The one-line install on Windows runs through to the dashboard chat without stopp
 - [x] Every command in `install.ps1` that may ask the user something (`claude auth login`, `hermes update`, `hermes profile install`, `hermes gateway install`, `hermes computer-use install`) runs with the console attached. Commands whose output the script needs to read keep capturing it.
 - [x] `install.sh` is checked for the same shape and has no equivalent pipe.
 - [x] `tests/test_installers.py` covers the case with a fake `hermes` that prints a question without a trailing newline, reads one line from stdin and continues: the question appears in the console output before the answer is read.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
@@ -53,4 +53,4 @@ Verified on Windows, Windows PowerShell 5.1:
 
 Not run: the real `hermes gateway install`, the installers end to end, and anything on macOS. No real Hermes command was run, and the owner's Hermes root and profile were not touched.
 
-Delivered on `fix/installer_hides_questions` in [PR #42](https://github.com/stjepanvrbic/apt-scraper/pull/42), open for review.
+Delivered on `fix/installer_hides_questions` in [PR #42](https://github.com/stjepanvrbic/apt-scraper/pull/42), merged to `main` as 40d163e after one review round with no blocking findings.
