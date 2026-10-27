@@ -14,17 +14,25 @@ $HermesRoot = "$env:LOCALAPPDATA\hermes"
 
 function Write-Step([string]$Message) { Write-Host "==> $Message" -ForegroundColor Cyan }
 
-# Windows PowerShell turns a native command's stderr into terminating errors
-# under 'Stop' once output is redirected, so native commands run under
-# 'Continue' and fail on their exit code instead.
-function Invoke-Native([string]$Exe, [string[]]$Arguments, [switch]$AllowFailure) {
+# Windows PowerShell gives a native command run as a statement of its own, with nothing taking its
+# output, this window's console: the command shows what it prints as it prints it, a question that ends
+# without a newline included, and reads the answer from the keyboard. A command whose output is piped or
+# assigned prints into a pipe that PowerShell reads a line at a time, so such a question stays hidden
+# while the command waits for its answer. Every command runs through Invoke-OnConsole, called as a
+# statement of its own, except those whose output this script reads, which run through Get-NativeOutput.
+# Windows PowerShell turns a native command's stderr into terminating errors under 'Stop' once output
+# is redirected, so native commands run under 'Continue' and fail on their exit code instead.
+function Invoke-OnConsole([string]$Exe, [string[]]$Arguments) {
     $ErrorActionPreference = 'Continue'
     & $Exe @Arguments
-    if ($LASTEXITCODE -ne 0 -and -not $AllowFailure) { throw "'$Exe $($Arguments -join ' ')' failed with exit code $LASTEXITCODE" }
+    if ($LASTEXITCODE -ne 0) { throw "'$Exe $($Arguments -join ' ')' failed with exit code $LASTEXITCODE" }
 }
 
-function Invoke-Checked([string]$Exe, [string[]]$Arguments) {
-    Invoke-Native $Exe $Arguments | Out-Host
+function Get-NativeOutput([string]$Exe, [string[]]$Arguments, [switch]$AllowFailure) {
+    $ErrorActionPreference = 'Continue'
+    $output = & $Exe @Arguments | Out-String
+    if ($LASTEXITCODE -ne 0 -and -not $AllowFailure) { throw "'$Exe $($Arguments -join ' ')' failed with exit code $LASTEXITCODE" }
+    $output
 }
 
 function Get-Version([string]$Text) {
@@ -40,7 +48,7 @@ function Invoke-RemoteInstaller([string]$Url, [string[]]$Arguments) {
         $script = Join-Path $directory 'install.ps1'
         Invoke-WebRequest -Uri $Url -OutFile $script -UseBasicParsing
         $powershell = (Get-Process -Id $PID).Path
-        Invoke-Checked $powershell (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $script) + $Arguments)
+        Invoke-OnConsole $powershell (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $script) + $Arguments)
     } finally {
         Remove-Item -Recurse -Force $directory
     }
@@ -56,18 +64,18 @@ if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
     Invoke-RemoteInstaller 'https://claude.ai/install.ps1' @()
     $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
 }
-if ((Get-Version (Invoke-Native claude @('--version') | Out-String)) -lt $MinimumClaudeVersion) { Invoke-Checked claude @('update') }
-if ((Invoke-Native claude @('auth', 'status') -AllowFailure | Out-String) -notmatch '"loggedIn":\s*true') {
+if ((Get-Version (Get-NativeOutput claude @('--version'))) -lt $MinimumClaudeVersion) { Invoke-OnConsole claude @('update') }
+if ((Get-NativeOutput claude @('auth', 'status') -AllowFailure) -notmatch '"loggedIn":\s*true') {
     Write-Step 'Log in to Claude with your Pro or Max subscription'
-    Invoke-Checked claude @('auth', 'login')
+    Invoke-OnConsole claude @('auth', 'login')
 }
 
 Write-Step 'Hermes Agent and computer-use driver'
 $hermes = "$env:LOCALAPPDATA\hermes\bin\hermes.exe"
 if (-not (Test-Path $hermes)) {
     Invoke-RemoteInstaller 'https://hermes-agent.nousresearch.com/install.ps1' @('-NonInteractive')
-} elseif ((Get-Version (Invoke-Native $hermes @('--version') | Out-String)) -lt $MinimumHermesVersion) {
-    Invoke-Checked $hermes @('update')
+} elseif ((Get-Version (Get-NativeOutput $hermes @('--version'))) -lt $MinimumHermesVersion) {
+    Invoke-OnConsole $hermes @('update')
 }
 
 # Reinstalling from this checkout keeps working after the clone moves, which
@@ -82,13 +90,13 @@ $deleted = Test-Path "$HermesRoot\profiles\.deleted\$ProfileName"
 $keepConfig = -not $deleted -and (Test-Path "$profileHome\distribution.yaml") -and (Test-Path $config)
 if ($deleted -and (Test-Path $profileHome)) { Remove-Item -Recurse -Force $profileHome }
 if (-not (Test-Path $profileHome)) {
-    Invoke-Checked $hermes @('profile', 'create', $ProfileName, '--no-alias')
+    Invoke-OnConsole $hermes @('profile', 'create', $ProfileName, '--no-alias')
     Remove-Item $config -Force -ErrorAction Ignore
 }
 $savedConfig = [IO.Path]::GetTempFileName()
 if ($keepConfig) { Copy-Item $config $savedConfig -Force }
 try {
-    Invoke-Checked $hermes @('profile', 'install', $ProfileSource, '--force', '--yes')
+    Invoke-OnConsole $hermes @('profile', 'install', $ProfileSource, '--force', '--yes')
 } finally {
     if ($keepConfig) { Copy-Item $savedConfig $config -Force }
     Remove-Item $savedConfig
@@ -97,18 +105,18 @@ try {
 # The account connections use Hermes's built-in google-workspace skill, which installing a profile
 # from a directory does not copy.
 Write-Step 'Google Workspace skill'
-Invoke-Checked $hermes @('-p', $ProfileName, 'skills', 'install', 'google-workspace', '--yes')
+Invoke-OnConsole $hermes @('-p', $ProfileName, 'skills', 'install', 'google-workspace', '--yes')
 
 # The search runs curl_cffi in an environment of its own, built from hash-pinned wheels with the Python
 # Hermes runs cron scripts with, which `hermes pm env` puts on PATH.
 Write-Step 'Search environment'
-$hermesPath = (Invoke-Native $hermes @('pm', 'env') | Out-String | ConvertFrom-Json).PATH -split ';'
+$hermesPath = (Get-NativeOutput $hermes @('pm', 'env') | ConvertFrom-Json).PATH -split ';'
 $python = $hermesPath | ForEach-Object { Join-Path $_ 'python.exe' } | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $python) { throw 'Hermes reports no Python of its own in `hermes pm env`.' }
 $savedHome = $env:HERMES_HOME
 $env:HERMES_HOME = $profileHome
 try {
-    Invoke-Checked $python @("$profileHome\scripts\search-run.py", 'install')
+    Invoke-OnConsole $python @("$profileHome\scripts\search-run.py", 'install')
 } finally {
     $env:HERMES_HOME = $savedHome
 }
@@ -117,37 +125,37 @@ try {
 # model only when a contact request or a reply needs it, and the listing search searches only once
 # the interview is complete, so both stay on.
 Write-Step 'Listing correspondence and listing search jobs'
-Invoke-Checked $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-contact')
-Invoke-Checked $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-search')
+Invoke-OnConsole $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-contact')
+Invoke-OnConsole $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-search')
 
 # Each listing is read once by a subagent of its own, pinned to Sonnet through delegation.model. A kept
 # config.yaml gains the pin only when it names no subagent model of its own.
 Write-Step 'Listing features job'
-if (-not (Invoke-Native $hermes @('-p', $ProfileName, 'config', 'get', 'delegation.model') | Out-String).Trim()) {
-    Invoke-Checked $hermes @('-p', $ProfileName, 'config', 'set', 'delegation.model', 'sonnet')
+if (-not (Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', 'delegation.model')).Trim()) {
+    Invoke-OnConsole $hermes @('-p', $ProfileName, 'config', 'set', 'delegation.model', 'sonnet')
 }
-Invoke-Checked $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-features')
+Invoke-OnConsole $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-features')
 
 # The ranking review job checks every minute whether a rerank's review pass waits, and wakes the model only then.
 Write-Step 'Ranking review job'
-Invoke-Checked $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-review')
+Invoke-OnConsole $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-review')
 
 Write-Step 'Claude subscription provider plugin'
-Invoke-Checked $hermes @('-p', $ProfileName, 'plugins', 'install', $PluginName, '--force', '--enable')
+Invoke-OnConsole $hermes @('-p', $ProfileName, 'plugins', 'install', $PluginName, '--force', '--enable')
 
 Write-Step 'Computer-use driver'
-Invoke-Checked $hermes @('-p', $ProfileName, 'computer-use', 'install', '--upgrade')
-Invoke-Checked $hermes @('-p', $ProfileName, 'computer-use', 'status')
+Invoke-OnConsole $hermes @('-p', $ProfileName, 'computer-use', 'install', '--upgrade')
+Invoke-OnConsole $hermes @('-p', $ProfileName, 'computer-use', 'status')
 
 # One gateway on the machine serves every profile. It runs the scheduled jobs, the messaging gateway
 # and every chat turn, including the dashboard's, so it starts at login and the search keeps running
 # while no chat is open. Hermes refuses gateway services for named profiles.
 Write-Step 'Hermes gateway service'
-Invoke-Checked $hermes @('-p', 'default', 'gateway', 'install', '--if-missing', '--start-now', '--start-on-login')
-Invoke-Checked $hermes @('-p', 'default', 'gateway', 'start')
+Invoke-OnConsole $hermes @('-p', 'default', 'gateway', 'install', '--if-missing', '--start-now', '--start-on-login')
+Invoke-OnConsole $hermes @('-p', 'default', 'gateway', 'start')
 
 Write-Step 'Test message through the Claude subscription'
-$reply = Invoke-Native $hermes @('-p', $ProfileName, 'chat', '-q', 'Reply with exactly: ready', '--oneshot', '-Q') | Out-String
+$reply = Get-NativeOutput $hermes @('-p', $ProfileName, 'chat', '-q', 'Reply with exactly: ready', '--oneshot', '-Q')
 if ($reply -notmatch '\bready\b') { throw "Test message failed. Reply: $reply" }
 
 # The first start builds the dashboard's web UI, so later starts need no npm. The dashboard keeps

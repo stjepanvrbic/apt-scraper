@@ -13,6 +13,8 @@
 
     # Windows PowerShell turns a native command's stderr into terminating errors under 'Stop' once
     # output is redirected, so native commands run under 'Continue' and fail on their exit code instead.
+    # Run as a statement of its own, a native command keeps this console, so the installer's questions
+    # show as they are asked.
     function Invoke-Native([string]$Exe, [string[]]$Arguments) {
         $ErrorActionPreference = 'Continue'
         & $Exe @Arguments

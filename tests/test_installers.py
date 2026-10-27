@@ -25,6 +25,8 @@ RUNNING = ['Hermes dashboard already running on this host: PID 1, port 9200.',
            "  Managing profile 'apt-scraper': http://127.0.0.1:9200/?profile=apt-scraper"]
 FAILED = ["Error: Profile 'apt-scraper' does not exist."]
 DASHBOARD_COMMAND = '-p apt-scraper dashboard --no-open --skip-build --port {port}'
+# Where install.ps1 defines the functions it runs native commands with.
+RUNNERS = 'function Invoke-OnConsole'
 LOGIN_STEP_POWERSHELL = "Write-Step 'Dashboard at login and the apt-scraper shortcut'"
 LOGIN_STEP_SHELL = '# The dashboard starts at login'
 CLOSING_POWERSHELL = "Write-Host ''"
@@ -104,6 +106,30 @@ FAKE_HERMES = textwrap.dedent("""\
 DISTRIBUTION_CONFIG = 'model: from the distribution\n'
 USER_CONFIG = 'model: chosen by the user\n'
 CREATE = ['profile', 'create', 'apt-scraper', '--no-alias']
+# What Hermes 0.22.5's prompt_yes_no asks before `gateway install` opens the UAC prompt
+# (hermes_cli/gateway_windows.py, hermes_cli/setup.py): input() with a question that ends without a newline.
+QUESTION = '  Open the UAC prompt now? [y/N]: '
+# Asks QUESTION on standard input as Hermes does and writes the answer it read to the file in argv[1].
+ASKING = textwrap.dedent(f"""\
+    import json, sys
+    answer = input({QUESTION!r})
+    with open(sys.argv[1], 'a') as answers:
+        answers.write(json.dumps(answer) + '\\n')
+    """)
+# Stands in for a hermes whose `gateway install` asks QUESTION. It logs every call to the file in argv[1], and
+# after `gateway install` the answer it read.
+FAKE_ASKING_HERMES = textwrap.dedent(f"""\
+    import json, sys
+    log, *arguments = sys.argv[1:]
+    with open(log, 'a') as calls:
+        calls.write(json.dumps(arguments) + '\\n')
+    if arguments[2:4] == ['gateway', 'install']:
+        answer = input({QUESTION!r})
+        with open(log, 'a') as calls:
+            calls.write(json.dumps({{'answer': answer}}) + '\\n')
+    """)
+GATEWAY_INSTALL = ['-p', 'default', 'gateway', 'install', '--if-missing', '--start-now', '--start-on-login']
+GATEWAY_START = ['-p', 'default', 'gateway', 'start']
 
 
 def steps(installer: str) -> list[str]:
@@ -150,6 +176,29 @@ def wait_for(condition, seconds: float = 20) -> bool:
             return False
         time.sleep(0.1)
     return True
+
+
+def answer_when_asked(command: list[str], environment: dict[str, str], answer: str) -> tuple[bool, str, int]:
+    """Runs command with its standard input and output on pipes in place of a console: Windows PowerShell hands
+    either to a native command alike, and reads a native command's output line by line from either alike. Types
+    answer once QUESTION shows in the output, or after 30 seconds without it. Returns whether the question showed
+    before the answer was typed, the whole output and the exit code."""
+    process = subprocess.Popen(command, env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT)
+    output = bytearray()
+    reader = threading.Thread(target=lambda: [output.extend(chunk) for chunk in iter(lambda: process.stdout.read1(4096), b'')],
+                              daemon=True)
+    reader.start()
+    asked = wait_for(lambda: QUESTION.strip().encode() in output, 30)
+    process.stdin.write(f'{answer}\n'.encode())
+    process.stdin.close()
+    try:
+        process.wait(60)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        raise
+    reader.join(10)
+    return asked, output.decode(errors='replace'), process.returncode
 
 
 def port_answers(port: int) -> bool:
@@ -278,7 +327,7 @@ class ProfileStepTests(unittest.TestCase):
                 $HermesRoot = '{self.root}'
                 $hermes = '{hermes}'
                 function Write-Step([string]$Message) {{ }}
-                """) + section(installer, 'function Invoke-Native', 'function Get-Version')
+                """) + section(installer, RUNNERS, 'function Get-Version')
                 + section(installer, 'Write-Step "Hermes profile', '# The account connections use'), encoding='utf-8-sig')
             command = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)]
         else:
@@ -383,6 +432,98 @@ class ProfileStepTests(unittest.TestCase):
                 # A name never deleted is live, so Hermes installs into it. What is there stays.
                 self.assert_installed(result, [self.install()], DISTRIBUTION_CONFIG)
                 self.assertTrue((self.profile / 'memories').is_dir())
+
+
+class QuestionTests(unittest.TestCase):
+    """A question that a command asks on the console shows before the installer waits for its answer."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.folder = Path(directory.name)
+        self.calls = self.folder / 'calls'
+        (self.folder / 'hermes.py').write_text(FAKE_ASKING_HERMES)
+        self.fake = [sys.executable, str(self.folder / 'hermes.py'), str(self.calls)]
+
+    def calls_made(self) -> list:
+        return [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+
+    def test_the_powershell_installer_shows_the_question_hermes_asks_in_the_gateway_step_and_reads_the_answer(self):
+        hermes = self.folder / 'hermes.cmd'
+        hermes.write_text('@' + ' '.join(f'"{part}"' for part in self.fake) + ' %*\r\n')
+        script = self.folder / 'step.ps1'
+        script.write_text(textwrap.dedent(f"""\
+            $ErrorActionPreference = 'Stop'
+            $hermes = '{hermes}'
+            function Write-Step([string]$Message) {{ }}
+            """) + section('install.ps1', RUNNERS, 'function Get-Version')
+            + section('install.ps1', "Write-Step 'Hermes gateway service'", "Write-Step 'Test message"), encoding='utf-8-sig')
+        asked, output, exit_code = answer_when_asked(
+            ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], dict(os.environ), 'n')
+        self.assertTrue(asked, output)
+        self.assertEqual(exit_code, 0, output)
+        self.assertEqual(self.calls_made(), [GATEWAY_INSTALL, {'answer': 'n'}, GATEWAY_START])
+
+    def test_the_shell_installer_shows_the_question_hermes_asks_in_the_gateway_step_and_reads_the_answer(self):
+        tools = self.folder / 'bin'
+        tools.mkdir()
+        fake = ' '.join(f'"{Path(part).as_posix()}"' for part in self.fake)
+        (tools / 'hermes').write_text(f'#!/bin/sh\nexec {fake} "$@"\n', newline='\n')
+        (tools / 'hermes').chmod(0o755)
+        script = self.folder / 'step.sh'
+        script.write_text("set -euo pipefail\nstep() { :; }\n"
+                          + section('install.sh', "step 'Hermes gateway service'", "step 'Test message"), newline='\n')
+        asked, output, exit_code = answer_when_asked(
+            [BASH, script.as_posix()], {**os.environ, 'PATH': f'{tools}{os.pathsep}{os.environ["PATH"]}'}, 'n')
+        self.assertTrue(asked, output)
+        self.assertEqual(exit_code, 0, output)
+        self.assertEqual(self.calls_made(), [GATEWAY_INSTALL, {'answer': 'n'}, GATEWAY_START])
+
+    def test_the_powershell_installer_runs_on_the_console_every_command_whose_output_it_does_not_read(self):
+        """Windows PowerShell hands the console only to a native command that is a statement of its own, so every
+        Invoke-OnConsole is one, and only the commands whose output the installer reads run through Get-NativeOutput."""
+        script = self.folder / 'commands.ps1'
+        script.write_text(textwrap.dedent("""\
+            using namespace System.Management.Automation.Language
+            $tree = [Parser]::ParseFile($args[0], [ref]$null, [ref]$null)
+            ConvertTo-Json @($tree.FindAll({ param($node) $node -is [CommandAst] }, $true) | ForEach-Object {
+                $pipeline = $_.Parent
+                $function = $_.Parent
+                while ($function -and $function -isnot [FunctionDefinitionAst]) { $function = $function.Parent }
+                [pscustomobject]@{
+                    Name = $_.GetCommandName()
+                    Operator = "$($_.InvocationOperator)"
+                    Text = $_.Extent.Text
+                    Statement = $pipeline.PipelineElements.Count -eq 1 -and
+                        ($pipeline.Parent -is [StatementBlockAst] -or $pipeline.Parent -is [NamedBlockAst])
+                    Function = "$($function.Name)"
+                }
+            })
+            """), encoding='utf-8-sig')
+        commands = json.loads(subprocess.run(
+            ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script), str(ROOT / 'install.ps1')],
+            capture_output=True, text=True, check=True).stdout)
+        def named(name: str, statement: bool | None = None) -> list[str]:
+            return [command['Text'] for command in commands
+                    if command['Name'] == name and statement in (None, command['Statement'])]
+        self.assertEqual(named('Invoke-OnConsole', statement=False), [])
+        self.assertEqual({(command['Function'], command['Statement']) for command in commands if command['Operator'] == 'Ampersand'},
+                         {('Invoke-OnConsole', True), ('Get-NativeOutput', False)})
+        self.assertEqual(named('Out-Host'), [])
+        self.assertEqual(named('Get-NativeOutput'), [
+            "Get-NativeOutput claude @('--version')",
+            "Get-NativeOutput claude @('auth', 'status') -AllowFailure",
+            "Get-NativeOutput $hermes @('--version')",
+            "Get-NativeOutput $hermes @('pm', 'env')",
+            "Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', 'delegation.model')",
+            "Get-NativeOutput $hermes @('-p', $ProfileName, 'chat', '-q', 'Reply with exactly: ready', '--oneshot', '-Q')",
+        ])
+        for asks in ("Invoke-OnConsole claude @('auth', 'login')",
+                     "Invoke-OnConsole $hermes @('update')",
+                     "Invoke-OnConsole $hermes @('profile', 'install', $ProfileSource, '--force', '--yes')",
+                     "Invoke-OnConsole $hermes @('-p', 'default', 'gateway', 'install', '--if-missing', '--start-now', '--start-on-login')",
+                     "Invoke-OnConsole $hermes @('-p', $ProfileName, 'computer-use', 'install', '--upgrade')"):
+            self.assertIn(asks, named('Invoke-OnConsole'))
 
 
 class ExclusiveServer(http.server.HTTPServer):
@@ -731,17 +872,20 @@ class BootstrapTests(unittest.TestCase):
         """The PATH of the session the bootstrap runs in: the fakes and System32, without the machine's git."""
         return [str(self.tools), str(Path(os.environ['SystemRoot']) / 'System32')]
 
-    def run_powershell_bootstrap(self, invocation: str) -> subprocess.CompletedProcess:
-        """Runs the bootstrap through `invocation`, in which `$text` is the script's text."""
+    def powershell_bootstrap(self, invocation: str) -> tuple[list[str], dict[str, str]]:
+        """The command and environment that run the bootstrap through `invocation`, in which `$text` is the script's text."""
         text = (ROOT / 'bootstrap.ps1').read_text(encoding='utf-8')
         location = "$Repository = Join-Path $env:LOCALAPPDATA 'apt-scraper\\repo'"
         self.assertEqual(text.count(location), 1)
         script = self.folder / 'bootstrap.ps1'
         script.write_text(text.replace(location, f"$Repository = '{self.windows_repository}'"), encoding='utf-8')
         command = f"$text = Get-Content -Raw -LiteralPath '{script}'; {invocation}"
-        return subprocess.run([shutil.which('powershell'), '-NoProfile', '-Command', command],
-                              env={**os.environ, 'PATH': os.pathsep.join(self.session_path)},
-                              capture_output=True, text=True, timeout=60)
+        return ([shutil.which('powershell'), '-NoProfile', '-Command', command],
+                {**os.environ, 'PATH': os.pathsep.join(self.session_path)})
+
+    def run_powershell_bootstrap(self, invocation: str) -> subprocess.CompletedProcess:
+        command, environment = self.powershell_bootstrap(invocation)
+        return subprocess.run(command, env=environment, capture_output=True, text=True, timeout=60)
 
     @property
     def windows_repository(self) -> Path:
@@ -790,6 +934,18 @@ class BootstrapTests(unittest.TestCase):
         self.assertRegex(result.stdout, r'caught: .*failed with exit code 3')
         self.assertIn('session: Continue False False', result.stdout)
         self.assertEqual(len(self.installer_runs_made()), 1)
+
+    def test_the_powershell_bootstrap_shows_a_question_the_installer_asks_on_the_console_and_reads_the_answer(self):
+        self.powershell_tools()
+        answers = self.folder / 'answers'
+        (self.folder / 'ask.py').write_text(ASKING)
+        (self.template / 'install.ps1').write_text(
+            "$ErrorActionPreference = 'Stop'\r\n" + section('install.ps1', RUNNERS, 'function Get-Version')
+            + f"Invoke-OnConsole '{sys.executable}' @('{self.folder / 'ask.py'}', '{answers}')\r\n", encoding='utf-8-sig')
+        asked, output, exit_code = answer_when_asked(*self.powershell_bootstrap('$text | Invoke-Expression'), 'y')
+        self.assertTrue(asked, output)
+        self.assertEqual(exit_code, 0, output)
+        self.assertEqual(answers.read_text().splitlines(), ['"y"'])
 
 
 if __name__ == '__main__':
