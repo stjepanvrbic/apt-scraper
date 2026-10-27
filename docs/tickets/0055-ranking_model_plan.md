@@ -68,9 +68,9 @@ Throughout:
 
 ## Design
 
-The [ranking model plan](../research/ranking_model_plan.md) has the reasoning, the model, the evaluation protocol, the costs, the failure modes and the phases. In short: keep the linear model and the concept-bottleneck shape, fix the priors (group scales by evidence, composites, sparse tags), evaluate prequentially with intervals and simulated users, make labels worth more (information-gain questions, impressions, a "why" line), let the review pass propose named hypotheses that code scores and the held-out check gates, and build a small ONNX image encoder only if visual hypotheses need it, behind a measured gate and a pre-registered blind test. No Gaussian process, no neural network on the labels, no model as ranker.
+The [ranking model plan](../research/ranking_model_plan.md) has the reasoning, the model, the evaluation protocol, the costs, the failure modes and the phases. In short: keep the linear model and the concept-bottleneck shape, fix the priors (group scales by evidence, composites, sparse tags), evaluate prequentially with intervals and simulated users, make labels worth more (information-gain questions, impressions, a "why" line), let the review pass propose named hypotheses that code scores and the held-out check gates, and evaluate a small ONNX image encoder behind a measured gate and a pre-registered blind test, regardless of the hypothesis outcome as the owner authorized. No Gaussian process, no neural network on the labels, no model as ranker.
 
-The scoring core stays on the standard library through phase 3. Phase 4 brings numpy and ONNX Runtime in its own environment, built and checked by the installers as the search environment is. Stores for measurement are read-only copies: the embedding spike's 129 listings at `%TEMP%\apt-embedding-root`, the end-to-end run's 100 at `%TEMP%\apt-e2e-root`, and the owner's own only as a copy the owner makes. The owner's Hermes root, profiles and listing store are never opened by the implementer.
+The scoring core stays on the standard library through phase 3. Phase 4 brings numpy and ONNX Runtime in its own environment, built and checked by the installers as the search environment is. Stores for measurement are read-only copies: the embedding spike's 129 listings at `%TEMP%\apt-embedding-root`, the end-to-end run's 100 at `%TEMP%\apt-e2e-root`, and the authorized profile workspace copy. The gallery directory was copied once with plain file copies into `%TEMP%/apt-0055-store`; only copies are opened through SQLite. The original profile is never written or used as HERMES_HOME.
 
 Phases 0 to 2 change no visible UI but the Compare questions and the "why" line; the "why" line, the hypothesis prompts in Rankings and "learning from N labels" have their frontend done by a separate design-focused agent, as the umbrella says.
 
@@ -79,7 +79,9 @@ Phases 0 to 2 change no visible UI but the Compare questions and the "why" line;
 - Owner decision, 2026-10-27: attempt Phase 4 regardless of the hypothesis result. Downloads are allowed only for that isolated encoder experiment, within its size gate. Real-photo gates without a cached dataset and the blind test remain owner-run, unchecked items. Phase 5 is not authorized.
 
 - Phase 0: exact prequential replay needs action-time records and candidate sets. Existing feedback has neither timestamps nor historical values. A new transactional `learning_events` journal stores pre-action inputs; old history is explicitly unavailable rather than reconstructed from future records.
-- The documented `%TEMP%/apt-embedding-root`, `%TEMP%/apt-e2e-root` and verification roots are absent on this machine, and the repository contains no SQLite store or experiment copy. The 129-listing reproduction and real-listing extraction retest are not run. Synthetic stores exercise the measurement code; they do not satisfy the real-data bars. No owner store or credentials were opened.
+- The documented earlier experiment roots are absent. The authorized workspace copy contains 63 listings, 31 current feature records and 28 eligible records, but no user labels and none of the five original garden favorites. It is not the 129-listing experiment. Actual user-label gates remain unmet; simulated users are reported separately.
+- The isolated Hermes runtime fails before chat with "no dependency environment is committed for this install; run `hermes pm repair`". The same symptom is tracked in the [upstream fresh-home report](https://github.com/NousResearch/hermes-agent/issues/143476). The 20-listing retest has 286 cached photos and 40 prepared tasks, but no model outputs. Its agreement check remains not run; no owner installation or credentials were borrowed to work around the missing environment.
+- Snapshot payloads use zlib BLOBs; a migration compresses existing text rows. Combined restore/favorite calls journal both transitions with intermediate pre-action states. Known-positive actions are separated from genuine held-out positives; observed Compare ties are reported outside the Wilson denominator, while latent/model ties in simulations receive chance credit. Bootstrap tails use symmetric order-statistic indices.
 - Proposed owner spec change: describe Compare as selecting answers that tell the model most, using posterior difference variance. The implementation follows the assigned ticket; `docs/spec.md` is unchanged.
 
 ## Result
@@ -90,14 +92,16 @@ On `feat/ranking_phase0_measure`, based on `main` at `324cb52`. The installed fi
 
 `python tests/ranking_experiments.py --runs 200 --labels 40 --workers 4 --output docs/research/ranking_measurements_phase0.json` records the complete metrics. The accompanying checksummed compressed feedback artifact preserves the synthetic corpus, answers, latent tastes and held-out pairs for paired comparisons in later experiments. Seeds 0 through 199, 80 synthetic listings, five randomly selected taste columns, Gaussian answer noise with standard deviation 0.3, 100 fixed held-out pairs per user, excluded from query selection. Intervals are 95% percentile bootstrap over users, 2,000 resamples.
 
-- Held-out pair accuracy: zero labels 0.5009 [0.4919, 0.5094]; 10 labels 0.5912 [0.5816, 0.6005]; 20 labels 0.6415 [0.6307, 0.6518]; 40 labels 0.6908 [0.6802, 0.7016].
+- Corrected held-out pair accuracy on synthetic records: zero labels 0.499575 [0.491425, 0.507550]; 10 labels 0.591825 [0.582675, 0.600950]; 20 labels 0.641675 [0.631225, 0.651625]; 40 labels 0.691025 [0.680800, 0.701825]. The fixed trajectories reproduce every earlier score before applying the corrected tie policy. Of 20,000 held pairs, 3,549 have tied latent taste.
 - The 300-listing, 50-favorite store reranked in 1.00 CPU second, least of three, below 2 seconds. Its 50 setup favorites precede any stored rank and are correctly excluded from the chronological rank metric; no historical rank is invented.
 - Synthetic garden regression: the one unseen garden unit moves from rank 3 [3, 3] to rank 6 [6, 6] as the five favorites occupy the top ranks. It beats all 11 eligible similar-price nonfavorites both before and after. This is a code regression, not evidence about the missing real garden units.
 - Chronological synthetic fixture: four favorites and one contact scored at ranks 19, 2, 10, 14, 19 among 24; median 14 [2, 19], top-20 fraction 1.0 [1.0, 1.0]. Its one Compare answer is incorrect, accuracy 0.0 with Wilson 95% interval [0.0, 0.7935]. This checks the replay path, not a quality bar.
-- Real 129-listing reproduction, real prequential ranks and Sonnet test-retest: not run because the authorized stored data are absent. The exact 3, 18, 25, 80, 115 reproduction remains unchecked.
+- Real-store replay and leave-one-out were executed on a disposable copy: zero favorites, dismissals, contacts, user notes, Compare answers and journal events. Held-out lists are empty; medians, accuracy and intervals are null. There is no real-label evidence to meet a rank or pairwise bar. None of the five historical garden favorites is present, so exact 3, 18, 25, 80, 115 reproduction and that garden regression remain unmet.
+- A separate 200-user simulation over the 28 eligible real feature records reaches 0.754725 [0.745950, 0.763125] at 20 simulated labels and 0.814125 [0.805750, 0.821675] at 40. These are virtual preferences, not owner labels. All 28 candidates fit within the selector's top-40 pool. The frozen real records stay locally with the measurement copy.
+- Snapshot payload on the 300-listing fixture: mean 746,096.5 bytes before compression, 63,859.56 after; compressed range 63,844 to 63,866 bytes over 50 events. On the actual 63-listing copy, one snapshot is 173,739 raw bytes and 30,573 compressed bytes. Over 20 samples, snapshot read median is 2.197 ms [2.145, 2.223]; read plus compression inside a write transaction is 4.933 ms [4.865, 4.961]. No user feedback was fabricated or saved for this measurement. Existing SQLite free pages are reusable after migration; no immediate file-size shrink is claimed.
 - Stop condition: none for Phase 0. The missing real-data checks remain open. The ticket remains In Progress and the merge acceptance remains unchecked.
 
-Verification: targeted measurement tests 12 passed; scoring and measurement tests passed; headless Playwright Compare 11 passed, desktop and mobile accessibility included; `ruff check .` and gallery `npm run lint` clean. One full run had 663 passes and a 2.156 s implicit-diagnostic timing failure while the simulation was active. The limit is unchanged; the final full suite passed 665 tests and 317 subtests, zero skipped (309.84 s). The subsequently added artifact and chronological-replay checks pass in the 12-test measurement module.
+Verification before the review fixes: full suite 665 tests and 317 subtests passed, zero skipped; Compare headless 11 passed. The review fixes have 19 targeted measurement tests passing, including compression migration, combined transitions, tie handling, prior-positive exclusion and cache selection. After the fixes: full Git Bash Python suite 674 passed and 317 subtests passed, zero skipped (327.02 s); full headless Playwright 40 passed, zero skipped (1.9 min); build, gallery lint and `ruff check .` pass. CodeRabbit re-review is pending for the updated head.
 
 Tech debt fixed: the migration fixture now reconstructs the old schema completely; the Compare accessibility assertion accepts all three seeded listing prices; the guide no longer calls a fit with weak negatives the untouched prior.
 
@@ -105,15 +109,25 @@ Tech debt fixed: the migration fixture now reconstructs the old schema completel
 
 The source read is SQLite `mode=ro`; backup, migration and fitting run on a disposable copy. Unit tests check source hashes, pre-action snapshots, retry idempotency, future-label exclusion, empty-sample intervals, exact Wilson values, seeded simulation, garden peers, repeat extraction agreement and duplicate-record exclusion. No skipped tests are added.
 
-The extraction retest is not run because no stored real content or cached photos remain at the documented locations. Model access in a throwaway home was not tested without input data. To run after an authorized copy and its cached extraction files are provided:
+The extraction retest is blocked on the isolated Hermes dependency environment. The real content and photos are prepared: 20 distinct listings, 286 retained photos, 287 URL downloads cached once, 40 independent tasks. After provisioning a working isolated runtime with the Claude subscription provider and Sonnet delegation, run:
 
 ```powershell
-$retest = Join-Path $env:TEMP 'apt-ranking-retest'
-python profile/skills/ranking/scripts/extraction_retest.py $retest --store C:/data/listings.sqlite3 --cache C:/data/extraction
-$env:HERMES_HOME = Join-Path $env:TEMP 'apt-ranking-retest-home'
-# Configure this throwaway home for the subscription provider and delegation.model: sonnet.
+$retest = Join-Path $env:TEMP 'apt-0055-photos/retest-current'
+$env:HERMES_HOME = Join-Path $env:TEMP 'apt-0055-hermes'
 hermes chat --oneshot -Q -q (Get-Content (Join-Path $retest 'prompt.txt') -Raw)
 python profile/skills/ranking/scripts/extraction_retest.py $retest
 ```
 
 The preparer requires 20 current listings with cached photos and sheets and raises if fewer exist. No network fetch is in this path. Forty independent child reads produce the two samples; the collector reports room/category/flag agreement, ratings within one point, tag Jaccard and fields below 0.7. These commands do not start a gateway or dashboard.
+
+
+Real-store evidence: [inventory and replay](../research/ranking_real_store_phase0.json), [simulated users on real records](../research/ranking_real_feature_simulation_phase0.json). Reproduce the latter with `python tests/measure_real_ranking.py <copied-store.sqlite3> <local-report.json>`; the companion feedback file contains the local records and is not published. The first operator copy included `listings.sqlite3`, `search.sqlite3`, `features.json` and the empty extraction directories. No original database was opened through SQLite or written.
+
+| Phase | Delivery | Measured outcome |
+| --- | --- | --- |
+| 0 | PR #50, review fixes verified locally; re-review pending | Measurement infrastructure; 1.00 s rerank; real labels 0; retest runtime prerequisite open |
+| 1 | PR #51, awaits rebase and corrected measurements | Prior candidate not promoted |
+| 2 | PR #52, awaits rebase and corrected measurements | Impressions/reasons; cold-start candidate not promoted |
+| 3 | Local candidate, not published | Hypothesis lifecycle and controls under verification |
+| 4 | Authorized, not started | Encoder experiment and owner-run blind test |
+| 5 | Not authorized | Owner decision and longitudinal data required |

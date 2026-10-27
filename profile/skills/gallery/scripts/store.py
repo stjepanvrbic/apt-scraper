@@ -14,7 +14,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from code_features import FEATURES, configured_transit_feed, store_all_code_features, store_code_features
-from learning import encode
+from learning import compress, encode
 from schema import FINGERPRINT, LISTING_ID, MIGRATIONS, content_fingerprint, migrate
 from queries import RANKABLE, RANKING_EXCLUSION, answered_pairs, browse, paired, snapshot, user_noted, validate_page
 from record import SEED_TAGS, known_spelling, validate_extraction, validate_judgments
@@ -1095,13 +1095,13 @@ class ListingStore:
             previous = connection.execute('SELECT * FROM feedback WHERE listing_id = ?', (listing_id,)).fetchone()
             if dismissed is not None and dismissed != bool(previous['dismissed']):
                 self.record_learning_event(connection, 'dismiss' if dismissed else 'restore', listing_id)
-            elif favorite is not None and favorite != bool(previous['favorite']) and not previous['dismissed']:
+                connection.execute('UPDATE feedback SET dismissed = ?, favorite = CASE WHEN ? THEN 0 ELSE favorite END WHERE listing_id = ?',
+                                   (dismissed, dismissed, listing_id))
+            is_dismissed = bool(previous['dismissed']) if dismissed is None else dismissed
+            is_favorite = bool(previous['favorite']) and not is_dismissed
+            if favorite is not None and favorite != is_favorite and not is_dismissed:
                 self.record_learning_event(connection, 'favorite' if favorite else 'unfavorite', listing_id)
-            if favorite is not None:
                 connection.execute('UPDATE feedback SET favorite = ? WHERE listing_id = ?', (favorite, listing_id))
-            if dismissed is not None:
-                connection.execute('UPDATE feedback SET dismissed = ? WHERE listing_id = ?', (dismissed, listing_id))
-            connection.execute('UPDATE feedback SET favorite = 0 WHERE listing_id = ? AND dismissed = 1', (listing_id,))
 
     def add_note(self, text, *, listing_id, role='user'):
         text = require_text(text, 'Note')
@@ -1125,7 +1125,7 @@ class ListingStore:
     def record_learning_event(self, connection, kind, listing, other=None):
         connection.execute('INSERT INTO learning_events (occurred_at, kind, listing, other, inputs) VALUES (?, ?, ?, ?, ?)',
                            (datetime.now(timezone.utc).isoformat(), kind, listing, other,
-                            encode(self.ranking_inputs(connection=connection))))
+                            compress(encode(self.ranking_inputs(connection=connection)))))
 
     def correspond(self, listing_id, direction, channel, text, *, external_message_id, external_thread_id=None):
         text = require_text(text, 'Message')

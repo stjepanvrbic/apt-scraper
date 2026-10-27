@@ -16,8 +16,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'gallery/scripts'))
 
 from learning import decode, encode  # noqa: E402
 from record import CATEGORIES, FLAGS, RATINGS  # noqa: E402
-from scoring import design, dot, fit_model, leave_one_out, ranked_order, scores  # noqa: E402
+from scoring import design, dot, fit_model, label, leave_one_out, ranked_order, scores  # noqa: E402
 from store import ListingStore  # noqa: E402
+
+PAIR_TIE_POLICY = 'Chance credit for tied model scores or tied latent tastes; bootstrap over runs.'
 
 
 def bootstrap(values, statistic=median, *, seed=0, samples=2000, confidence=0.95):
@@ -26,7 +28,8 @@ def bootstrap(values, statistic=median, *, seed=0, samples=2000, confidence=0.95
     generator = random.Random(seed)
     estimates = sorted(statistic(generator.choices(values, k=len(values))) for _ in range(samples))
     tail = (1 - confidence) / 2
-    return [estimates[int(tail * samples)], estimates[min(samples - 1, int((1 - tail) * samples))]]
+    lower = int(tail * samples)
+    return [estimates[lower], estimates[samples - 1 - lower]]
 
 
 def wilson(correct, total, confidence=0.95):
@@ -45,7 +48,7 @@ def utilities(model):
 
 
 def replay(events, fitter=fit_model):
-    held_out, answers, excluded = [], [], 0
+    held_out, known_positive, answers, excluded, ties = [], [], [], 0, 0
     for event in events:
         if event['kind'] not in ('favorite', 'contact', 'pair'):
             continue
@@ -57,7 +60,10 @@ def replay(events, fitter=fit_model):
                 excluded += 1
                 continue
             difference = values[identifier] - values[event['other']]
-            answers.append(difference > 0)
+            if difference == 0:
+                ties += 1
+            else:
+                answers.append(difference > 0)
         else:
             candidates = [listing['id'] for listing in inputs['listings']
                           if listing['rankable'] and listing.get('rank') is not None and listing['id'] in values]
@@ -65,12 +71,20 @@ def replay(events, fitter=fit_model):
                 excluded += 1
                 continue
             order = sorted(candidates, key=lambda key: (-values[key], key))
-            held_out.append({'listing': identifier, 'kind': event['kind'], 'rank': order.index(identifier) + 1, 'candidates': len(order)})
+            listing = next(item for item in inputs['listings'] if item['id'] == identifier)
+            previous = label(listing, inputs['sentiments'].get(identifier))
+            already_positive = previous is not None and previous[0] == 1
+            destination = known_positive if already_positive else held_out
+            destination.append({'listing': identifier, 'kind': event['kind'], 'rank': order.index(identifier) + 1,
+                                'candidates': len(order), 'already_positive': already_positive})
     ranks = [item['rank'] for item in held_out]
     top = [int(rank <= 20) for rank in ranks]
-    return {'held_out': held_out, 'median_rank': median(ranks) if ranks else None, 'median_interval': bootstrap(ranks),
+    pair_count = sum(event['kind'] == 'pair' for event in events)
+    return {'held_out': held_out, 'known_positive_actions': known_positive,
+            'median_rank': median(ranks) if ranks else None, 'median_interval': bootstrap(ranks),
             'top_20': fmean(top) if top else None, 'top_20_interval': bootstrap(top, fmean),
-            'pairwise_answers': len(answers), 'pairwise_accuracy': fmean(answers) if answers else None,
+            'pairwise_answers': pair_count, 'pairwise_scored': len(answers), 'pairwise_ties': ties,
+            'pairwise_unscorable': pair_count - len(answers) - ties, 'pairwise_accuracy': fmean(answers) if answers else None,
             'pairwise_interval': wilson(sum(answers), len(answers)),
             'pairwise_interval_90': wilson(sum(answers), len(answers), 0.90), 'excluded': excluded}
 
@@ -130,13 +144,14 @@ def store_report(source, experiment=None, fitter=fit_model):
 def agreement(first, second):
     if len(first) != len(second) or not first:
         raise ValueError('Two equally sized nonempty extraction samples are required.')
-    fields = {}
+    fields, rooms = {}, []
     for left, right in zip(first, second):
         left_rooms = {photo['index']: photo['room'] for photo in left['photos']}
         right_rooms = {photo['index']: photo['room'] for photo in right['photos']}
         if left_rooms.keys() != right_rooms.keys():
             raise ValueError('Repeated extractions must cover the same photos.')
         fields.setdefault('photo_room', []).extend(left_rooms[index] == right_rooms[index] for index in left_rooms)
+        rooms.append((sum(left_rooms[index] == right_rooms[index] for index in left_rooms), len(left_rooms)))
         for field in CATEGORIES:
             fields.setdefault(field, []).append(left[field] == right[field])
         fields.setdefault('unit_level', []).append(left['unit_level']['value'] == right['unit_level']['value'])
@@ -150,7 +165,14 @@ def agreement(first, second):
             a, b = set(left[name]), set(right[name])
             fields.setdefault(name, []).append(len(a & b) / len(a | b) if a | b else 1.0)
     means = {name: fmean(values) for name, values in fields.items() if values}
-    return {'listings': len(first), 'fields': means, 'below_0.7': [name for name, value in means.items() if value < 0.7]}
+    intervals = {name: bootstrap(values, fmean) if name in ('traits', 'concerns') else wilson(sum(values), len(values))
+                 for name, values in fields.items() if values}
+    observed_rooms = [counts for counts in rooms if counts[1]]
+    if observed_rooms:
+        intervals['photo_room'] = bootstrap(observed_rooms, lambda counts: sum(hit for hit, _ in counts) / sum(total for _, total in counts))
+    return {'listings': len(first), 'fields': means, 'intervals_95': intervals,
+            'interval_method': 'Wilson for binary matches; bootstrap over listings for tags and clustered room matches',
+            'below_0.7': [name for name, value in means.items() if value < 0.7]}
 
 
 def simulate(inputs, selector, fitter=fit_model, *, runs=200, labels=40, seed=0):
@@ -175,7 +197,7 @@ def simulate(inputs, selector, fitter=fit_model, *, runs=200, labels=40, seed=0)
         for count in range(labels + 1):
             if count in curves:
                 values = utilities(fitter(state))
-                accuracy = fmean(0.5 if values[a] == values[b] else (values[a] > values[b]) == (taste[a] > taste[b]) for a, b in held_pairs)
+                accuracy = pair_accuracy(values, taste, held_pairs)
                 curves[count].append(accuracy)
                 curve.append(accuracy)
             if count == labels:
@@ -192,7 +214,12 @@ def simulate(inputs, selector, fitter=fit_model, *, runs=200, labels=40, seed=0)
         trajectories.append({'pairs': state['pairs'], 'held_pairs': held_pairs, 'taste': taste})
     return {'runs': runs, 'seed': seed, 'labels': labels, 'curves': [
         {'labels': count, 'accuracy': fmean(values), 'interval': bootstrap(values, fmean)} for count, values in curves.items()],
-        'run_curves': run_curves, 'trajectories': trajectories, 'inputs': encode(blank)}
+        'run_curves': run_curves, 'trajectories': trajectories, 'inputs': encode(blank), 'tie_policy': PAIR_TIE_POLICY}
+
+
+def pair_accuracy(values, taste, pairs):
+    return fmean(0.5 if values[a] == values[b] or taste[a] == taste[b] else (values[a] > values[b]) == (taste[a] > taste[b])
+                 for a, b in pairs)
 
 
 def main():

@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/ran
 
 from test_rerank import SETTINGS, fill, least_cpu_seconds  # noqa: E402
 from test_scoring import GARDEN, garden_neighborhood, inputs  # noqa: E402
-from measurement import bootstrap, garden, simulate, store_report  # noqa: E402
+from measurement import PAIR_TIE_POLICY, bootstrap, garden, simulate, store_report  # noqa: E402
 from rerank import rerank  # noqa: E402
 from scoring import DEFAULT_HYPERPARAMETERS, questions  # noqa: E402
 from store import ListingStore  # noqa: E402
@@ -36,7 +36,8 @@ def parallel_simulation(sample, runs, labels, workers):
             print(f'{len(curves)}/{runs} simulated users complete', flush=True)
     return {'runs': runs, 'seed': 0, 'labels': labels, 'curves': [
         {'labels': index * 5, 'accuracy': fmean(values), 'interval': bootstrap(list(values), fmean)}
-        for index, values in enumerate(zip(*curves))], 'run_curves': curves, 'trajectories': trajectories, 'inputs': result['inputs']}
+        for index, values in enumerate(zip(*curves))], 'run_curves': curves, 'trajectories': trajectories, 'inputs': result['inputs'],
+        'tie_policy': PAIR_TIE_POLICY}
 
 
 def write_report(report, output):
