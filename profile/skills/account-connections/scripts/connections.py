@@ -12,13 +12,17 @@ that could not be checked is always stale. status and require check stale result
 send a test message or test text. Exit codes: 0 every channel asked about is connected, 3 at least
 one is not, 1 the script itself failed, 2 usage error. Use a channel only on exit code 0.
 
-The account setup works in a visible window of the user's own browser, on a copy of its profile with their
-logins. Hermes reads the settings for that at every new browser session, from the profile's config.yaml, which
-the scheduled jobs share, so they are on only while a setup runs. `browser on` records the time and turns them
-on, `browser off` turns them off. `status`, and the listing correspondence job before every run, turn them off
-once the record is older than SETUP_BROWSER_IDLE, so a setup that stopped without `browser off` cannot leave
-them on. That job does not start a run while a setup uses the browser, `browser on` exits 4 while a run of it
-goes, and its contact forms check `browser status` first.
+The account setup works in a window of the user's own browser (Brave, Chrome, Edge or Chromium) that runs on a
+profile directory of apt-scraper's own, so it is signed out until the user signs in there once, and the user's own
+browser profile is never touched. `browser on` records the time, starts that browser with a debugging port on
+127.0.0.1 unless it runs already, and points Hermes's browser tools at it with `browser.cdp_url`, allowing them
+private addresses (see set_setup_browser). `browser off` clears both settings and closes that browser; its profile
+directory stays, and the sign-ins with it. Hermes reads the settings at every new browser session, from the
+profile's config.yaml, which the scheduled jobs share, so they are set only while a setup runs. `status`, and the
+listing correspondence job before every run, turn them off once the record is older than SETUP_BROWSER_IDLE, so a
+setup that stopped without `browser off` cannot leave them on.
+That job does not start a run while a setup uses the browser, `browser on` exits 4 while a run of it goes, and
+its contact forms check `browser status` first. `browser on` exits 5 when no supported browser is installed.
 """
 
 from __future__ import annotations
@@ -28,10 +32,12 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 from functools import cache
@@ -76,12 +82,21 @@ KILL_WAIT_SECONDS = 5
 # Hermes stops a terminal command after 180 seconds by default (terminal.timeout). The budget plus
 # the bounded kill after a timeout stays inside that, so every channel gets a stored result.
 CHECK_BUDGET_SECONDS = 150
-SETUP_BROWSER_SETTINGS = ("browser.use_real_profile", "browser.headed", "browser.real_profile_autoclose")
+SETUP_BROWSER_SETTING = "browser.cdp_url"
 SETUP_BROWSER_IDLE = timedelta(minutes=30)
 SETUP_LOCK_WAIT_SECONDS = 60
 # A listing correspondence run that never reached the job's next gate, such as one the gateway's exit cut off,
 # stops holding the browser back after this long.
 CONTACT_RUN_LIMIT = timedelta(hours=1)
+NO_BROWSER = 5
+# Hermes's keys for the browsers it finds (hermes_cli/browser_connect.py). A default browser outside them, such as
+# Firefox or a Beta channel, falls back to the first of FALLBACK_BROWSERS that is installed.
+BROWSER_NAMES = {"brave": "Brave", "brave-origin": "Brave Origin", "chrome": "Google Chrome",
+                 "edge": "Microsoft Edge", "chromium": "Chromium"}
+FALLBACK_BROWSERS = ("brave", "chrome", "edge", "chromium")
+FIRST_DEBUG_PORT = 9333
+BROWSER_START_SECONDS = 20
+BROWSER_CLOSE_SECONDS = 10
 OUT_OF_TIME = "The check ran out of time before reaching it. Check this connection on its own."
 
 
@@ -418,15 +433,222 @@ def setup_browser_path() -> Path:
     return hermes_home() / "apt-scraper" / "setup-browser"
 
 
-def set_setup_browser(value: str) -> None:
+def browser_profile_dir() -> Path:
+    return hermes_home() / "apt-scraper" / "browser"
+
+
+def browser_instance_path() -> Path:
+    return hermes_home() / "apt-scraper" / "browser-instance.json"
+
+
+class NoBrowser(Exception):
+    pass
+
+
+def psutil_module():
+    """Hermes depends on psutil, so its Python has it."""
+    try:
+        import psutil
+    except ImportError as error:
+        raise RuntimeError(f"psutil is missing ({error}). Run the apt-scraper installer again.") from None
+    return psutil
+
+
+def find_browser() -> tuple[str, str]:
+    """The default browser's key and binary, found the way Hermes finds them for `/browser connect`."""
+    try:
+        from hermes_cli.browser_connect import chromium_executable, detect_default_chromium
+    except ImportError as error:
+        raise RuntimeError(f"Hermes's browser detection is missing ({error}). Run the apt-scraper installer again.")
+    for key in (detect_default_chromium(), *FALLBACK_BROWSERS):
+        binary = chromium_executable(key) if key in BROWSER_NAMES else None
+        if binary:
+            return key, binary
+    raise NoBrowser("No supported browser is installed. Install Brave, Google Chrome or Microsoft Edge.")
+
+
+def browser_arguments(binary: str, port: int) -> list[str]:
+    """A plain start of the real browser, with no automation or headless switch, which Google's sign-in refuses.
+    Chrome 136 and later ignore a debugging port on the default profile directory, so a directory of its own is
+    needed as well as wanted."""
+    return [binary, f"--remote-debugging-port={port}", f"--user-data-dir={browser_profile_dir()}",
+            "--no-first-run", "--no-default-browser-check"]
+
+
+def spawn(arguments: list[str]) -> subprocess.Popen:
+    """Detached, so the browser outlives this script and the terminal command that ran it."""
+    if os.name == "nt":
+        options = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
+    else:
+        options = {"start_new_session": True}
+    return subprocess.Popen(arguments, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, **options)
+
+
+def endpoint(port: int) -> str:
+    return f"http://127.0.0.1:{port}"
+
+
+def debugger_version(port: int) -> dict | None:
+    """What the browser's debugging port says about it, or None when nothing there speaks the protocol."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(f"{endpoint(port)}/json/version", timeout=1) as response:
+            version = json.loads(response.read())
+    except (OSError, ValueError):
+        return None
+    return version if isinstance(version, dict) and "webSocketDebuggerUrl" in version else None
+
+
+def debugger_answers(port: int) -> bool:
+    return debugger_version(port) is not None
+
+
+def free_port(preferred: int) -> int:
+    for port in (preferred, 0):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            try:
+                probe.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return probe.getsockname()[1]
+    raise RuntimeError("No port on 127.0.0.1 is free for the browser.")
+
+
+def load_instance() -> dict:
+    try:
+        instance = json.loads(browser_instance_path().read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+    return instance if isinstance(instance, dict) else {}
+
+
+def holds_browser_profile(process) -> bool:
+    """Whether the process is the main process of a browser on apt-scraper's profile directory, which the user's
+    own browser never is."""
+    flag = f"--user-data-dir={browser_profile_dir()}"
+    arguments = process.cmdline()
+    if os.name == "nt":
+        flag, arguments = flag.lower(), [argument.lower() for argument in arguments]
+    return flag in arguments and not any(argument.startswith("--type=") for argument in arguments)
+
+
+def recorded_process(instance: dict):
+    """The recorded process, while its ID still belongs to the browser `browser on` started."""
+    psutil = psutil_module()
+
+    try:
+        process = psutil.Process(int(instance["pid"]))
+        if abs(process.create_time() - float(instance["created"])) < 1 and holds_browser_profile(process):
+            return process
+    except (KeyError, TypeError, ValueError, psutil.Error):
+        pass
+    return None
+
+
+def browser_processes() -> list:
+    """The recorded browser and any other one on apt-scraper's profile directory, such as one whose record was lost."""
+    psutil = psutil_module()
+
+    found = {}
+    process = recorded_process(load_instance())
+    if process is not None:
+        found[process.pid] = process
+    for process in psutil.process_iter():
+        try:
+            if process.pid not in found and holds_browser_profile(process):
+                found[process.pid] = process
+        except psutil.Error:
+            continue
+    return list(found.values())
+
+
+def ask_to_close(process) -> None:
+    """Asks the browser to quit through its own debugging port, as quitting from its menu does, so it saves the
+    sign-ins first. Windows has no signal for that, and the window's close message leaves Brave running."""
+    port = next((argument.split("=", 1)[1] for argument in process.cmdline()
+                 if argument.startswith("--remote-debugging-port=")), None)
+    version = debugger_version(int(port)) if port and port.isdigit() else None
+    if version is not None:
+        try:
+            from websockets.sync.client import connect
+
+            with connect(version["webSocketDebuggerUrl"], open_timeout=KILL_WAIT_SECONDS, proxy=None) as browser:
+                browser.send(json.dumps({"id": 1, "method": "Browser.close"}))
+                browser.recv(timeout=KILL_WAIT_SECONDS)
+            return
+        except Exception:
+            pass
+    if os.name != "nt":
+        process.terminate()
+
+
+def close_browser() -> None:
+    """Closes the browser so that it saves the sign-ins, and ends it if it still runs after BROWSER_CLOSE_SECONDS."""
+    psutil = psutil_module()
+
+    processes = browser_processes()
+    for process in processes:
+        try:
+            ask_to_close(process)
+        except (OSError, psutil.Error):
+            pass
+    alive = psutil.wait_procs(processes, timeout=BROWSER_CLOSE_SECONDS)[1]
+    for process in alive:
+        try:
+            for child in process.children(recursive=True):
+                child.kill()
+            process.kill()
+        except psutil.Error:
+            pass
+    alive = psutil.wait_procs(alive, timeout=KILL_WAIT_SECONDS)[1]
+    if alive:
+        raise RuntimeError(f"The account setup's browser, process {alive[0].pid}, did not close.")
+    browser_instance_path().unlink(missing_ok=True)
+
+
+def start_browser() -> dict:
+    """The browser `browser on` started, while it runs and answers, or a new one. A new one gets the last port if
+    it is free, so the setting rarely changes."""
+    psutil = psutil_module()
+
+    instance = load_instance()
+    if recorded_process(instance) is not None and debugger_answers(int(instance["port"])):
+        return {**instance, "opened": False}
+    close_browser()
+    key, binary = find_browser()
+    port = free_port(int(instance.get("port") or FIRST_DEBUG_PORT))
+    browser_profile_dir().mkdir(parents=True, exist_ok=True)
+    process = spawn(browser_arguments(binary, port))
+    instance = {"pid": process.pid, "created": psutil.Process(process.pid).create_time(), "port": port,
+                "browser": key, "binary": binary}
+    browser_instance_path().write_text(json.dumps(instance), encoding="utf-8")
+    deadline = time.monotonic() + BROWSER_START_SECONDS
+    while not debugger_answers(port):
+        if process.poll() is not None or time.monotonic() > deadline:
+            exited = process.poll() is not None
+            close_browser()
+            raise RuntimeError(f"{BROWSER_NAMES[key]} {'exited before it opened' if exited else 'did not open'} "
+                               f"its debugging port {port}.")
+        time.sleep(0.2)
+    return {**instance, "opened": True}
+
+
+def set_setup_browser(url: str) -> None:
+    """Points the browser tools at `url`, or with "" back at their own browser. Hermes takes a browser at a debugging
+    address for one on another computer and refuses it private addresses then, such as the dashboard on 127.0.0.1
+    and the end of Google's authorization at localhost, so they are allowed while the setup's browser, which runs on
+    this computer, is set, and refused again once it is cleared."""
     hermes = shutil.which("hermes")
     if hermes is None:
         raise RuntimeError("The hermes command is not on PATH.")
+    allowed = ("browser.allow_private_urls", "true" if url else "false")
+    settings = [allowed, (SETUP_BROWSER_SETTING, url)]
     runner = Runner()
-    for key in SETUP_BROWSER_SETTINGS:
+    for key, value in settings if url else reversed(settings):
         process = runner.run([hermes, "-p", "apt-scraper", "config", "set", key, value], "hermes config set")
         if process.returncode != 0:
-            raise RuntimeError(f"Setting {key} to {value} failed: {last_line(process)}")
+            raise RuntimeError(f"Setting {key} failed: {last_line(process)}")
 
 
 def contact_run_path() -> Path:
@@ -475,8 +697,8 @@ def record_age(path: Path) -> timedelta | None:
         return None
 
 
-def setup_browser_on() -> None:
-    """The record comes first, so the settings are never on without one. Refused while a listing
+def setup_browser_on() -> dict:
+    """The record comes first, so the setting is never on without one. Refused while a listing
     correspondence run goes, because its next contact form would get the same browser."""
     with setup_lock():
         age = record_age(contact_run_path())
@@ -484,20 +706,28 @@ def setup_browser_on() -> None:
             raise BrowserBusy("A listing correspondence run is filling in contact forms. Try again in a minute.")
         path = setup_browser_path()
         path.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
-        set_setup_browser("true")
+        try:
+            instance = start_browser()
+        except NoBrowser:
+            turn_off(None)
+            raise
+        set_setup_browser(endpoint(instance["port"]))
+        return instance
 
 
 def turn_off(seen: int | None) -> None:
-    """Under the lock. The record goes last, so a failure leaves it for the next try. A record rewritten since it
-    was seen at modification time `seen` belongs to a setup that turned the browser on again, which keeps it."""
-    set_setup_browser("false")
+    """Under the lock. The browser closes after the setting is cleared, so no new browser session reaches it, and the
+    record goes last, so a failure leaves it for the next try. A record rewritten since it was seen at modification
+    time `seen` belongs to a setup that turned the browser on again, which keeps it."""
+    set_setup_browser("")
     try:
         current = setup_browser_path().stat().st_mtime_ns
     except FileNotFoundError:
+        current = None
+    if seen is not None and current not in (None, seen):
+        set_setup_browser(endpoint(start_browser()["port"]))
         return
-    if seen is not None and current != seen:
-        set_setup_browser("true")
-        return
+    close_browser()
     setup_browser_path().unlink(missing_ok=True)
 
 
@@ -573,19 +803,24 @@ def command_browser(state: str) -> int:
     try:
         if state == "status":
             running = setup_browser_running()
-            print("The account setup uses the user's browser." if running else "No account setup uses the browser.")
+            print("The account setup uses its browser." if running else "No account setup uses the browser.")
             return NOT_CONNECTED if running else 0
         if state == "on":
-            setup_browser_on()
+            instance = setup_browser_on()
+            print(f"The account setup's browser is on: {BROWSER_NAMES[instance['browser']]} at "
+                  f"{endpoint(instance['port'])}, {'in a new window' if instance['opened'] else 'already open'}.")
         else:
             setup_browser_off()
+            print("The account setup's browser is off and closed.")
     except BrowserBusy as busy:
         print(busy)
         return 4
+    except NoBrowser as missing:
+        print(missing)
+        return NO_BROWSER
     except (RuntimeError, OSError, CommandTimedOut, OutOfTime) as error:
         print(f"Turning the account setup's browser {state} failed: {error}", file=sys.stderr)
         return 1
-    print(f"The account setup's browser is {state}.")
     return 0
 
 

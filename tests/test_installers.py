@@ -509,10 +509,11 @@ class ProfileStepTests(unittest.TestCase):
 
 
 class BrowserSettingsTests(unittest.TestCase):
-    """The scheduled jobs share the profile's config, so neither the distribution nor the installers turn on the
-    user's own browser profile or a visible window: the account setup turns them on only while it runs."""
+    """The scheduled jobs share the profile's config, so neither the distribution nor the installers point the browser
+    tools at the account setup's browser: the setup does that only while it runs. The real-profile lane it replaced
+    is set nowhere."""
 
-    SETUP_ONLY = ('use_real_profile', 'headed', 'real_profile_autoclose')
+    SETUP_ONLY = ('cdp_url', 'allow_private_urls', 'use_real_profile', 'headed', 'real_profile_autoclose')
 
     def test_the_distribution_config_and_the_installers_set_the_browser_backend_and_nothing_of_the_setup(self):
         config = (ROOT / 'profile' / 'config.yaml').read_text(encoding='utf-8')

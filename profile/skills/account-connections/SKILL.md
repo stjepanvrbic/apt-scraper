@@ -1,7 +1,7 @@
 ---
 name: account-connections
 description: "Connect and check Gmail, Calendar, gateway and iMessage."
-version: 1.4.0
+version: 1.5.0
 author: Stjepan Vrbic
 license: Proprietary
 platforms: [windows, macos]
@@ -47,38 +47,31 @@ Never restart the gateway during your own turn, because the turn runs in it: `he
 
 Do every step on a web page, Telegram included, with the browser tools: `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_press`, `browser_scroll` and `browser_back`. None of them needs the window in front, so the user keeps chatting and using the mouse while you work. Never use `computer_use` on a web page and never open one with `start` or `open`. `computer_use` is only for what no browser can do: macOS permission dialogs, macOS privacy settings and a terminal program. The Windows setup needs none of them.
 
-On their own, the browser tools drive a fresh browser without the user's logins, which the scheduled jobs use too. For the setup, turn on the user's own browser before your first browser action in every turn of the setup, and again whenever you start waiting for the user in the window:
+On their own, the browser tools drive Hermes's own test browser, which the scheduled jobs use and where Google refuses to sign in. For the setup, open the setup's browser before your first browser action in every turn of the setup, and again whenever you start waiting for the user in the window:
 
 ```bash
 python "${HERMES_SKILL_DIR}/scripts/connections.py" browser on
 ```
 
-Hermes then copies the profile of the user's default browser (Chrome, Edge or Brave) and starts that browser on the copy, in a visible window apart from the windows the user works in. Its contact forms would share that browser, so the listing correspondence job starts no run while a setup uses it, and `browser on` exits 4 while a run of that job goes: tell the user in one line that you wait for it, run `sleep 60` and try again, for up to 10 minutes.
+It starts the user's own default browser (Brave, Chrome, Edge or Chromium) in a window of its own, on a profile that belongs to apt-scraper, and points the browser tools at it. It is the user's real browser, but signed out of everything the first time, and it never touches the profile the user works in, which stays open meanwhile. The output names the browser and says whether the window is new or already open. Exit codes:
 
-Turn it off again whenever the setup ends, however it ends: after the final `check`, when the user stops or declines the rest, when a step fails and you report it, and in a window without the user's logins as well. Then tell the user they can close your browser window.
+- 4: the listing correspondence job is filling in contact forms, which would share this browser, and no run starts while a setup uses it. Tell the user in one line that you wait for it, run `sleep 60` and try again, for up to 10 minutes.
+- 5: no supported browser is installed. Tell the user to install Brave, Google Chrome or Microsoft Edge and to say "continue the connection setup" afterwards, and stop the setup's browser steps there.
+- Any other code but 0: show the user the output and stop the browser steps.
+
+Never do a setup step in the browser tools unless `browser on` exited 0 in this turn, because they would fall back to Hermes's test browser.
+
+Turn it off again whenever the setup ends, however it ends: after the final `check`, when the user stops or declines the rest, and when a step fails and you report it. That closes the window. The profile stays, so the next setup finds the user signed in.
 
 ```bash
 python "${HERMES_SKILL_DIR}/scripts/connections.py" browser off
 ```
 
-A setup that stops without `browser off` is turned off by the next `status`, and by the listing correspondence job, once 30 minutes have passed since the last `browser on`. Once it is off, Hermes deletes its copy of the user's profile at its next browser use, so the next setup copies the profile again.
+A setup that stops without `browser off` is turned off by the next `status`, and by the listing correspondence job, once 30 minutes have passed since the last `browser on`.
 
-Act on the refs of the latest snapshot; `browser_navigate` returns one. When the user must act in the window, tell them in one line what to do there, then run `browser on` and wait for the page to change: take a `browser_snapshot` about every 30 seconds, with `sleep 30` in the terminal in between, for up to 10 minutes, and carry on once it has. If it has not changed by then, ask in the chat and end your turn. The window stays open between turns.
+Act on the refs of the latest snapshot; `browser_navigate` returns one. When the user must act in the window, tell them in one line what to do there, then run `browser on` and wait for the page to change: take a `browser_snapshot` about every 30 seconds, with `sleep 30` in the terminal in between, for up to 10 minutes, and carry on once it has. If it has not changed by then, ask in the chat and end your turn. The window stays open between turns. If the user closed it, `browser on` opens it again, signed in as before.
 
-Your first `browser_navigate` in a conversation says which browser you got. With `used_real_profile`, the window has the user's logins. With `real_profile_unavailable`, it is a new browser without them: tell the user in one line, and they sign in there when a page asks. Such a window closes about two minutes after your last browser action, so keep checking while they sign in. When your turn ends in such a window, for example while BotFather may show the token, the user may have to sign in to Telegram again in the next turn.
-
-On Windows, a running browser keeps its logins locked, so Hermes can copy them only while the browser is closed, once per setup. Before your first browser action in a conversation on Windows, after `browser on`, check for a copy:
-
-```bash
-ls "$HERMES_HOME"/browser-profile/*/.hermes-snapshot-complete
-```
-
-If none exists, offer the user two ways and let them choose:
-
-1. You close their browser now. That closes every window of it, the dashboard chat included, and loses unsaved tabs. They reopen their browser after a minute, open the chat with the apt-scraper shortcut, and say "continue the connection setup". Meanwhile you open the first page in a window with their logins. On their OK, run `hermes -p apt-scraper browser close-profile`, then go on with the first page in the same turn.
-2. They keep their browser open and sign in to Google and Telegram in your window when a page asks.
-
-If `close-profile` fails, go on as in way 2. Until `browser off`, later conversations reuse the copy, even while the browser runs.
+The first time, tell the user in one line that the window is their own browser on a profile of apt-scraper's own, so they sign in to Google and Telegram there once, when a page asks, and later setups reuse those sign-ins. They sign in in the window, never in the chat.
 
 ## The check
 
