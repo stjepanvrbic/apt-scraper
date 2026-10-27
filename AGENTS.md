@@ -1,6 +1,6 @@
 # apt-scraper
 
-Hermes Agent distribution for apartment hunting: `install.ps1` (Windows) and `install.sh` (macOS) install Claude Code, Hermes with its computer-use driver and the Claude subscription provider plugin, then install `profile/` as the Hermes profile `apt-scraper`. `bootstrap.ps1` and `bootstrap.sh` are the one-line install: they clone or update the repository in a per-user location and run the installer from there. Owner: Stjepan Vrbic.
+Hermes Agent distribution for apartment hunting: `install.ps1` (Windows) and `install.sh` (macOS) install Claude Code, Hermes with its computer-use driver and the Claude subscription provider plugin, then install `profile/` as the Hermes profile `apt-scraper`. `bootstrap.ps1` and `bootstrap.sh` are the one-line install: they clone or update the repository in a per-user location and run the installer from there. `uninstall.ps1` and `uninstall.sh` are the one-line uninstall: they remove everything the installer, the bootstraps and the profile put on the machine and keep Hermes and Claude Code. Owner: Stjepan Vrbic.
 
 Intent, spec and work are tracked in files, not Linear: `docs/intent.md`, `docs/spec.md`, tickets in `docs/tickets/`, format in `docs/tickets/README.md`.
 Documentation lives under `docs/`. `README.md` is the only other prose file at the root.

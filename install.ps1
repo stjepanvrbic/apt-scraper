@@ -244,9 +244,10 @@ if ($reply -notmatch '\bready\b') { throw "Test message failed. Reply: $reply" }
 
 # The first start builds the dashboard's web UI, so later starts need no npm. The dashboard keeps
 # running after this window closes. A dashboard that is already running prints its address and exits.
-# The launchers below start and open the dashboard at the address recorded here.
+# The launchers below start and open the dashboard at the address recorded here. The uninstaller removes
+# the dashboard's log by its name.
 Write-Step 'Hermes web dashboard'
-$dashboardLog = Join-Path ([IO.Path]::GetTempPath()) "hermes-dashboard-$([IO.Path]::GetRandomFileName()).log"
+$dashboardLog = Join-Path ([IO.Path]::GetTempPath()) "apt-scraper-dashboard-$([IO.Path]::GetRandomFileName()).log"
 $dashboard = Start-Process -FilePath $hermes -ArgumentList @('-p', $ProfileName, 'dashboard', '--no-open') -WindowStyle Hidden `
     -RedirectStandardOutput $dashboardLog -RedirectStandardError "$dashboardLog.err" -PassThru
 $deadline = (Get-Date).AddMinutes(15)
