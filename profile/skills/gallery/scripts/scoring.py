@@ -57,7 +57,6 @@ HELD_OUT_ITERATIONS = 30
 REASON_UP = 3
 REASON_DOWN = 2
 REASON_THRESHOLD = 0.05
-REASON_LIMIT = 500
 SINGLE_LABEL_WEIGHT = 0.25
 SENTIMENTS = ('positive', 'negative', 'mixed', 'neutral')
 DIRECTIONS = ('like', 'dislike')
@@ -862,7 +861,8 @@ def display(model_design, index, name):
                      if favorite in model_design.coordinates and favorite != model_design.ids[index]]
         return f'{min(distances):.1f} km from the nearest favorite' if distances else None
     if name == 'station_distance':
-        return f'{raw[name]:.1f} km to the nearest station, {code["nearest_station"]}'
+        station = code['nearest_station']
+        return f'{raw[name]:.1f} km to {station if station.casefold().endswith("station") else f"{station} station"}'
     if kind == 'place':
         return f'{raw[name]:.1f} km from {key}'
     currency = f' {code["currency"]}' if code.get('currency') else ''
@@ -870,10 +870,14 @@ def display(model_design, index, name):
         'price': lambda: f'{code["monthly_price"]:,.0f}{currency} a month',
         'size': lambda: f'{code["size_sqft"]:,.0f} sq ft',
         'price_per_sqft': lambda: f'{code["price_per_sqft"]:,.2f}{currency} per sq ft',
-        'bedrooms': lambda: f'{code["bedrooms"]:g} bedrooms',
-        'bathrooms': lambda: f'{code["bathrooms"]:g} bathrooms',
-        'photos': lambda: f'{code["photo_count"]} photos',
+        'bedrooms': lambda: counted(code['bedrooms'], 'bedroom'),
+        'bathrooms': lambda: counted(code['bathrooms'], 'bathroom'),
+        'photos': lambda: counted(code['photo_count'], 'photo'),
     }[name]()
+
+
+def counted(number, noun):
+    return f'{number:g} {noun}{"" if number == 1 else "s"}'
 
 
 def title(listing):
@@ -910,32 +914,24 @@ def explanation(model_design, contributed, index):
 
 
 def feature_reason(contributions):
-    """The part of a reason that names the features that moved the score most, as the listing's record states them."""
+    """The part of a reason that names the features that moved the score most, as the listing's record states them:
+    the values of the largest contributions for the listing and of the largest against it, each list largest first."""
     cited = [part for part in contributions if part['value'] is not None and abs(part['contribution']) >= REASON_THRESHOLD]
-    up = [part['value'] for part in cited if part['contribution'] > 0][:REASON_UP]
-    down = [part['value'] for part in cited if part['contribution'] < 0][:REASON_DOWN]
-    sentences = [f'For it: {", ".join(up)}.'] if up else []
-    if down:
-        sentences.append(f'Against it: {", ".join(down)}.')
-    return ' '.join(sentences) or 'Close to the average listing.'
+    return {'for': [part['value'] for part in cited if part['contribution'] > 0][:REASON_UP],
+            'against': [part['value'] for part in cited if part['contribution'] < 0][:REASON_DOWN]}
 
 
-def compose_reason(features, *, exploration, code_only, similar_favorite):
-    """A listing's one-line reason: its exploration mark, a note when it is ranked from code features only, the part
-    that names its features, and its most similar favorite."""
-    sentences = ['Shown to learn your taste.'] if exploration else []
-    if code_only:
-        sentences.append('Ranked from code features only, because extraction failed 3 times.')
-    sentences.append(features)
-    if similar_favorite:
-        sentences.append(f'Most like your favorite {similar_favorite["title"]}.')
-    return ' '.join(sentences)[:REASON_LIMIT]
+def compose_reason(features, *, code_only, similar_favorite):
+    """A listing's reason, in parts the gallery and the agent render: whether it is ranked from code features only, the
+    part that names its features, either feature_reason's lists or {'text': ...} a review wrote, and the title of its
+    most similar favorite. An exploration listing's mark is its own."""
+    return {'code_only': code_only, 'features': features, 'similar_favorite': similar_favorite['title'] if similar_favorite else None}
 
 
-def reason(model_design, details, index, *, exploration):
-    """One line naming the features that moved the score most, as the listing's record states them, and the most
+def reason(model_design, details, index):
+    """The reason naming the features that moved the score most, as the listing's record states them, and the most
     similar favorite."""
-    return compose_reason(feature_reason(details['contributions']), exploration=exploration,
+    return compose_reason(feature_reason(details['contributions']),
                           code_only=model_design.listings[model_design.ids[index]]['record'] is None,
                           similar_favorite=details['similar_favorite'])
 
@@ -982,9 +978,9 @@ def rank_listings(inputs, seed, *, model=None):
         identifier = model_design.ids[index]
         details = explanation(model_design, contributed, index)
         ranked[identifier] = {'fingerprint': model_design.listings[identifier]['fingerprint'], 'rank': position,
-                              'reason': reason(model_design, details, index, exploration=index in exploring),
+                              'reason': reason(model_design, details, index),
                               'explanation': details, 'exploration': index in exploring}
-    unranked = {listing['id']: {'fingerprint': listing['fingerprint'], 'reason': 'Not ranked yet: waiting for its feature record.'}
+    unranked = {listing['id']: {'fingerprint': listing['fingerprint']}
                 for listing in inputs['listings'] if listing['rankable'] and listing['id'] not in ranked}
     held_out = [{'id': identifier, 'title': title(model_design.listings[identifier]), 'rank': rank} for identifier, rank in check.ranks.items()]
     values = scores(model_design.likelihood_rows, weights, model_design.dense_count)

@@ -7,7 +7,7 @@ import { IconArrowsDiff, IconArrowUpRight, IconBuilding, IconCalendar, IconHeart
 import Lightbox from 'yet-another-react-lightbox';
 import Counter from 'yet-another-react-lightbox/plugins/counter';
 import { date, period, price, title, viewingTime } from './model';
-import { useGallery, useListing } from './useGallery';
+import { useCompareInvitation, useGallery, useListing } from './useGallery';
 import { ListingCard, Photo, listingPath, type Save } from './ListingCard';
 import { Compare } from './Compare';
 import { RerankPanel } from './RerankPanel';
@@ -117,6 +117,7 @@ export default function App() {
   const [page, setPage] = useState(1);
   const [dismissed, setDismissed] = useState(false);
   const ranking = useRerank();
+  const invitation = useCompareInvitation();
   const { state, readError, saveError, busy, loading, refresh, save } = useGallery(dismissed ? 'Dismissed' : tab!, page);
   const listings = state?.items ?? [];
   const awaiting = listings.filter(listing => !listing.rank);
@@ -125,6 +126,7 @@ export default function App() {
     { heading: 'Awaiting ranking', items: awaiting },
   ] : [{ heading: null, items: listings }];
   const current = tabs.find(item => item.name === tab)!;
+  const openTab = (value: string | null) => { setTab(value); setPage(1); setDismissed(false); };
   return <>
     <Paper component="header" radius={0} className="site-header"><Container size="xl"><Group justify="space-between" py="lg">
       <Group gap="sm"><IconBuilding size={28} stroke={1.6} /><div><Text fw={700}>Apartment gallery</Text><Text size="xs" c="dimmed">Your search, in one place</Text></div></Group>
@@ -132,7 +134,12 @@ export default function App() {
         <Button variant="subtle" color="dark" loading={loading} disabled={busy} leftSection={<IconRefresh size={16} />} onClick={() => { void refresh(); void ranking.query.refetch(); }}>Refresh listings</Button></Group>
     </Group></Container></Paper>
     <Container component="main" size="xl" py="xl">
-      <Tabs value={tab} onChange={value => { setTab(value); setPage(1); setDismissed(false); }} keepMounted={false}>
+      {invitation.data?.shown && <Alert role="region" color="blue" icon={<IconArrowsDiff size={20} />} mb="xl"
+        title="Your first apartments are ready to compare">
+        <Group justify="space-between" gap="sm"><Text size="sm">Answer 5 to 8 questions in Compare: choose the apartment you prefer in each pair, or skip. Your choices count at the next rerank.</Text>
+          {tab !== 'Compare' && <Button size="sm" onClick={() => openTab('Compare')}>Open Compare</Button>}</Group>
+      </Alert>}
+      <Tabs value={tab} onChange={openTab} keepMounted={false}>
         <Tabs.List mb={32}>{tabs.map(item => <Tabs.Tab key={item.name} value={item.name} leftSection={<item.icon size={18} />}>{item.name}</Tabs.Tab>)}</Tabs.List>
         <Group justify="space-between" align="flex-end" mb="xl"><div><Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={6}>Your apartment search</Text>
           <Title order={1}>{dismissed ? 'Dismissed listings' : current.name}</Title><Text c="dimmed" mt="xs">{current.description}</Text></div>

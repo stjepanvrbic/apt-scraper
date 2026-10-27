@@ -82,7 +82,7 @@ class SignalStoreTests(unittest.TestCase):
         store = ListingStore(path)
         saved = store.listing(content['id'])
         self.assertTrue(saved['favorite'])
-        self.assertEqual((saved['rank'], saved['reason']), (1, 'Keep this reason.'))
+        self.assertEqual((saved['rank'], saved['reason']), (1, {'code_only': False, 'features': {'text': 'Keep this reason.'}, 'similar_favorite': None}))
         self.assertEqual(store.record_signals([event(store, fingerprint='a' * 64)]), 1)
 
     def test_migration_preserves_distance_features_from_version_seven(self):
@@ -108,7 +108,7 @@ class SignalStoreTests(unittest.TestCase):
         self.assertEqual(migrated.code_features(), before)
         self.assertEqual(migrated.record_signals([event(migrated)]), 1)
 
-    def test_migration_preserves_waiting_review_from_version_eight(self):
+    def test_a_review_waiting_at_version_eight_fails_at_migration_because_its_snapshot_lacks_the_reranks_inputs(self):
         path = self.path.parent / 'version-eight.sqlite3'
         connection = sqlite3.connect(path)
         snapshot = {'order': [], 'exploration': [], 'scores': [], 'held_out': {}}
@@ -122,8 +122,9 @@ class SignalStoreTests(unittest.TestCase):
         connection.close()
         migrated = ListingStore(path)
         self.assertEqual(migrated.schema_version, len(MIGRATIONS))
-        self.assertEqual(migrated.last_rerank()['review']['state'], 'waiting')
-        self.assertEqual(migrated.review_snapshot(1), snapshot)
+        review = migrated.last_rerank()['review']
+        self.assertEqual((review['state'], review['result']), ('failed', {'error': 'apt-scraper was updated after this rerank. Rerank to get a review.'}))
+        self.assertIsNone(migrated.review_snapshot(1))
         migrated.upsert_listing(listing())
         self.assertEqual(migrated.record_signals([event(migrated)]), 1)
 

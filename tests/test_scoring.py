@@ -8,6 +8,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
 
 from record import CATEGORIES, FLAGS, RATINGS  # noqa: E402
+from review import checked_text, citable_values  # noqa: E402
 from scoring import (DEFAULT_HYPERPARAMETERS, EXPLORATION_RANKS, PRIOR_SCALES, UNLABELED_WEIGHTS, expand, gradient, hessian, TOP,  # noqa: E402
                      design, fit, fit_model, held_out_fit, held_out_ranks, held_out_scores, observations, prior, questions,
                      rank_listings, reading_vocabulary, summary_of, validate_note_reading, validate_preference_reading,
@@ -28,7 +29,7 @@ def record(*, floor='hardwood', traits=(), concerns=(), ratings=None, unit_level
     }
 
 
-def entry(identifier, *, price=2000, size=900, bedrooms=2, latitude=None, longitude=None, areas=('Logan Square',), unit_label=None,
+def entry(identifier, *, price=2000, size=900, bedrooms=2, bathrooms=1, latitude=None, longitude=None, areas=('Logan Square',), unit_label=None,
           code_level=None, station=None, places=None, rankable=True, favorite=False, dismissed=False, contact=False, user_notes=False,
           judgments=None, given_up=False, **record_fields):
     """A listing as ranking_inputs gives it. station is (name, distance in km) to the nearest station, places the
@@ -37,7 +38,7 @@ def entry(identifier, *, price=2000, size=900, bedrooms=2, latitude=None, longit
         'id': identifier, 'fingerprint': f'fingerprint-{identifier}', 'title': f'Listing {identifier}', 'address': None,
         'rankable': rankable and not dismissed, 'record': None if given_up else record(**record_fields), 'judgments': judgments or {},
         'code': {'monthly_price': price, 'currency': 'USD', 'size_sqft': size, 'price_per_sqft': price / size if size else None,
-                 'bedrooms': bedrooms, 'bathrooms': 1, 'unit_label': unit_label, 'unit_floor': None, 'unit_level': code_level,
+                 'bedrooms': bedrooms, 'bathrooms': bathrooms, 'unit_label': unit_label, 'unit_floor': None, 'unit_level': code_level,
                  'photo_count': 10, 'latitude': latitude, 'longitude': longitude,
                  'nearest_station': station[0] if station else None, 'station_distance_km': station[1] if station else None,
                  'place_distances_km': places or {}},
@@ -97,7 +98,7 @@ class OverruledPreferenceTests(unittest.TestCase):
         result = rank_listings(inputs(listings, settings=self.settings, readings=self.readings), seed=1)
         self.assertGreaterEqual(contribution(result, 'listing:39', 'floor:carpet'), 0)
         self.assertGreater(result['summary']['weights']['floor:carpet'], 0)
-        self.assertNotIn('carpet floor', result['ranked']['listing:39']['reason'].split('Against it:')[-1])
+        self.assertNotIn('carpet floor', result['ranked']['listing:39']['reason']['features']['against'])
 
 
 class LabelTests(unittest.TestCase):
@@ -205,10 +206,12 @@ class ExplanationTests(unittest.TestCase):
             similar = ranked['explanation']['similar_favorite']
             self.assertIsNotNone(similar)
             self.assertNotEqual(similar['id'], identifier)
-            self.assertIn(f'Most like your favorite {similar["title"]}.', ranked['reason'])
-            cited = [part for part in ranked['explanation']['contributions'] if part['value'] and part['contribution'] >= 0.05][:3]
-            if cited:
-                self.assertIn('For it: ' + ', '.join(part['value'] for part in cited) + '.', ranked['reason'])
+            self.assertEqual(ranked['reason']['similar_favorite'], similar['title'])
+            self.assertFalse(ranked['reason']['code_only'])
+            parts = ranked['explanation']['contributions']
+            self.assertEqual(ranked['reason']['features'], {
+                'for': [part['value'] for part in parts if part['value'] and part['contribution'] >= 0.05][:3],
+                'against': [part['value'] for part in parts if part['value'] and part['contribution'] <= -0.05][:2]})
             for part in ranked['explanation']['contributions']:
                 if part['feature'].startswith('tag:') and part['value']:
                     self.assertIn(part['value'], listing['record']['traits'] + listing['record']['concerns'])
@@ -230,7 +233,7 @@ class ExplanationTests(unittest.TestCase):
         listings = [*self.listings, entry('listing:given-up', given_up=True, price=1500)]
         result = rank_listings(inputs(listings), seed=1)
         ranked = result['ranked']['listing:given-up']
-        self.assertIn('Ranked from code features only, because extraction failed 3 times.', ranked['reason'])
+        self.assertTrue(ranked['reason']['code_only'])
         named = {part['feature'] for part in ranked['explanation']['contributions'] if part['value'] is not None}
         self.assertTrue(named)
         self.assertTrue(all(name in ('price', 'size', 'price_per_sqft', 'bedrooms', 'bathrooms', 'photos', 'near_favorites') or name.startswith('area:')
@@ -240,7 +243,7 @@ class ExplanationTests(unittest.TestCase):
         waiting = {**entry('listing:waiting'), 'record': None}
         result = rank_listings(inputs([*self.listings, waiting]), seed=1)
         self.assertNotIn('listing:waiting', result['ranked'])
-        self.assertEqual(result['unranked']['listing:waiting']['reason'], 'Not ranked yet: waiting for its feature record.')
+        self.assertEqual(result['unranked']['listing:waiting'], {'fingerprint': 'fingerprint-listing:waiting'})
 
 
 class FeatureTests(unittest.TestCase):
@@ -314,7 +317,51 @@ class LocationTests(unittest.TestCase):
         others = [entry(f'listing:{number}', latitude=41.95 + 0.004 * number, longitude=-87.75) for number in range(10)]
         result = rank_listings(inputs([*favorites, near, far, *others]), seed=1)
         self.assertLess(result['ranked']['listing:near']['rank'], result['ranked']['listing:far']['rank'])
-        self.assertIn('km from the nearest favorite', result['ranked']['listing:near']['reason'])
+        self.assertTrue(any(value.endswith('km from the nearest favorite') for value in result['ranked']['listing:near']['reason']['features']['for']))
+
+
+class ReasonValueTests(unittest.TestCase):
+    """Spec › Ranking: a listing's reason names the features that moved its score most, each value one item of its
+    list."""
+
+    SETTINGS = {**SETTINGS, 'preferences': {'likes': ['More bathrooms'], 'dislikes': []},
+                'location_priorities': {**SETTINGS['location_priorities'], 'rapid_transit': 'high'}}
+    READINGS = {('like', 'More bathrooms'): [{'feature': 'bathrooms', 'direction': 'like'}]}
+
+    def result(self, *listings):
+        return rank_listings(inputs(list(listings), settings=self.SETTINGS, readings=self.READINGS), seed=1)
+
+    @staticmethod
+    def values(result, identifier):
+        return {part['feature']: part['value'] for part in result['ranked'][identifier]['explanation']['contributions']}
+
+    def test_the_station_distance_keeps_its_station_and_counts_as_one_value_against_a_far_listing(self):
+        result = self.result(entry('listing:near', station=('Logan Square', 0.2)), entry('listing:far', station=('Logan Square', 1.6)))
+        value = self.values(result, 'listing:far')['station_distance']
+        self.assertEqual(value, '1.6 km to Logan Square station')
+        self.assertEqual(result['ranked']['listing:far']['reason']['features']['against'], [value])
+        self.assertEqual(result['ranked']['listing:near']['reason']['features']['for'], ['0.2 km to Logan Square station'])
+
+    def test_a_station_named_as_a_station_is_not_named_twice(self):
+        result = self.result(entry('listing:1', station=('Union Station', 0.4)), entry('listing:2', station=('Clinton', 1.2)))
+        self.assertEqual(self.values(result, 'listing:1')['station_distance'], '0.4 km to Union Station')
+
+    def test_a_count_is_grammatical_in_the_explanation_and_the_reason(self):
+        result = self.result(entry('listing:one', bathrooms=1, bedrooms=1), entry('listing:two', bathrooms=2, bedrooms=2),
+                             entry('listing:half', bathrooms=1.5, bedrooms=0))
+        self.assertEqual([self.values(result, identifier)['bathrooms'] for identifier in ('listing:one', 'listing:two', 'listing:half')],
+                         ['1 bathroom', '2 bathrooms', '1.5 bathrooms'])
+        self.assertEqual([self.values(result, identifier)['bedrooms'] for identifier in ('listing:one', 'listing:two', 'listing:half')],
+                         ['1 bedroom', '2 bedrooms', '0 bedrooms'])
+        self.assertIn('2 bathrooms', result['ranked']['listing:two']['reason']['features']['for'])
+        self.assertIn('1 bathroom', result['ranked']['listing:one']['reason']['features']['against'])
+
+    def test_the_review_may_cite_the_station_distance_exactly_as_the_explanation_states_it(self):
+        result = self.result(entry('listing:near', station=('Logan Square', 0.2)), entry('listing:far', station=('Logan Square', 1.6)))
+        explanation = result['ranked']['listing:far']['explanation']
+        citable = citable_values(explanation, None)
+        self.assertIn('1.6 km to Logan Square station', citable)
+        self.assertEqual(checked_text('Weak on [1.6 km to Logan Square station].', citable), 'Weak on 1.6 km to Logan Square station.')
 
 
 class DistanceTests(unittest.TestCase):
@@ -364,8 +411,8 @@ class DistanceTests(unittest.TestCase):
                     entry('listing:2', station=('California', 1.9), places={'Work': 9.0})]
         result = rank_listings(inputs(listings, settings=self.SETTINGS), seed=1)
         parts = {part['feature']: part['value'] for part in result['ranked']['listing:1']['explanation']['contributions']}
-        self.assertEqual((parts['station_distance'], parts['place:Work']), ('0.3 km to the nearest station, Logan Square', '2.0 km from Work'))
-        self.assertIn('2.0 km from Work', result['ranked']['listing:1']['reason'])
+        self.assertEqual((parts['station_distance'], parts['place:Work']), ('0.3 km to Logan Square station', '2.0 km from Work'))
+        self.assertIn('2.0 km from Work', result['ranked']['listing:1']['reason']['features']['for'])
 
 
 class ExplorationTests(unittest.TestCase):
@@ -387,7 +434,7 @@ class ExplorationTests(unittest.TestCase):
         mean_order = sorted(result['ranked'], key=lambda identifier: -result['ranked'][identifier]['explanation']['score'])
         for identifier in marked:
             self.assertGreaterEqual(mean_order.index(identifier), TOP - 2)
-            self.assertTrue(result['ranked'][identifier]['reason'].startswith('Shown to learn your taste.'))
+            self.assertTrue(result['ranked'][identifier]['exploration'])
 
     def test_without_unlabeled_listings_outside_the_top_18_none_explores(self):
         listings = [entry(f'listing:{number:02}', user_notes=number >= 18) for number in range(21)]
@@ -401,7 +448,6 @@ class ExplorationTests(unittest.TestCase):
         result = rank_listings(inputs(listings), seed=3)
         self.assertEqual(result['summary']['exploration'], ['listing:18'])
         self.assertEqual(result['ranked']['listing:18']['rank'], EXPLORATION_RANKS[0])
-        self.assertTrue(result['ranked']['listing:18']['reason'].startswith('Shown to learn your taste.'))
         self.assertEqual([identifier for identifier, ranked in result['ranked'].items() if ranked['exploration']], ['listing:18'])
 
     def test_no_listing_explores_with_20_or_fewer_ranked(self):

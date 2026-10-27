@@ -13,7 +13,7 @@ class GalleryQueryTests(unittest.TestCase):
 
     def add(self, identity, rank):
         result = self.store.upsert_listing(listing(id=identity, description='Long description. ' * 500))
-        self.store.rank(identity, result['content_fingerprint'], rank, 'Quiet street.')
+        self.store.rank(identity, result['content_fingerprint'], rank, {'text': 'Quiet street.'})
 
     def test_pages_bound_grid_payload_and_include_unranked_listings(self):
         for index in range(55):

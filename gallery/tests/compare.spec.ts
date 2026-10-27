@@ -17,9 +17,45 @@ for number in range(count):
     photos = ['/media/living.jpg' if number % 2 == 0 else '/media/kitchen.jpg']
     saved = store.upsert_listing(listing(id=identifier, title=f'Courtyard apartment {number + 1}', address=f'{100 + number} Example Street, Chicago', price=1800 + number * 100, photos=photos))
     store.save_extraction(identifier, saved['content_fingerprint'], extraction(1), photos=photos, phrases=[])
-    store.rank(identifier, saved['content_fingerprint'], number + 1, 'A ranking reason that must not bias a comparison.')
+    store.rank(identifier, saved['content_fingerprint'], number + 1, {'text': 'A ranking reason that must not bias a comparison.'})
 `, resolve('../tests'), database, String(count)]);
 }
+
+function deliverInvitation(database: string, surface: string) {
+  execFileSync('python', ['-c', `
+import sys
+sys.path.insert(0, sys.argv[1])
+from test_features_run import SETTINGS
+from test_compare import ListingStore
+store = ListingStore(sys.argv[2])
+store.update_settings(**SETTINGS, judge=lambda criteria, features: 'inside')
+store.deliver_compare_invitation(sys.argv[3])
+`, resolve('../tests'), database, surface]);
+}
+
+test('the gallery shows the Compare invitation it delivered, leads to Compare and ends it with the first answer', async ({ page, gallery }, testInfo) => {
+  seedCompare(gallery.database);
+  const invitation = page.getByRole('region', { name: 'Your first apartments are ready to compare', exact: true });
+  deliverInvitation(gallery.database, 'gateway');
+  await page.goto(gallery.url);
+  await expect(page.getByRole('article').first()).toBeVisible();
+  await expect(invitation).toHaveCount(0);
+  deliverInvitation(gallery.database, 'gallery');
+  await page.reload();
+  await expect(invitation).toContainText('Answer 5 to 8 questions in Compare');
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath('compare-invitation.png') });
+  await invitation.getByRole('button', { name: 'Open Compare', exact: true }).click();
+  await expect(page.getByRole('tab', { name: 'Compare', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('heading', { name: 'Which of these two?' })).toBeVisible();
+  await expect(invitation.getByRole('button')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Choose this apartment' }).first().click();
+  await expect(page.getByText('1 choice saved', { exact: true })).toBeVisible();
+  await expect(invitation).toHaveCount(0);
+  await page.getByRole('tab', { name: 'Rankings', exact: true }).click();
+  await expect(page.getByRole('article').first()).toBeVisible();
+  await expect(invitation).toHaveCount(0);
+});
 
 test('Compare saves either choice, skips, and persists progress across restarts without reranking', async ({ page, gallery }) => {
   seedCompare(gallery.database);

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ActionIcon, AspectRatio, Badge, Box, Button, Card, Divider, Group, Image, Paper, Stack, Text, Title, UnstyledButton } from '@mantine/core';
 import { IconHeart, IconPhoto } from '@tabler/icons-react';
 import { period, price, title, viewingTime, type ListingSummary } from './model';
-import { DistanceAttribution, Exploration } from './RankingExplanation';
+import { Exploration, ListingReason } from './RankingExplanation';
 
 export type Save = (path: string, body: Record<string, unknown>) => Promise<boolean>;
 export const listingPath = (listing: ListingSummary, action: string) => `/api/listings/${encodeURIComponent(listing.id)}/${action}`;
@@ -46,7 +46,7 @@ export function ListingCard(props: CardProps) {
         <Button variant="subtle" color="dark" fullWidth onClick={open}>View details</Button>
       </Stack> : <><Divider />
       {listing.exploration && <Exploration />}
-      <div><Text size="sm" c="dimmed" mih={42}>{listing.reason ?? 'Awaiting ranking.'}</Text><DistanceAttribution text={listing.reason} /></div>
+      <Box c="dimmed" mih={42}><ListingReason listing={listing} fallback="Awaiting ranking." /></Box>
       <Badge variant="light" color={listing.status === 'available' ? 'green' : 'gray'}>{listing.status === 'available' ? 'Available' : 'Unavailable'}</Badge>
       {listing.viewing && <Text size="sm" fw={600}>{viewingTime(listing.viewing.time)}</Text>}
       {listing.contact && <Badge variant="light" color={listing.contact.status === 'pending' ? 'gray' : 'blue'}>

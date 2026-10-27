@@ -20,7 +20,7 @@ class SearchRankingTests(unittest.TestCase):
         fingerprint = result['content_fingerprint']
         self.assertIsNone(self.store.listing('example:100')['rank'])
         self.store.analyze('example:100', fingerprint, {'light': 0.9, 'quiet': 0.7})
-        self.store.rank('example:100', fingerprint, 2, 'Bright and quiet.')
+        self.store.rank('example:100', fingerprint, 2, {'text': 'Bright and quiet.'})
         self.assertFalse(self.store.upsert_listing(listing())['needs_analysis'])
         self.assertFalse(self.store.upsert_listing(listing())['changed'])
         self.assertEqual(self.store.listing('example:100')['rank'], 2)
@@ -29,7 +29,7 @@ class SearchRankingTests(unittest.TestCase):
         self.assertEqual(self.store.listing('example:100')['status'], 'unavailable')
         self.assertEqual(self.store.features('example:100'), {'light': 0.9, 'quiet': 0.7})
         self.store.set_availability('example:100', 'available')
-        self.store.rank('example:100', fingerprint, 1, 'Best fit after feedback.')
+        self.store.rank('example:100', fingerprint, 1, {'text': 'Best fit after feedback.'})
         changed = self.store.upsert_listing(listing(price=1900, first_seen='2026-10-24'))
         self.assertTrue(changed['needs_analysis'])
         saved = self.store.listing('example:100')
@@ -41,7 +41,7 @@ class SearchRankingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'changed'):
             self.store.analyze('example:100', fingerprint, {'quiet': 1})
         with self.assertRaisesRegex(ValueError, 'changed'):
-            self.store.rank('example:100', fingerprint, 1, 'Stale result.')
+            self.store.rank('example:100', fingerprint, 1, {'text': 'Stale result.'})
 
     def test_contact_channel_agent_and_approval_are_scoped_to_request(self):
         self.store.upsert_listing(listing())

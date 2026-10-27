@@ -19,6 +19,7 @@ from test_feature_record import extraction  # noqa: E402
 from test_gallery_store import ListingStore, listing  # noqa: E402
 from test_listing_photos import picture, recompressed, zillow  # noqa: E402
 import features  # noqa: E402
+from contact import NotConnected  # noqa: E402
 from features import PHOTO_PATIENCE, READ_ATTEMPTS, SEQUENTIAL_RECORDS, STATION_RETRY, SUBAGENTS_PER_WAKE, Features, PhotosUnavailable, RunState, note_read  # noqa: E402
 from geodata import SourceUnavailable  # noqa: E402
 from scoring import design, observations, reading_vocabulary  # noqa: E402
@@ -85,6 +86,9 @@ class FeaturesTestCase(unittest.TestCase):
         environment = mock.patch.dict(os.environ, {'HERMES_HOME': str(self.home)})
         environment.start()
         self.addCleanup(environment.stop)
+        gateway = mock.patch('contact.require', side_effect=NotConnected('The messaging gateway is not connected in tests.'))
+        gateway.start()
+        self.addCleanup(gateway.stop)
         self.store = ListingStore(self.home / 'workspace' / 'gallery' / 'listings.sqlite3')
         self.server = PhotoServer()
         self.clock = [NOW]

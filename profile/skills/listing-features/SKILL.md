@@ -21,6 +21,7 @@ You never look at a listing's photos or read its text. Each listing is read by o
 
 - The listing features job's report lists extraction tasks, notes or stated preferences that wait for a reading, or listings that wait for judgments of preferences.
 - `status` exits 3 at the start of a conversation: tell the user what `problems` says.
+- `status` reports `ask_to_compare`: see [The Compare invitation](#the-compare-invitation).
 - The user asks to retry the listings extraction gave up on: run `retry`.
 
 ## The features script
@@ -32,9 +33,14 @@ python "${HERMES_SKILL_DIR}/scripts/features.py" preferences
 python "${HERMES_SKILL_DIR}/scripts/features.py" readings
 python "${HERMES_SKILL_DIR}/scripts/features.py" read "<scratch directory>/readings.json"
 python "${HERMES_SKILL_DIR}/scripts/features.py" retry
+python "${HERMES_SKILL_DIR}/scripts/features.py" compare-asked
 ```
 
-`status` prints JSON and exits 0 when extraction works, 3 when something needs the user's attention. `problems` says what, in sentences you can pass on. `records` counts the listings with a record, `waiting` those waiting for extraction, `given_up` lists those extraction gave up on, `awaiting_judgment` counts the listings waiting for judgments of preferences, `awaiting_reading` the notes and stated preferences waiting for a reading, and `photos_unavailable` names the listings whose photos could not be downloaded, since when and why. Any other exit code means the script failed: show the user its output. `tags` prints the tag list. `retry` makes the next runs try again everything given up on.
+`status` prints JSON and exits 0 when extraction works, 3 when something needs the user's attention. `problems` says what, in sentences you can pass on. `records` counts the listings with a record, `waiting` those waiting for extraction, `given_up` lists those extraction gave up on, `awaiting_judgment` counts the listings waiting for judgments of preferences, `awaiting_reading` the notes and stated preferences waiting for a reading, `photos_unavailable` names the listings whose photos could not be downloaded, since when and why, and `ask_to_compare` is true while the user should be asked in a conversation to answer Compare questions. Any other exit code means the script failed: show the user its output. `tags` prints the tag list. `retry` makes the next runs try again everything given up on. `compare-asked` records that you asked the user to answer Compare questions.
+
+## The Compare invitation
+
+Once the interview is complete and two listings have a feature record, the user is asked once to answer 5 to 8 questions in the gallery's Compare tab, until they answer one. The job sends the invitation through the messaging gateway when it is connected. Otherwise the gallery shows it, and `status` reports `ask_to_compare` from the first records until a conversation has asked: ask the user then, as the profile's instructions say, and run `compare-asked`.
 
 ## Running extraction tasks
 
@@ -69,7 +75,7 @@ When the user states a preference after a listing was extracted and its reading 
 ## Problems `status` reports
 
 - A run or a step of it that failed: the message says what failed. Tell the user that apt-scraper needs an update if it repeats.
-- The message asking the user to answer questions in the Compare tab could not be sent: ask the user yourself to answer 5 to 8 of them. The job keeps trying to send it.
+- The invitation to answer questions in the Compare tab could not be delivered: ask the user yourself to answer 5 to 8 of them, then run `compare-asked`. The job then shows the invitation in the gallery instead of sending it.
 - Listings extraction gave up on after three attempts: tell the user which, that they are ranked only from their price, size and the other facts code reads until their content changes, and offer to retry.
 - Preferences that could not be judged for some listings: tell the user, and offer to retry.
 - Notes or stated preferences that could not be read: tell the user they do not count in the ranking yet, and offer to retry.

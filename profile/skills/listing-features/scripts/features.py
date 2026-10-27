@@ -3,8 +3,8 @@
 Commands:
   features.py run           one pass of the scheduled job apt-scraper-features: fetches the rapid-transit stations
                             once per transit feed, prepares the photos of the listings waiting for extraction, prints
-                            one extraction task per listing for the agent, sends the Compare invitation once it is due,
-                            and ends with a line that tells Hermes whether to wake the agent. Never fails.
+                            one extraction task per listing for the agent, delivers the Compare invitation once it is
+                            due, and ends with a line that tells Hermes whether to wake the agent. Never fails.
   features.py save FILE     the extraction child's command: save one record from a JSON file in the scratch directory,
                             then delete the file
   features.py tags          the tag list, most used first, which the extraction child reads before choosing tags
@@ -14,12 +14,12 @@ Commands:
                             directory, then delete it
   features.py readings      the user's notes and stated preferences waiting to be read into record features
   features.py read FILE     save those readings from a JSON file in the scratch directory, then delete it
-  features.py status        whether extraction needs the user's attention
+  features.py status        whether extraction needs the user's attention, and whether to ask the user to answer
+                            Compare questions
   features.py retry         try again every extraction and judgment given up after 3 attempts
-  features.py invite-compare ask for the first 5 to 8 pairwise answers through the messaging gateway, once ready
+  features.py compare-asked record that a conversation asked the user to answer 5 to 8 Compare questions
 
-Exit codes: 0 done (for status: no problem), 3 extraction needs attention or the invitation gateway is not connected,
-1 the input or a step failed, 2 usage error.
+Exit codes: 0 done (for status: no problem), 3 extraction needs attention, 1 the input or a step failed, 2 usage error.
 
 Hermes wakes the model whenever a cron script fails (cron/scheduler_prompt.py, "Script Error"), so run records its
 failures for status and ends with its wake decision instead.
@@ -45,7 +45,7 @@ SKILLS = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SKILLS / 'gallery' / 'scripts'))
 sys.path.insert(0, str(SKILLS / 'contact' / 'scripts'))
 
-from contact import NotConnected, tell_user, usable  # noqa: E402
+from contact import tell_user, usable  # noqa: E402
 from geodata import SourceUnavailable, fetch_stations  # noqa: E402
 from record import CATEGORIES, FLAGS, NOT_SHOWN, RATINGS, ROOM_TYPES, UNIT_LEVELS, choices, validate_judgments  # noqa: E402
 from scoring import labeled, stated_phrases  # noqa: E402
@@ -69,6 +69,9 @@ JUDGMENT_TEMPLATE = Path(__file__).resolve().parents[1] / 'judgment.md'
 MEDIA = SKILLS / 'gallery' / 'web' / 'media'
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36'
 EXTENSIONS = {'JPEG': 'jpg', 'PNG': 'png', 'WEBP': 'webp', 'GIF': 'gif'}
+COMPARE_INVITATION = ('Your first apartments are ready to compare. Please answer 5 to 8 questions in the gallery\'s Compare tab. '
+                      'For each pair, choose the apartment you prefer, or skip if you cannot decide. '
+                      'Your choices will count the next time you ask me to score and rerank.')
 
 
 class PhotosUnavailable(Exception):
@@ -164,9 +167,9 @@ def photo_overview(count):
 class RunState:
     """The job's records next to the listing store: the last run's problems, the listings whose photos could not be
     downloaded, since when and why, the transit feed whose stations could not be fetched, since when, when last tried
-    and why, the model reads the last run handed to the agent, how many judgment subagents its wake may start, and
-    when the Compare invitation was sent. A read handed over that still waits at the next run counts as a failed attempt
-    then, so an attempt counts only once its wake has ended."""
+    and why, the model reads the last run handed to the agent, and how many judgment subagents its wake may start. A
+    read handed over that still waits at the next run counts as a failed attempt then, so an attempt counts only once its
+    wake has ended."""
 
     def __init__(self, path):
         self.path = path
@@ -235,7 +238,7 @@ class Features:
         reading_lines, readings = self.reading_report(work, judgment_batches)
         handed = [extraction_read(listing['id'], listing['content_fingerprint']) for listing in tasks] + readings
         self.state.update(problems=problems, handed=handed, judgment_batches=judgment_batches)
-        problems += self.send_compare_invitation(problems)
+        problems += self.deliver_compare_invitation(problems)
         return [*lines, *extraction_lines, *reading_lines, *problems], bool(handed)
 
     @staticmethod
@@ -301,16 +304,23 @@ class Features:
         reads += [note_read(note) for note in work['notes']] + [preference_read(*item) for item in work['unread']]
         return lines, reads
 
-    def send_compare_invitation(self, problems):
-        """Sends the Compare invitation when it is due and the gateway is connected. A failure is recorded as one of the
-        run's problems and returned, and the invitation stays pending for the next run."""
+    def deliver_compare_invitation(self, problems):
+        """Delivers the Compare invitation once it is due and neither the gateway nor the gallery has: through the
+        messaging gateway when it is connected and no conversation has asked yet, otherwise in the gallery, whose
+        invitation the next conversation passes on. A failure is recorded as one of the run's problems and returned, and
+        the invitation stays pending for the next run."""
         try:
-            if self.compare_invitation_pending() and usable('gateway'):
-                self.invite_compare()
+            invitation = self.store.compare_invitation()
+            if invitation['due'] and not {'gateway', 'gallery'} & set(invitation['delivered']):
+                if 'conversation' not in invitation['delivered'] and usable('gateway'):
+                    tell_user(COMPARE_INVITATION)
+                    self.store.deliver_compare_invitation('gateway')
+                else:
+                    self.store.deliver_compare_invitation('gallery')
             return []
         except Exception as error:
-            problem = (f'The message that asks the user to answer questions in the Compare tab could not be sent, '
-                       f'so the next run sends it again. {failure(error)}')
+            problem = (f'The invitation to answer questions in the Compare tab could not be delivered, '
+                       f'so the next run tries again. {failure(error)}')
             self.state.update(problems=[*problems, problem])
             return [problem]
 
@@ -335,22 +345,26 @@ class Features:
         self.state.update(stations_unavailable=None)
         return [f'{len(stations)} rapid-transit stations fetched from {feed["url"]}.']
 
-    def compare_invitation_pending(self):
-        if self.state.load().get('compare_invited_at') or self.store.missing_settings():
-            return False
-        inputs = self.store.ranking_inputs()
-        return not inputs['pairs'] and sum(
-            listing['rankable'] and listing['record'] is not None and not listing['id'].startswith('sample:')
-            for listing in inputs['listings']) >= 2
+    def compare_asked(self):
+        """Records that a conversation asked the user to answer Compare questions, once."""
+        return {'recorded': self.store.deliver_compare_invitation('conversation')}
 
-    def invite_compare(self):
-        if not self.compare_invitation_pending():
-            return {'sent': False}
-        tell_user('Your first apartments are ready to compare. Please answer 5 to 8 questions in the gallery\'s Compare tab. '
-                  'For each pair, choose the apartment you prefer, or skip if you cannot decide. '
-                  'Your choices will count the next time you ask me to score and rerank.')
-        self.state.update(compare_invited_at=self.now().isoformat())
-        return {'sent': True}
+    def ask_to_compare(self):
+        """Whether a conversation should ask the user to answer Compare questions: the invitation is due, neither the
+        gateway nor a conversation has delivered it, and the gallery has, or the job's next run will deliver it there,
+        because the gateway is not connected. The gateway is checked only before the job has delivered the invitation,
+        so a conversation between the first records and that run asks too. A gateway check that fails counts as no
+        gateway, since the job's run could not send through it either."""
+        invitation = self.store.compare_invitation()
+        delivered = set(invitation['delivered'])
+        if not invitation['due'] or delivered & {'gateway', 'conversation'}:
+            return False
+        if 'gallery' in delivered:
+            return True
+        try:
+            return not usable('gateway')
+        except RuntimeError:
+            return True
 
     @staticmethod
     def reads(work):
@@ -570,7 +584,7 @@ class Features:
         problems = list(state['problems'])
         if self.store.missing_settings():
             return {'problems': problems, 'records': 0, 'waiting': 0, 'given_up': [], 'awaiting_judgment': 0, 'awaiting_reading': 0,
-                    'photos_unavailable': {}}
+                    'photos_unavailable': {}, 'ask_to_compare': False}
         work = self.outstanding()
         given_up = [listing['id'] for listing in work['extract_given_up']]
         if given_up:
@@ -598,7 +612,7 @@ class Features:
                                         for identifier, entry in stalled.items()) + '.')
         return {'problems': problems, 'records': len(work['records']), 'waiting': len(work['extract']), 'given_up': given_up,
                 'awaiting_judgment': len(work['judge']), 'awaiting_reading': len(work['notes']) + len(work['unread']),
-                'photos_unavailable': state['photos_unavailable']}
+                'photos_unavailable': state['photos_unavailable'], 'ask_to_compare': self.ask_to_compare()}
 
     def retry(self):
         self.store.reset_read_attempts()
@@ -640,7 +654,7 @@ def main(argv):
     reading.add_argument('file', type=Path, help='JSON object {"preferences": [...], "notes": [...]} in the scratch directory. Deleted once saved.')
     commands.add_parser('status')
     commands.add_parser('retry')
-    commands.add_parser('invite-compare')
+    commands.add_parser('compare-asked')
     arguments = parser.parse_args(argv)
     if arguments.command == 'run':
         return run()
@@ -650,8 +664,8 @@ def main(argv):
             report = features.status()
             print(json.dumps(report, ensure_ascii=False))
             return ATTENTION if report['problems'] else 0
-        if arguments.command == 'invite-compare':
-            print(json.dumps(features.invite_compare()))
+        if arguments.command == 'compare-asked':
+            print(json.dumps(features.compare_asked()))
         elif arguments.command == 'retry':
             features.retry()
             print('Every extraction and judgment given up is tried again from the next run.')
@@ -668,9 +682,6 @@ def main(argv):
             print(json.dumps(command(value), ensure_ascii=False))
             file.unlink()
         return 0
-    except NotConnected as error:
-        print(str(error), file=sys.stderr)
-        return 3
     except (ValueError, KeyError, OSError, sqlite3.Error, RuntimeError) as error:
         print(error.args[0] if isinstance(error, KeyError) else error, file=sys.stderr)
         return 1

@@ -204,15 +204,41 @@ class ReviewPassTests(ReviewTestCase):
         result = save_review(self.store, self.review(reasons=[valid]))
         self.assertEqual((result['reasons'], result['outcome']), (1, 'no moves'))
         favorite = self.ranked[first]['explanation']['similar_favorite']
-        expected = f'For it: {stated[0]} and {stated[1]}.' + (f' Most like your favorite {favorite["title"]}.' if favorite else '')
-        self.assertEqual(self.store.listing(first)['reason'], expected)
+        self.assertEqual(self.store.listing(first)['reason'], {'code_only': False, 'features': {'text': f'For it: {stated[0]} and {stated[1]}.'},
+                                                               'similar_favorite': favorite['title'] if favorite else None})
         self.assertEqual(self.store.listing(second)['reason'], self.ranked[second]['reason'])
 
-    def test_an_exploration_listing_keeps_its_mark_in_a_rewritten_reason(self):
+    def test_an_exploration_listing_keeps_its_mark_with_a_rewritten_reason(self):
         explored = next(identifier for identifier, entry in self.ranked.items() if entry['exploration'])
         value = next(part['value'] for part in self.ranked[explored]['explanation']['contributions'] if part['value'])
         save_review(self.store, self.review(reasons=[{'id': explored, 'reason': f'Worth it for [{value}].'}]))
-        self.assertTrue(self.store.listing(explored)['reason'].startswith(f'Shown to learn your taste. Worth it for {value}.'))
+        rewritten = self.store.listing(explored)
+        self.assertEqual((rewritten['exploration'], rewritten['reason']['features']), (True, {'text': f'Worth it for {value}.'}))
+
+    def test_the_task_describes_the_preferences_readings_and_labels_of_the_rerank_it_reviews(self):
+        """A note read, a preference stated and labels given after the rerank stay out of its review."""
+        reviewed = self.store.review_snapshot(self.summary['id'])
+        self.store.add_note('The galley kitchen is a shame.', listing_id=self.identifiers[7])
+        [note] = self.store.unread_notes()
+        self.store.save_readings(notes=[(note['id'], {'sentiment': 'negative', 'likes': [], 'dislikes': ['rating:kitchen_size', 'tag:galley kitchen']})])
+        self.store.update_settings(preferences={'likes': ['Lots of daylight'], 'dislikes': ['Galley kitchen']})
+        self.store.save_readings(preferences=[('dislike', 'Galley kitchen', [{'feature': 'rating:kitchen_size', 'direction': 'dislike'}])])
+        self.store.answer_pair(self.identifiers[8], self.identifiers[9])
+        self.store.feedback(self.identifiers[10], dismissed=True)
+        self.store.request_contact(self.identifiers[11])
+        self.assertEqual(self.store.review_snapshot(self.summary['id']), reviewed)
+        task = pending_review(self.store)
+        self.assertNotIn('Galley kitchen', json.dumps(task, ensure_ascii=False))
+        self.assertEqual(task['note_readings'], [])
+        self.assertEqual([(item['kind'], item['phrase']) for item in task['preferences']], [('like', 'Lots of daylight'), ('dislike', 'Carpet')])
+        self.assertEqual({name: count for name, count in task['state']['labels'].items() if name != 'favorites'},
+                         {'contact_requests': 0, 'dismissals': 0, 'positive_notes': 0, 'negative_notes': 0, 'pairwise_answers': 0})
+        self.assertEqual({entry['feature']: entry['starting_weight'] for entry in task['state']['largest_weights']},
+                         {entry['feature']: reviewed['inputs']['starting_weights'].get(entry['feature'], 0.0) for entry in task['state']['largest_weights']})
+        with self.assertRaisesRegex(ValueError, '"Galley kitchen" is not a stated dislike'):
+            save_review(self.store, self.review(flags=[{'id': self.by_rank(1), 'kind': 'dislike', 'preference': 'Galley kitchen'}]))
+        result = save_review(self.store, self.review(flags=[{'id': self.by_rank(1), 'kind': 'dislike', 'preference': 'Carpet'}]))
+        self.assertEqual([flag['preference'] for flag in result['flags']], ['Carpet'])
 
     def test_flags_and_findings_are_in_the_result_and_in_status(self):
         flagged = self.by_rank(4)

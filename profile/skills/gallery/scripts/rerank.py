@@ -9,8 +9,8 @@ import random
 import time
 
 from implicit_signals import diagnostic
-from review import citable_values, review_outcome, review_task, review_terms, validated_review
-from scoring import DEFAULT_HYPERPARAMETERS, fit_model, questions, rank_listings, stated_phrases
+from review import citable_values, review_inputs, review_outcome, review_task, review_terms, stated_preferences, validated_review
+from scoring import DEFAULT_HYPERPARAMETERS, fit_model, questions, rank_listings
 
 REVIEW_ATTEMPTS = 3
 
@@ -24,13 +24,14 @@ def rerank(store, *, seed=None):
     inputs = store.ranking_inputs(include_signals=True)
     model = fit_model(inputs)
     result = rank_listings(inputs, seed, model=model)
+    result['check']['inputs'] = review_inputs(inputs)
     result['summary']['implicit_signals'] = diagnostic(inputs, result['summary'], model)
     rerank_id = store.save_rerank(result)
     return {**store.rerank(rerank_id), 'seconds': round(time.perf_counter() - started, 3)}
 
 
 def waiting_review(store):
-    """The latest rerank and the scores its review's check reads, while that review waits, otherwise None."""
+    """The latest rerank and what it stored for its review, while that review waits, otherwise None."""
     last = store.last_rerank()
     if not last or not last['review'] or last['review']['state'] not in ('waiting', 'running'):
         return None
@@ -66,8 +67,7 @@ def save_review(store, value):
     inputs, ranked = store.ranking_inputs(), store.ranked_listings()
     records = {listing['id']: listing['record'] for listing in inputs['listings']}
     citable = {identifier: citable_values(entry['explanation'], records[identifier]) for identifier, entry in ranked.items()}
-    review = validated_review(value, last['id'], snapshot, citable, review_terms(store.tags(), last['weights']),
-                              set(stated_phrases(inputs['settings'])))
+    review = validated_review(value, last['id'], snapshot, citable, review_terms(store.tags(), last['weights']), stated_preferences(snapshot))
     ranks, reasons, result = review_outcome(inputs, snapshot, ranked, review)
     store.save_review(last['id'], ranks, reasons, result)
     return result

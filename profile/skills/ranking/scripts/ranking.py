@@ -48,7 +48,7 @@ def status(store):
 
 def explain(store, listing_id):
     details = store.listing(listing_id)
-    return {'id': listing_id, 'rank': details['rank'] if details['analysis_current'] else None, 'reason': details['reason'],
+    return {'id': listing_id, 'rank': details['rank'] if details['analysis_current'] else None, 'reason': details['reason'], 'unranked_reason': details['unranked_reason'],
             'exploration': details['exploration'], 'explanation': details['explanation'] if details['analysis_current'] else None}
 
 

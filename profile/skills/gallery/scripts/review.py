@@ -99,28 +99,56 @@ def shown_contributions(explanation):
     return [part for part in explanation['contributions'] if part['feature'] not in HIDDEN_FEATURES]
 
 
+def review_inputs(inputs):
+    """What the review task takes from a rerank's inputs, which the rerank stores with its waiting review, so a reading,
+    a preference or a label that arrives after the rerank cannot make the task describe a ranking the rerank did not
+    make: the stated preferences with their readings, the likes and dislikes of the note readings, each feature's
+    starting weight and the preferences that name it, and the counts of the labels other than favorites."""
+    readings = inputs['preference_readings']
+    phrases = stated_phrases(inputs['settings'])
+    stated_by = {}
+    for kind, phrase in phrases:
+        for item in readings.get((kind, phrase)) or []:
+            stated_by.setdefault(item['feature'], []).append(f'{kind} "{phrase}"')
+        if readings.get((kind, phrase)) == []:
+            stated_by.setdefault(f'preference:{phrase}', []).append(f'{kind} "{phrase}"')
+    return {
+        'preferences': [{'kind': kind, 'phrase': phrase, 'reading': readings.get((kind, phrase))} for kind, phrase in phrases],
+        'note_readings': [{'likes': reading['likes'], 'dislikes': reading['dislikes']} for reading in inputs['note_readings'].values()
+                          if reading['likes'] or reading['dislikes']],
+        'starting_weights': prior_means(inputs, [(kind, phrase) for kind, phrase in phrases if not expressed(readings, kind, phrase)]),
+        'stated_by': stated_by,
+        'labels': {
+            'contact_requests': sum(listing['contact'] for listing in inputs['listings']),
+            'dismissals': sum(listing['dismissed'] for listing in inputs['listings']),
+            'positive_notes': sum(sentiment == 'positive' for sentiment in inputs['sentiments'].values()),
+            'negative_notes': sum(sentiment == 'negative' for sentiment in inputs['sentiments'].values()),
+            'pairwise_answers': len(inputs['pairs']),
+        },
+    }
+
+
+def stated_preferences(snapshot):
+    """The stated preferences of the rerank a snapshot belongs to, as (kind, phrase)."""
+    return {(item['kind'], item['phrase']) for item in snapshot['inputs']['preferences']}
+
+
 def review_task(inputs, last, snapshot, ranked, tags):
     """The review's input: the top REVIEWED listings of the latest rerank, last, in the order of its snapshot, that
     have not changed since, each with what its record states and what moved its score; the stated preferences with
-    their readings; the note readings; and the ranking state with the tag list, tags, each with the number of listings
-    whose record uses it. ranked is each listing still ranked with its explanation. It holds no label and no favorite's
+    their readings, the note readings, the starting weights and the label counts the rerank used, from its snapshot;
+    and the state of the ranking with the tag list, tags, each with the number of listings whose record uses it. inputs
+    is the store now and ranked each listing still ranked with its explanation. It holds no label and no favorite's
     identity."""
     listings = {listing['id']: listing for listing in inputs['listings']}
     top = [identifier for identifier in snapshot['order'][:REVIEWED] if identifier in ranked]
-    settings, readings = inputs['settings'], inputs['preference_readings']
-    phrases = stated_phrases(settings)
-    starting = prior_means(inputs, [(kind, phrase) for kind, phrase in phrases if not expressed(readings, kind, phrase)])
-    named_by = {}
-    for kind, phrase in phrases:
-        for item in readings.get((kind, phrase)) or []:
-            named_by.setdefault(item['feature'], []).append(f'{kind} "{phrase}"')
-        if readings.get((kind, phrase)) == []:
-            named_by.setdefault(f'preference:{phrase}', []).append(f'{kind} "{phrase}"')
+    used = snapshot['inputs']
+    starting, stated_by = used['starting_weights'], used['stated_by']
     weights = {name: weight for name, weight in last['weights'].items() if name not in HIDDEN_FEATURES}
 
     def weight_entry(name):
         entry = {'feature': name, 'weight': round(weights[name], 3), 'starting_weight': starting.get(name, 0.0)}
-        return {**entry, 'stated': named_by[name]} if name in named_by else entry
+        return {**entry, 'stated': stated_by[name]} if name in stated_by else entry
 
     rankable = [listing for listing in inputs['listings'] if listing['rankable']]
     return {
@@ -132,19 +160,11 @@ def review_task(inputs, last, snapshot, ranked, tags):
                               if part['value'] is not None][:CONTRIBUTIONS_SHOWN],
             'reason': feature_reason(shown_contributions(ranked[identifier]['explanation'])),
         } for identifier in top],
-        'preferences': [{'kind': kind, 'phrase': phrase, 'reading': readings.get((kind, phrase))} for kind, phrase in phrases],
-        'note_readings': [{'likes': reading['likes'], 'dislikes': reading['dislikes']} for reading in inputs['note_readings'].values()
-                          if reading['likes'] or reading['dislikes']],
+        'preferences': used['preferences'],
+        'note_readings': used['note_readings'],
         'state': {
             'ranked': len(snapshot['order']),
-            'labels': {
-                'favorites': len(last['held_out']),
-                'contact_requests': sum(listing['contact'] for listing in inputs['listings']),
-                'dismissals': sum(listing['dismissed'] for listing in inputs['listings']),
-                'positive_notes': sum(sentiment == 'positive' for sentiment in inputs['sentiments'].values()),
-                'negative_notes': sum(sentiment == 'negative' for sentiment in inputs['sentiments'].values()),
-                'pairwise_answers': len(inputs['pairs']),
-            },
+            'labels': {'favorites': len(last['held_out']), **used['labels']},
             'held_out_ranks': {'ranks': sorted(item['rank'] for item in last['held_out']), 'median': last['held_out_median'],
                                'mean': last['held_out_mean'],
                                'ranked_listings_that_are_not_favorites': len(snapshot['order']) - len(set(snapshot['order']) & set(snapshot['held_out']))},
@@ -308,10 +328,9 @@ def review_outcome(inputs, snapshot, ranked, review):
     """What a validated review changes: each listing's rank, each rewritten reason, and the review's result. snapshot
     is what the rerank stored for the check and ranked each listing still ranked with its explanation."""
     listings = {listing['id']: listing for listing in inputs['listings']}
-    reasons = {identifier: compose_reason(features, exploration=identifier in snapshot['exploration'],
-                                          code_only=listings[identifier]['record'] is None,
+    reasons = {identifier: compose_reason({'text': text}, code_only=listings[identifier]['record'] is None,
                                           similar_favorite=ranked[identifier]['explanation']['similar_favorite'])
-               for identifier, features in review['reasons'].items()}
+               for identifier, text in review['reasons'].items()}
     order = reviewed_order(snapshot, review['moves'])
     exploration = set(snapshot['exploration'])
     score = dict(zip(snapshot['order'], snapshot['scores']))

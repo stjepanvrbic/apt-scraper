@@ -77,6 +77,9 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                         result = {'running': rerank_lock.locked(), 'last_rerank': store.last_rerank()}
                     elif path == '/api/compare':
                         result = comparison(store)
+                    elif path == '/api/compare/invitation':
+                        invitation = store.compare_invitation()
+                        result = {'shown': invitation['due'] and 'gallery' in invitation['delivered']}
                     elif path == '/api/listings':
                         result = store.browse(query.get('view', ['Rankings'])[0], page=int(query.get('page', ['1'])[0]),
                                               page_size=int(query.get('page_size', ['24'])[0]))

@@ -43,7 +43,7 @@ def browse(connection, view, page, page_size):
     items = []
     for row in rows:
         item = json.loads(row['data'])
-        item.update(photos=[row['photo']] if row['photo'] else [], rank=row['rank'], reason=row['reason'], exploration=bool(row['exploration']),
+        item.update(photos=[row['photo']] if row['photo'] else [], rank=row['rank'], reason=json.loads(row['reason']) if row['reason'] else None, exploration=bool(row['exploration']),
                     analysis_current=bool(row['analysis_current']), favorite=bool(row['favorite']), dismissed=bool(row['dismissed']),
                     contact={'status': row['contact_status'], 'channel': row['contact_channel'], 'error': row['contact_error']} if row['contact_status'] else None,
                     correspondence=[], correspondence_total=0, viewing=None)
@@ -92,7 +92,7 @@ def snapshot(connection):
                 for row in connection.execute('SELECT * FROM listings')}
     for row in connection.execute('SELECT * FROM ranking'):
         listing = listings[row['listing_id']]
-        listing.update(rank=row['rank'], reason=row['reason'], features=json.loads(row['features']) if row['features'] else None,
+        listing.update(rank=row['rank'], reason=json.loads(row['reason']) if row['reason'] else None, features=json.loads(row['features']) if row['features'] else None,
                        analysis_current=row['fingerprint'] == listing['content_fingerprint'])
     for row in connection.execute('SELECT * FROM feedback'):
         listings[row['listing_id']].update(favorite=bool(row['favorite']), dismissed=bool(row['dismissed']))
