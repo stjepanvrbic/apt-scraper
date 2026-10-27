@@ -114,20 +114,12 @@ try {
 Write-Step 'Google Workspace skill'
 Invoke-OnConsole $hermes @('-p', $ProfileName, 'skills', 'install', 'google-workspace', '--yes')
 
-# The account setup works through Hermes's browser tools in a visible window of the user's own
-# browser, started on a copy of its profile with their logins, so nothing needs a window in front.
-# `config get` fills in Hermes's defaults, so a kept config.yaml gains each setting while it has the
-# default value.
-Write-Step 'Browser for the account setup'
-foreach ($setting in @(
-        @('browser.backend', '', 'off'),
-        @('browser.use_real_profile', 'false', 'true'),
-        @('browser.headed', 'false', 'true'),
-        @('browser.real_profile_autoclose', 'false', 'true'))) {
-    $key, $default, $value = $setting
-    if ((Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', $key)).Trim() -eq $default) {
-        Invoke-OnConsole $hermes @('-p', $ProfileName, 'config', 'set', $key, $value)
-    }
+# The account setup and the contact forms use Hermes's built-in browser tools, which Hermes replaces
+# with browser_exec while browser.backend is unset. A kept config.yaml gains the setting only when it
+# names no backend of its own.
+Write-Step 'Browser tools'
+if (-not (Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', 'browser.backend')).Trim()) {
+    Invoke-OnConsole $hermes @('-p', $ProfileName, 'config', 'set', 'browser.backend', 'off')
 }
 
 # The search runs curl_cffi in an environment of its own, built from hash-pinned wheels with the Python

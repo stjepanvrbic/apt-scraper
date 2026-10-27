@@ -45,13 +45,29 @@ Never restart the gateway during your own turn, because the turn runs in it: `he
 
 ## The browser
 
-Do every step on a web page, Telegram included, with the browser tools: `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_press`, `browser_scroll` and `browser_back`. With this profile they drive a visible window of the user's own browser that Hermes starts on a copy of its profile, with the user's logins, apart from the windows the user works in. None of them needs the window in front, so the user keeps chatting and using the mouse while you work. Never use `computer_use` on a web page and never open one with `start` or `open`. `computer_use` is only for what no browser can do: macOS permission dialogs, macOS privacy settings and a terminal program. The Windows setup needs none of them.
+Do every step on a web page, Telegram included, with the browser tools: `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_press`, `browser_scroll` and `browser_back`. None of them needs the window in front, so the user keeps chatting and using the mouse while you work. Never use `computer_use` on a web page and never open one with `start` or `open`. `computer_use` is only for what no browser can do: macOS permission dialogs, macOS privacy settings and a terminal program. The Windows setup needs none of them.
 
-Act on the refs of the latest snapshot; `browser_navigate` returns one. When the user must act in the window, tell them in one line what to do there, then wait for the page to change: take a `browser_snapshot` about every 30 seconds, with `sleep 30` in the terminal in between, for up to 10 minutes, and carry on once it has. If it has not changed by then, ask in the chat and end your turn. The window stays open between turns.
+On their own, the browser tools drive a fresh browser without the user's logins, which the scheduled jobs use too. For the setup, turn on the user's own browser before your first browser action in every turn of the setup, and again whenever you start waiting for the user in the window:
 
-Your first `browser_navigate` in a conversation says which browser you got. With `used_real_profile`, the window has the user's logins. With `real_profile_unavailable`, it is a new browser without them: tell the user in one line, and they sign in there when a page asks. Such a window closes about two minutes after your last browser action, so keep checking while they sign in.
+```bash
+python "${HERMES_SKILL_DIR}/scripts/connections.py" browser on
+```
 
-On Windows, a running browser keeps its logins locked, so Hermes can copy them only while the browser is closed, the first time. Before your first browser action in a conversation on Windows, check for a copy:
+Hermes then copies the profile of the user's default browser (Chrome, Edge or Brave) and starts that browser on the copy, in a visible window apart from the windows the user works in. The listing correspondence job does not run meanwhile, because its contact forms would get the same browser.
+
+Turn it off again whenever the setup ends, however it ends: after the final `check`, when the user stops or declines the rest, when a step fails and you report it, and in a window without the user's logins as well. Then tell the user they can close your browser window.
+
+```bash
+python "${HERMES_SKILL_DIR}/scripts/connections.py" browser off
+```
+
+A setup that stops without `browser off` is turned off by the next `status`, and by the listing correspondence job, once 30 minutes have passed since the last `browser on`. Once it is off, Hermes deletes its copy of the user's profile at its next browser use, so the next setup copies the profile again.
+
+Act on the refs of the latest snapshot; `browser_navigate` returns one. When the user must act in the window, tell them in one line what to do there, then run `browser on` and wait for the page to change: take a `browser_snapshot` about every 30 seconds, with `sleep 30` in the terminal in between, for up to 10 minutes, and carry on once it has. If it has not changed by then, ask in the chat and end your turn. The window stays open between turns.
+
+Your first `browser_navigate` in a conversation says which browser you got. With `used_real_profile`, the window has the user's logins. With `real_profile_unavailable`, it is a new browser without them: tell the user in one line, and they sign in there when a page asks. Such a window closes about two minutes after your last browser action, so keep checking while they sign in. When your turn ends in such a window, for example while BotFather may show the token, the user may have to sign in to Telegram again in the next turn.
+
+On Windows, a running browser keeps its logins locked, so Hermes can copy them only while the browser is closed, once per setup. Before your first browser action in a conversation on Windows, after `browser on`, check for a copy:
 
 ```bash
 ls "$HERMES_HOME"/browser-profile/*/.hermes-snapshot-complete
@@ -62,7 +78,7 @@ If none exists, offer the user two ways and let them choose:
 1. You close their browser now. That closes every window of it, the dashboard chat included, and loses unsaved tabs. They reopen their browser after a minute, open the chat with the apt-scraper shortcut, and say "continue the connection setup". Meanwhile you open the first page in a window with their logins. On their OK, run `hermes -p apt-scraper browser close-profile`, then go on with the first page in the same turn.
 2. They keep their browser open and sign in to Google and Telegram in your window when a page asks.
 
-If `close-profile` fails, go on as in way 2. A later conversation reuses the copy, even while the browser runs.
+If `close-profile` fails, go on as in way 2. Until `browser off`, later conversations reuse the copy, even while the browser runs.
 
 ## The check
 
@@ -90,7 +106,7 @@ What each check proves:
 1. Run `check`. Tell the user in one line per channel what works and what doesn't.
 2. For each channel that is not connected, ask whether to set it up now, then follow its section below. Google first, then the gateway, then iMessage on macOS.
 3. After each section, run `check` for that channel. If it still fails, read the reason, fix that cause, and check again.
-4. Finish with `check` and report the final state. A channel the user chose to skip stays unused. Say so.
+4. Finish with `check`, run `browser off` as "The browser" says, and report the final state. A channel the user chose to skip stays unused. Say so.
 
 ## Google: Gmail and Calendar
 

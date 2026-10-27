@@ -4,11 +4,19 @@ Commands:
   connections.py check [CHANNEL ...] [--handle HANDLE]   run the checks with test messages, store and print
   connections.py status                                  print every channel, checking stale ones first
   connections.py require CHANNEL                         exit 0 only if CHANNEL is connected
+  connections.py browser on|off                          turn the account setup's browser on or off
 
 Channels: gmail, calendar, gateway, imessage. A stored result older than a day is stale, and a result
 that could not be checked is always stale. status and require check stale results again and never
 send a test message or test text. Exit codes: 0 every channel asked about is connected, 3 at least
 one is not, 1 the script itself failed, 2 usage error. Use a channel only on exit code 0.
+
+The account setup works in a visible window of the user's own browser, on a copy of its profile with their
+logins. Hermes reads the settings for that at every new browser session, from the profile's config.yaml, which
+the scheduled jobs share, so they are on only while a setup runs. `browser on` records the time and turns them
+on, `browser off` turns them off. `status`, and the listing correspondence job before every run, turn them off
+once the record is older than SETUP_BROWSER_IDLE, so a setup that stopped without `browser off` cannot leave
+them on, and that job does not run while a setup uses the browser.
 """
 
 from __future__ import annotations
@@ -60,6 +68,8 @@ KILL_WAIT_SECONDS = 5
 # Hermes stops a terminal command after 180 seconds by default (terminal.timeout). The budget plus
 # the bounded kill after a timeout stays inside that, so every channel gets a stored result.
 CHECK_BUDGET_SECONDS = 150
+SETUP_BROWSER_SETTINGS = ("browser.use_real_profile", "browser.headed", "browser.real_profile_autoclose")
+SETUP_BROWSER_IDLE = timedelta(minutes=30)
 OUT_OF_TIME = "The check ran out of time before reaching it. Check this connection on its own."
 
 
@@ -392,6 +402,48 @@ def usable(channel: str, record: dict) -> bool:
     return record["state"] == CONNECTED or (channel == "imessage" and record["state"] == UNAVAILABLE)
 
 
+def setup_browser_path() -> Path:
+    return hermes_home() / "apt-scraper" / "setup-browser"
+
+
+def set_setup_browser(value: str) -> None:
+    hermes = shutil.which("hermes")
+    if hermes is None:
+        raise RuntimeError("The hermes command is not on PATH.")
+    runner = Runner()
+    for key in SETUP_BROWSER_SETTINGS:
+        process = runner.run([hermes, "-p", "apt-scraper", "config", "set", key, value], "hermes config set")
+        if process.returncode != 0:
+            raise RuntimeError(f"Setting {key} to {value} failed: {last_line(process)}")
+
+
+def setup_browser_on() -> None:
+    """The record comes first, so the settings are never on without one."""
+    path = setup_browser_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+    set_setup_browser("true")
+
+
+def setup_browser_off() -> None:
+    """The record goes last, so a failure leaves it for the next try."""
+    set_setup_browser("false")
+    setup_browser_path().unlink(missing_ok=True)
+
+
+def setup_browser_running() -> bool:
+    """Whether a setup uses the browser now. A record older than SETUP_BROWSER_IDLE is a setup that stopped
+    without `browser off`: its settings are turned off here. Raises when that fails."""
+    try:
+        modified = datetime.fromtimestamp(setup_browser_path().stat().st_mtime, timezone.utc)
+    except FileNotFoundError:
+        return False
+    if datetime.now(timezone.utc) - modified <= SETUP_BROWSER_IDLE:
+        return True
+    setup_browser_off()
+    return False
+
+
 def command_check(channels: list[str], handle: str | None) -> int:
     runner = Runner()
     records = {}
@@ -404,6 +456,10 @@ def command_check(channels: list[str], handle: str | None) -> int:
 
 
 def command_status() -> int:
+    try:
+        setup_browser_running()
+    except (RuntimeError, OSError, CommandTimedOut, OutOfTime) as error:
+        print(f"The account setup's browser settings could not be turned off: {error}", file=sys.stderr)
     records = current_records(list(CHANNELS))
     for channel, record in records.items():
         print(describe(channel, record))
@@ -419,6 +475,19 @@ def command_require(channel: str) -> int:
     return NOT_CONNECTED
 
 
+def command_browser(state: str) -> int:
+    try:
+        if state == "on":
+            setup_browser_on()
+        else:
+            setup_browser_off()
+    except (RuntimeError, OSError, CommandTimedOut, OutOfTime) as error:
+        print(f"Turning the account setup's browser {state} failed: {error}", file=sys.stderr)
+        return 1
+    print(f"The account setup's browser is {state}.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check apt-scraper's account connections.")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -428,6 +497,8 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("status", help="print every channel, checking stale results without test messages")
     require = commands.add_parser("require", help="exit 0 only if the channel is connected")
     require.add_argument("channel", choices=CHANNELS)
+    browser = commands.add_parser("browser", help="turn the account setup's browser on or off")
+    browser.add_argument("state", choices=("on", "off"))
     arguments = parser.parse_args(argv)
     if arguments.command == "check":
         unknown = [channel for channel in arguments.channels if channel not in CHANNELS]
@@ -436,6 +507,8 @@ def main(argv: list[str] | None = None) -> int:
         return command_check(arguments.channels or list(CHANNELS), arguments.handle)
     if arguments.command == "status":
         return command_status()
+    if arguments.command == "browser":
+        return command_browser(arguments.state)
     return command_require(arguments.channel)
 
 
