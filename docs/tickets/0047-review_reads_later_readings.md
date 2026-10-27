@@ -16,8 +16,8 @@ The review task describes the ranking state of the rerank it reviews, so a prefe
 
 ## Acceptance
 
-- [ ] The task's preferences, note readings, starting weights and label counts come from the inputs the rerank used, stored with its waiting review as the check's scores are.
-- [ ] A test saves a note reading between a rerank and its review and checks that the review task does not contain it.
+- [x] The task's preferences, note readings, starting weights and label counts come from the inputs the rerank used, stored with its waiting review as the check's scores are.
+- [x] A test saves a note reading between a rerank and its review and checks that the review task does not contain it.
 - [ ] Merged to `main` through a reviewed pull request.
 
 ## Spec
@@ -30,4 +30,13 @@ The review task describes the ranking state of the rerank it reviews, so a prefe
 
 ## Deviations
 
+- The review's flags are also checked against the rerank's stated preferences, so a preference stated after the rerank cannot be flagged and one removed since can.
+- A review waiting when the store migrates fails with "apt-scraper was updated after this rerank. Rerank to get a review.", because its snapshot lacks the inputs.
+
 ## Result
+
+Delivered on branch `fix/e2e_ranking_bugs` at `de6f538`, in a pull request to `main`, not merged. `rerank` stores `review_inputs(inputs)` in the review's snapshot: the stated preferences with their readings, the note readings, the starting weights with the preferences that name them, and the label counts other than favorites. `review_task` and `save_review` read them from the snapshot, and the listings, tags and extraction state still come from the store when the task is handed over.
+
+Test: `test_the_task_describes_the_preferences_readings_and_labels_of_the_rerank_it_reviews` in `tests/test_review.py` saves a note reading, a new dislike with its reading, a pairwise answer, a dismissal and a contact request after the rerank. The task holds none of them, its starting weights are the snapshot's, and a flag on the new dislike is refused.
+
+`python -m unittest discover -s tests`: 554 tests; the only failure was the CPU-budget test `test_rerank_with_signals_meets_the_two_second_cpu_budget` at 2.09 s while the suite loaded the machine. It passes 3 of 3 runs alone, and a 300-listing rerank takes 1.69 to 1.70 s of CPU on both `main` and this branch. Playwright headless, all 40 specs pass. `ruff check profile tests`, `npm run lint`, `tsc` and `npm run build` are clean. Hermes's skill linter and skills guard give the same findings for `listing-features`, `ranking` and `gallery` as on `main`, and its context scanner passes `SOUL.md`, both changed skills and `review.md`. The new tests fail against `main`'s code.

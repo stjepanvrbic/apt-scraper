@@ -16,10 +16,10 @@ Each value a listing's reason or explanation names reads as one thing, so the st
 
 ## Acceptance
 
-- [ ] A reason that names the station distance keeps the station's name with its distance, such as "1.6 km to Logan Square station", and never puts a comma inside a value of the "For it" or "Against it" lists.
-- [ ] The review pass's citations of that value still match the explanation's value exactly.
-- [ ] A count is grammatical: "1 bathroom", "2 bathrooms".
-- [ ] Tests cover both values in `scoring.py`'s reason and explanation.
+- [x] A reason that names the station distance keeps the station's name with its distance, such as "1.6 km to Logan Square station", and never puts a comma inside a value of the "For it" or "Against it" lists.
+- [x] The review pass's citations of that value still match the explanation's value exactly.
+- [x] A count is grammatical: "1 bathroom", "2 bathrooms".
+- [x] Tests cover both values in `scoring.py`'s reason and explanation.
 - [ ] Merged to `main` through a reviewed pull request.
 
 ## Spec
@@ -32,4 +32,14 @@ Each value a listing's reason or explanation names reads as one thing, so the st
 
 ## Deviations
 
+- The fix is in the reason's construction, not its text: a reason is stored in parts, `{"code_only", "features": {"for": [...], "against": [...]} or {"text": ...}, "similar_favorite"}`, and the gallery renders each list's values as list items. A listing without a rank carries `unranked_reason` instead of a reason. `store.rank` takes the features part.
+- Prices and sizes keep their thousands separator ("2,450 USD a month"). Each value is its own list item, so the comma cannot split it, and the review cites these values exactly. No value the code composes from two facts holds a comma any more.
+- The migration rebuilds each ranked reason's lists from its stored explanation and keeps a reason a review rewrote as its text. Explanation values written before the change ("1 bathrooms", "..., Logan Square") stay until the next rerank.
+
 ## Result
+
+Delivered on branch `fix/e2e_ranking_bugs` at `de6f538`, in a pull request to `main`, not merged. `display` in `scoring.py` writes "1.6 km to Logan Square station" (a station named "... Station" is not named twice) and counts bedrooms, bathrooms and photos grammatically. `feature_reason` and `compose_reason` return the reason's parts, which the store keeps as JSON (migration `structured_reasons`), the review writes its text into, and `ListingReason` in `gallery/src/RankingExplanation.tsx` renders as "For it" and "Against it" lists on the card and in the details.
+
+Tests: `ReasonValueTests` in `tests/test_scoring.py` (station value in the explanation and in the against and for lists, a station named as a station, counts in the explanation and the reason, the review citing the value exactly), the migration in `tests/test_rerank.py`, and `gallery/tests/rerank.spec.ts`, which checks the list items on the card and in the details headless with a real station.
+
+`python -m unittest discover -s tests`: 554 tests; the only failure was the CPU-budget test `test_rerank_with_signals_meets_the_two_second_cpu_budget` at 2.09 s while the suite loaded the machine. It passes 3 of 3 runs alone, and a 300-listing rerank takes 1.69 to 1.70 s of CPU on both `main` and this branch. Playwright headless, all 40 specs pass. `ruff check profile tests`, `npm run lint`, `tsc` and `npm run build` are clean. Hermes's skill linter and skills guard give the same findings for `listing-features`, `ranking` and `gallery` as on `main`, and its context scanner passes `SOUL.md`, both changed skills and `review.md`. The new tests fail against `main`'s code.
