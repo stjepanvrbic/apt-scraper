@@ -52,3 +52,5 @@ Verified on Windows, Windows PowerShell 5.1:
 - `python -m pytest tests -q` from Git Bash: 604 passed, 277 subtests passed. `ruff check .` passed. The PowerShell parser reports 0 errors on `install.ps1` and `bootstrap.ps1`, and `bash -n` passes on `install.sh` and `bootstrap.sh`.
 
 Not run: the real `hermes gateway install`, the installers end to end, and anything on macOS. No real Hermes command was run, and the owner's Hermes root and profile were not touched.
+
+Delivered on `fix/installer_hides_questions` in [PR #42](https://github.com/stjepanvrbic/apt-scraper/pull/42), open for review.
