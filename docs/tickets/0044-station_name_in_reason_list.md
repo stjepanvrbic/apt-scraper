@@ -34,7 +34,7 @@ Each value a listing's reason or explanation names reads as one thing, so the st
 
 - The fix is in the reason's construction, not its text: a reason is stored in parts, `{"code_only", "features": {"for": [...], "against": [...]} or {"text": ...}, "similar_favorite"}`, and the gallery renders each list's values as list items. A listing without a rank carries `unranked_reason` instead of a reason. `store.rank` takes the features part.
 - Prices and sizes keep their thousands separator ("2,450 USD a month"). Each value is its own list item, so the comma cannot split it, and the review cites these values exactly. No value the code composes from two facts holds a comma any more.
-- The migration rebuilds each ranked reason's lists from its stored explanation and keeps a reason a review rewrote as its text. Explanation values written before the change ("1 bathrooms", "..., Logan Square") stay until the next rerank.
+- The migration rebuilds each ranked reason's lists from its stored explanation and keeps a reason a review rewrote as its text. The code-only mark is taken from the text the rerank wrote, not from whether the listing has a record now. Explanation values written before the change ("1 bathrooms", "..., Logan Square") stay until the next rerank.
 
 ## Result
 
@@ -43,3 +43,7 @@ Delivered on branch `fix/e2e_ranking_bugs` at `de6f538`, in a pull request to `m
 Tests: `ReasonValueTests` in `tests/test_scoring.py` (station value in the explanation and in the against and for lists, a station named as a station, counts in the explanation and the reason, the review citing the value exactly), the migration in `tests/test_rerank.py`, and `gallery/tests/rerank.spec.ts`, which checks the list items on the card and in the details headless with a real station.
 
 `python -m unittest discover -s tests`: 554 tests; the only failure was the CPU-budget test `test_rerank_with_signals_meets_the_two_second_cpu_budget` at 2.09 s while the suite loaded the machine. It passes 3 of 3 runs alone, and a 300-listing rerank takes 1.69 to 1.70 s of CPU on both `main` and this branch. Playwright headless, all 40 specs pass. `ruff check profile tests`, `npm run lint`, `tsc` and `npm run build` are clean. Hermes's skill linter and skills guard give the same findings for `listing-features`, `ranking` and `gallery` as on `main`, and its context scanner passes `SOUL.md`, both changed skills and `review.md`. The new tests fail against `main`'s code.
+
+Review fix at `df72c44`, after merging `main`: the `structured_reasons` migration took `code_only` from the current feature records, so a listing ranked code-only that got its record after the rerank lost the mark while its rank stayed code-only. It now takes the mark from the reason's text (`earlier_marks` in `schema.py`). Test: the migration test in `tests/test_rerank.py` ranks a listing given up on, saves its record after the rerank, and checks that the migrated reason keeps `code_only: true`.
+
+`python -m unittest discover -s tests`: 555 tests, all pass, none skipped. Playwright headless, all 40 specs pass. `ruff check profile tests`, `npm run lint`, `tsc` and `npm run build` are clean, and the build leaves the committed `web/` assets unchanged. The new and changed tests fail against `4ccdf64`.
