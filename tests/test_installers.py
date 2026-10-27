@@ -1343,6 +1343,7 @@ PROFILE_OUTSIDE_THE_PROFILE = {
      "with tempfile.NamedTemporaryFile('w', encoding='utf-8', suffix='.json', delete=False) as file:"): None,
     # Deleted when closed.
     ('skills/gallery/scripts/geodata.py', 'with tempfile.TemporaryFile() as file:'): None,
+    ('skills/ranking/scripts/measurement.py', "with tempfile.TemporaryDirectory(prefix='ranking-measure-') as directory:"): None,
     ('skills/gallery/scripts/launch.py', "return Path.home() / '.secrets' / 'apt-scraper' / 'gallery'"):
         {'uninstall.ps1': r'$Secrets = "$env:USERPROFILE\.secrets\apt-scraper"',
          'uninstall.sh': 'SECRETS="$HOME/.secrets/apt-scraper"'},

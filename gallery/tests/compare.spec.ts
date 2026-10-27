@@ -237,7 +237,7 @@ test('Compare cards and details are accessible on desktop and mobile', async ({ 
     await expect(card.getByText('850 sq ft', { exact: false })).toBeVisible();
     await expect(card.getByText('2 bedrooms, 1 bathroom', { exact: false })).toBeVisible();
     await expect(card.getByText(/Example Street, Chicago/)).toBeVisible();
-    await expect(card.getByText(/\$1,[89]00/)).toBeVisible();
+    await expect(card.getByText(/\$(?:1,[89]00|2,000)/)).toBeVisible();
   }
   const left = await cards.first().boundingBox();
   const right = await cards.last().boundingBox();

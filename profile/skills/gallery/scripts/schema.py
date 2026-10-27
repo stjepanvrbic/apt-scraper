@@ -202,8 +202,13 @@ def compare_invitation(connection):
     connection.execute('INSERT INTO compare_invitation (id, gateway) VALUES (1, ?)', (invited_at,))
 
 
+def learning_events(connection):
+    connection.execute('''CREATE TABLE learning_events (id INTEGER PRIMARY KEY, occurred_at TEXT NOT NULL,
+        kind TEXT NOT NULL, listing TEXT NOT NULL, other TEXT, inputs TEXT NOT NULL)''')
+
+
 MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals,
-              notes_session_per_database, structured_reasons, reviews_with_inputs, compare_invitation)
+              notes_session_per_database, structured_reasons, reviews_with_inputs, compare_invitation, learning_events)
 
 
 def migrate(connection):

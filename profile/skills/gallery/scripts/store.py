@@ -5,7 +5,7 @@ import os
 import re
 import sqlite3
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
@@ -14,6 +14,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from code_features import FEATURES, configured_transit_feed, store_all_code_features, store_code_features
+from learning import encode
 from schema import FINGERPRINT, LISTING_ID, MIGRATIONS, content_fingerprint, migrate
 from queries import RANKABLE, RANKING_EXCLUSION, answered_pairs, browse, paired, snapshot, user_noted, validate_page
 from record import SEED_TAGS, known_spelling, validate_extraction, validate_judgments
@@ -541,15 +542,16 @@ class ListingStore:
                     for row in connection.execute('''SELECT c.*, l.first_seen FROM code_features c
                         JOIN listings l ON l.id = c.listing_id AND l.fingerprint = c.fingerprint ORDER BY c.listing_id''')}
 
-    def ranking_inputs(self, *, include_signals=False):
+    def ranking_inputs(self, *, include_signals=False, connection=None):
         """Everything a rerank reads, from one snapshot of the store: each listing with its current feature record or
         None, its judgments of stated preferences, its code-derived features, the criteria areas whose search found it
         or None, whether extraction gave up on it, whether it is ranked (available, inside the criteria and not
         dismissed), its rank from the latest rerank when its content has not changed since, and the user's actions on it; the settings; the readings of the stated preferences by (kind,
         phrase) and of the user's notes by note id; each listing's latest note sentiment; the pairwise answers as
         (chosen, other); and the tag list. Completed visits are included only for the rerank's diagnostic check."""
-        with self.connect() as connection:
-            connection.execute('BEGIN')
+        with self.connect() if connection is None else nullcontext(connection) as connection:
+            if not connection.in_transaction:
+                connection.execute('BEGIN')
             settings = {row['name']: json.loads(row['value']) for row in connection.execute('SELECT * FROM settings')}
             attempts = {row['read']: row['attempts'] for row in connection.execute('SELECT * FROM model_reads')}
             records = {row['listing_id']: row for row in connection.execute(
@@ -816,6 +818,7 @@ class ListingStore:
                 if previous['chosen'] != chosen:
                     raise ValueError('This pair was already answered.')
                 return
+            self.record_learning_event(connection, 'pair', chosen, other)
             connection.execute('INSERT INTO pairwise_answers (chosen, other, answered_at) VALUES (?, ?, ?)',
                                (chosen, other, datetime.now(timezone.utc).isoformat()))
             self.advance_pairwise_skips(connection)
@@ -1089,6 +1092,11 @@ class ListingStore:
         with self.connect(write=True) as connection:
             self.require_listing(connection, listing_id)
             connection.execute('INSERT OR IGNORE INTO feedback (listing_id) VALUES (?)', (listing_id,))
+            previous = connection.execute('SELECT * FROM feedback WHERE listing_id = ?', (listing_id,)).fetchone()
+            if dismissed is not None and dismissed != bool(previous['dismissed']):
+                self.record_learning_event(connection, 'dismiss' if dismissed else 'restore', listing_id)
+            elif favorite is not None and favorite != bool(previous['favorite']) and not previous['dismissed']:
+                self.record_learning_event(connection, 'favorite' if favorite else 'unfavorite', listing_id)
             if favorite is not None:
                 connection.execute('UPDATE feedback SET favorite = ? WHERE listing_id = ?', (favorite, listing_id))
             if dismissed is not None:
@@ -1107,10 +1115,17 @@ class ListingStore:
     def request_contact(self, listing_id):
         with self.connect(write=True) as connection:
             self.require_listing(connection, listing_id)
+            if not connection.execute('SELECT 1 FROM contacts WHERE listing_id = ?', (listing_id,)).fetchone():
+                self.record_learning_event(connection, 'contact', listing_id)
             agent = connection.execute("SELECT json_extract(data, '$.agent') FROM listings WHERE id = ?", (listing_id,)).fetchone()[0]
             connection.execute('INSERT OR IGNORE INTO contacts (listing_id, status, requested_at, agent) VALUES (?, ?, ?, ?)',
                                (listing_id, 'pending', datetime.now(timezone.utc).isoformat(), agent))
             connection.execute("UPDATE contacts SET status = 'pending', error = NULL WHERE listing_id = ? AND status = 'failed'", (listing_id,))
+
+    def record_learning_event(self, connection, kind, listing, other=None):
+        connection.execute('INSERT INTO learning_events (occurred_at, kind, listing, other, inputs) VALUES (?, ?, ?, ?, ?)',
+                           (datetime.now(timezone.utc).isoformat(), kind, listing, other,
+                            encode(self.ranking_inputs(connection=connection))))
 
     def correspond(self, listing_id, direction, channel, text, *, external_message_id, external_thread_id=None):
         text = require_text(text, 'Message')
