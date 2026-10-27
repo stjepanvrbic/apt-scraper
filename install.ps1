@@ -22,6 +22,8 @@ function Write-Step([string]$Message) { Write-Host "==> $Message" -ForegroundCol
 # statement of its own, except those whose output this script reads, which run through Get-NativeOutput.
 # Windows PowerShell turns a native command's stderr into terminating errors under 'Stop' once output
 # is redirected, so native commands run under 'Continue' and fail on their exit code instead.
+# Get-NativeOutput returns what the command printed on stdout and shows its stderr. When the command
+# fails, the error carries both, since nothing else showed what it printed on stdout.
 function Invoke-OnConsole([string]$Exe, [string[]]$Arguments) {
     $ErrorActionPreference = 'Continue'
     & $Exe @Arguments
@@ -30,8 +32,13 @@ function Invoke-OnConsole([string]$Exe, [string[]]$Arguments) {
 
 function Get-NativeOutput([string]$Exe, [string[]]$Arguments, [switch]$AllowFailure) {
     $ErrorActionPreference = 'Continue'
-    $output = & $Exe @Arguments | Out-String
-    if ($LASTEXITCODE -ne 0 -and -not $AllowFailure) { throw "'$Exe $($Arguments -join ' ')' failed with exit code $LASTEXITCODE" }
+    $printed = & $Exe @Arguments 2>&1
+    $output = $printed | Where-Object { $_ -isnot [Management.Automation.ErrorRecord] } | Out-String
+    $errors = $printed | Where-Object { $_ -is [Management.Automation.ErrorRecord] } | ForEach-Object { "$_" } | Out-String
+    if ($LASTEXITCODE -ne 0 -and -not $AllowFailure) {
+        throw "'$Exe $($Arguments -join ' ')' failed with exit code $LASTEXITCODE. It printed:`n$output$errors"
+    }
+    if ($errors.Trim()) { Write-Host $errors.TrimEnd() }
     $output
 }
 
@@ -150,9 +157,73 @@ Invoke-OnConsole $hermes @('-p', $ProfileName, 'computer-use', 'status')
 # One gateway on the machine serves every profile. It runs the scheduled jobs, the messaging gateway
 # and every chat turn, including the dashboard's, so it starts at login and the search keeps running
 # while no chat is open. Hermes refuses gateway services for named profiles.
+# Installing the login entry and starting the gateway are two commands. `gateway install` asks whether
+# to open the UAC prompt for a Scheduled Task. On yes it hands the install to an elevated copy of Hermes
+# and returns, and that copy also starts the gateway when given --start-now, as administrator, where
+# no chat or dashboard of this user can reach it. On no it installs a Startup-folder entry itself.
+# Until the Scheduled Task or the Startup entry exists, `gateway start` offers to install again, so
+# the gateway is started by this unelevated `gateway start` once `gateway status` shows one of them.
 Write-Step 'Hermes gateway service'
-Invoke-OnConsole $hermes @('-p', 'default', 'gateway', 'install', '--if-missing', '--start-now', '--start-on-login')
+Invoke-OnConsole $hermes @('-p', 'default', 'gateway', 'install', '--if-missing', '--no-start-now', '--start-on-login')
+$loginEntryDeadline = (Get-Date).AddSeconds(120)
+$waiting = $false
+while (($gatewayStatus = Get-NativeOutput $hermes @('-p', 'default', 'gateway', 'status') -AllowFailure) -notmatch
+       'Scheduled Task registered|Windows login item installed') {
+    if ((Get-Date) -gt $loginEntryDeadline) {
+        throw ("The gateway's login entry did not appear within 2 minutes of 'hermes gateway install'. If you " +
+            "approved the UAC prompt, the administrator install did not finish. Run the install again, and answer " +
+            "n to the UAC question to use a Startup-folder entry, which needs no administrator approval. " +
+            "'hermes -p default gateway status' printed:`n$gatewayStatus")
+    }
+    if (-not $waiting) { Write-Host 'Waiting for the administrator install to add the gateway login entry...' }
+    $waiting = $true
+    Start-Sleep -Seconds 1
+}
 Invoke-OnConsole $hermes @('-p', 'default', 'gateway', 'start')
+
+# A gateway started as administrator, by an earlier install or by hand, keeps running where this
+# user's chats, dashboard and test message cannot reach it, and `gateway start` reports it as running.
+# `gateway ensure` names that state, as Hermes's own clients see it: gateway_elevated, or
+# gateway_other_session for one in another Windows logon session. Only an administrator can stop it,
+# and Hermes's `gateway stop` offers no UAC prompt, so the installer runs `gateway stop` elevated
+# through one, as Hermes's _launch_elevated_gateway_command runs its elevated commands: hidden, with
+# no console the user sees. There `gateway stop` cannot ask before it interrupts live sessions, so it
+# gets --yes, and the user is told before the prompt. Once that stop has exited and `gateway status`
+# shows no gateway, the gateway is started again, unelevated. Of Hermes's text, the installer shows
+# the sentence that names the gateway, not the remedy, which sends the user to an administrator prompt.
+function Get-GatewayRefusal {
+    $gateway = Get-NativeOutput $hermes @('-p', 'default', 'gateway', 'ensure', '--timeout', '60') -AllowFailure | ConvertFrom-Json
+    if ($gateway.reason_code -in @('gateway_elevated', 'gateway_other_session')) {
+        if ($gateway.detail -match '^.*?cannot reach it\.') { $Matches[0] } else { "$($gateway.detail)." }
+    }
+}
+$refusal = Get-GatewayRefusal
+if ($refusal) {
+    Write-Host $refusal
+    Write-Host ('Windows asks for administrator approval to stop it. Approving stops it, interrupting any ' +
+        'work it is doing, and the install starts it again without administrator rights.')
+    try {
+        $stopper = Start-Process -FilePath $hermes -ArgumentList @('-p', 'default', 'gateway', 'stop', '--yes') -Verb RunAs `
+            -WindowStyle Hidden -PassThru -ErrorAction Stop
+    } catch {
+        throw ("$refusal`nThe install cannot continue while it runs: the test message, the dashboard's chat and " +
+            'the search all go through the gateway, and nothing started without administrator rights can reach ' +
+            "this one. Stopping it needs administrator approval, which was not given ($($_.Exception.Message)). " +
+            'Run the install again and approve the prompt.')
+    }
+    $stopDeadline = (Get-Date).AddMinutes(2)
+    while (-not $stopper.HasExited -or
+           (Get-NativeOutput $hermes @('-p', 'default', 'gateway', 'status') -AllowFailure) -match 'Gateway (process|is) running') {
+        if ((Get-Date) -gt $stopDeadline) {
+            $exit = if ($stopper.HasExited) { "it exited with code $($stopper.ExitCode)" } else { 'it is still running' }
+            throw "$refusal`nThe administrator 'hermes gateway stop' did not stop it within 2 minutes: $exit."
+        }
+        Start-Sleep -Seconds 1
+    }
+    Invoke-OnConsole $hermes @('-p', 'default', 'gateway', 'start')
+    $refusal = Get-GatewayRefusal
+    if ($refusal) { throw "$refusal`nThe gateway still runs as administrator after it was stopped and started again." }
+}
 
 Write-Step 'Test message through the Claude subscription'
 $reply = Get-NativeOutput $hermes @('-p', $ProfileName, 'chat', '-q', 'Reply with exactly: ready', '--oneshot', '-Q')

@@ -170,7 +170,7 @@ Failures:
 | No messaging platform is set up | Steps 1 to 7 |
 | No test message has gone through yet | `check gateway`, then fix whatever it reports |
 | `No home channel set for telegram` | The `TELEGRAM_HOME_CHANNEL` command in step 6, then check again |
-| the gateway is not running | `hermes -p default gateway start`. If it reports no installed service, run `hermes -p default gateway install --start-now --start-on-login`. One gateway serves every profile, and Hermes refuses these commands with `-p apt-scraper` |
+| the gateway is not running | `hermes -p default gateway start`. If it reports no installed service, run `hermes -p default gateway install --no-start-now --start-on-login`, then `hermes -p default gateway start` again: on Windows, an install that starts the gateway after an administrator approval starts it as administrator, where no chat can reach it. One gateway serves every profile, and Hermes refuses these commands with `-p apt-scraper` |
 | Listing messaging platforms failed or returned unreadable output | Run `hermes -p apt-scraper send --list` and fix what it reports, or ask the user to run the apt-scraper installer again |
 | Any other test message failure | Read the error on the Telegram card of the Channels page. Step 4 if the bot chat was never started. If the token was mistyped or revoked, the user gets a new one from BotFather with `/token`, then step 7 with the new token |
 
