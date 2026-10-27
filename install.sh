@@ -157,9 +157,10 @@ fi
 
 # The first start builds the dashboard's web UI, so later starts need no npm. The dashboard keeps
 # running after this terminal closes. A dashboard that is already running prints its address and exits.
-# The launchers below start and open the dashboard at the address recorded here.
+# The launchers below start and open the dashboard at the address recorded here. The uninstaller removes
+# the dashboard's log by its name.
 step 'Hermes web dashboard'
-dashboard_log=$(mktemp)
+dashboard_log=$(mktemp "${TMPDIR:-/tmp}/apt-scraper-dashboard.XXXXXX")
 nohup hermes -p "$PROFILE_NAME" dashboard --no-open </dev/null >"$dashboard_log" 2>&1 &
 dashboard_pid=$!
 deadline=$((SECONDS + 900))

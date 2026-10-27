@@ -13,8 +13,10 @@ import tempfile
 import textwrap
 import threading
 import time
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 # Windows starts the first bash.exe it finds in System32, which is WSL's, before searching PATH.
@@ -1258,6 +1260,585 @@ class BootstrapTests(unittest.TestCase):
         self.assertTrue(asked, output)
         self.assertEqual(exit_code, 0, output)
         self.assertEqual(answers.read_text().splitlines(), ['"y"'])
+
+
+
+# Stands in for hermes in the uninstall tests: FAKE_HERMES, plus `profile delete` as Hermes 0.22.5 runs it
+# (hermes_cli/profiles.py delete_profile): it asks for the name unless given --yes, refuses a missing or deleted
+# name, marks the name in profiles/.deleted and removes the directory. The dashboard prints what a fresh one
+# does, `gateway status` prints FAKE_GATEWAY_STATUS, and `gateway uninstall` asks QUESTION unless
+# HERMES_NONINTERACTIVE is 1, as Hermes does when Windows refuses to remove the Scheduled Task.
+FAKE_UNINSTALL_HERMES = FAKE_HERMES + textwrap.dedent("""\
+    elif arguments[:2] == ['profile', 'delete']:
+        if '--yes' not in arguments and input(f"Type '{arguments[2]}' to confirm: ") != arguments[2]:
+            sys.exit('Cancelled.')
+        profile = profiles / arguments[2]
+        if not profile.is_dir() or (profiles / '.deleted' / arguments[2]).exists():
+            sys.exit(f"Error: Profile '{arguments[2]}' does not exist.")
+        (profiles / '.deleted').mkdir(exist_ok=True)
+        (profiles / '.deleted' / arguments[2]).write_text('deleted\\n')
+        shutil.rmtree(profile)
+    elif 'dashboard' in arguments:
+        print('Routing to the machine dashboard.')
+        print('HERMES_DASHBOARD_READY port=9119')
+    elif arguments[-2:] == ['gateway', 'status']:
+        print(os.environ.get('FAKE_GATEWAY_STATUS', 'Gateway service not installed'))
+    elif arguments[-2:] == ['gateway', 'uninstall'] and os.environ.get('HERMES_NONINTERACTIVE') != '1':
+        input(QUESTION)
+    """).replace('QUESTION', repr(QUESTION))
+PROFILE_DELETE = ['profile', 'delete', 'apt-scraper', '--yes']
+GATEWAY_STATUS_DEFAULT = ['-p', 'default', 'gateway', 'status']
+GATEWAY_UNINSTALL = ['-p', 'default', 'gateway', 'uninstall']
+HERMES_UNINSTALL = ['uninstall', '--yes']
+TASK_REGISTERED = f'Scheduled Task registered: {LOGIN_ENTRY}'
+ELEVATED_UNINSTALL = "Start-Process -FilePath $hermes -ArgumentList @('-p', 'default', 'gateway', 'uninstall') -Verb RunAs"
+# The elevated `gateway uninstall`, run without the UAC prompt and marked in its arguments.
+AS_ADMINISTRATOR = "Start-Process -FilePath $hermes -ArgumentList @('-p', 'default', 'gateway', 'uninstall', '--as-administrator')"
+UNINSTALL_LINE = '$text | Invoke-Expression'
+EVERYTHING_LINE = '& ([scriptblock]::Create($text)) -Everything'
+CLAUDE_UNINSTALL = 'https://code.claude.com/docs/en/setup#uninstall-claude-code'
+# A process that only waits: what stands in for the dashboard and the setup browser.
+WAITING = 'import time; time.sleep(120)'
+# Every line of the installers and the bootstraps that names a location outside the Hermes profile, with the line
+# of the uninstaller of the same platform that removes it, or None for what is not apt-scraper's to remove.
+OUTSIDE_THE_PROFILE = {
+    ('install.ps1', '$HermesRoot = "$env:LOCALAPPDATA\\hermes"'): '$HermesRoot = "$env:LOCALAPPDATA\\hermes"',
+    # The upstream installers' temporary directory, which the installer removes.
+    ('install.ps1', '$directory = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())'): None,
+    # Claude Code's, which stays.
+    ('install.ps1', '$env:Path = "$env:USERPROFILE\\.local\\bin;$env:Path"'): None,
+    ('install.ps1', '$hermes = "$env:LOCALAPPDATA\\hermes\\bin\\hermes.exe"'): '$hermes = "$HermesRoot\\bin\\hermes.exe"',
+    # The saved config.yaml, which the installer removes.
+    ('install.ps1', '$savedConfig = [IO.Path]::GetTempFileName()'): None,
+    ('install.ps1', '$dashboardLog = Join-Path ([IO.Path]::GetTempPath()) '
+                    '"apt-scraper-dashboard-$([IO.Path]::GetRandomFileName()).log"'):
+        "$DashboardLogs = Join-Path ([IO.Path]::GetTempPath()) 'apt-scraper-dashboard-*'",
+    ('install.ps1', '$programs = "$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs"'):
+        '$Programs = "$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs"',
+    ('bootstrap.ps1', "$Repository = Join-Path $env:LOCALAPPDATA 'apt-scraper\\repo'"):
+        '$DataDirectory = "$env:LOCALAPPDATA\\apt-scraper"',
+    ('install.sh', 'HERMES_ROOT="$HOME/.hermes"'): 'HERMES_ROOT="$HOME/.hermes"',
+    ('install.sh', 'export PATH="$HOME/.local/bin:$PATH"'): 'export PATH="$HOME/.local/bin:$PATH"',
+    ('install.sh', 'directory=$(mktemp -d)'): None,
+    ('install.sh', 'saved_config=$(mktemp)'): None,
+    ('install.sh', 'dashboard_log=$(mktemp "${TMPDIR:-/tmp}/apt-scraper-dashboard.XXXXXX")'):
+        'DASHBOARD_LOGS="${DASHBOARD_LOGS%/}/apt-scraper-dashboard."',
+    ('install.sh', 'dashboard_agent="$HOME/Library/LaunchAgents/$dashboard_label.plist"'):
+        'DASHBOARD_AGENT="$HOME/Library/LaunchAgents/$DASHBOARD_LABEL.plist"',
+    ('install.sh', 'app="$HOME/Applications/$PROFILE_NAME.app/Contents"'): 'APP="$HOME/Applications/$PROFILE_NAME.app"',
+    ('bootstrap.sh', 'REPOSITORY="$HOME/Library/Application Support/apt-scraper/repo"'):
+        'DATA_DIRECTORY="$HOME/Library/Application Support/apt-scraper"',
+}
+OUTSIDE = re.compile(r'\$env:(APPDATA|LOCALAPPDATA|USERPROFILE|TEMP|TMP)\b|GetTemp(Path|FileName)|\$HOME\b|mktemp|TMPDIR')
+# Every line of the profile's scripts that names a location outside the profile or a temporary file, with the line of
+# each uninstaller that removes it, or None for a file the script removes itself.
+PROFILE_OUTSIDE_THE_PROFILE = {
+    # Inside the profile, next to connections.json, which replaces it.
+    ('skills/account-connections/scripts/connections.py',
+     'handle, temporary = tempfile.mkstemp(dir=path.parent, prefix=".connections-", suffix=".json")'): None,
+    # Removed in the `finally` that follows.
+    ('skills/contact/scripts/contact.py',
+     "with tempfile.NamedTemporaryFile('w', encoding='utf-8', suffix='.txt', delete=False) as file:"): None,
+    ('skills/contact/scripts/contact.py',
+     "with tempfile.NamedTemporaryFile('w', encoding='utf-8', suffix='.json', delete=False) as file:"): None,
+    # Deleted when closed.
+    ('skills/gallery/scripts/geodata.py', 'with tempfile.TemporaryFile() as file:'): None,
+    ('skills/gallery/scripts/launch.py', "return Path.home() / '.secrets' / 'apt-scraper' / 'gallery'"):
+        {'uninstall.ps1': r'$Secrets = "$env:USERPROFILE\.secrets\apt-scraper"',
+         'uninstall.sh': 'SECRETS="$HOME/.secrets/apt-scraper"'},
+    ('skills/gallery/scripts/store.py', "directory = Path(os.environ['LOCALAPPDATA']) / 'apt-scraper'"):
+        {'uninstall.ps1': r'$DataDirectory = "$env:LOCALAPPDATA\apt-scraper"'},
+    ('skills/gallery/scripts/store.py', "directory = Path.home() / 'Library' / 'Application Support' / 'apt-scraper'"):
+        {'uninstall.sh': 'DATA_DIRECTORY="$HOME/Library/Application Support/apt-scraper"'},
+}
+PROFILE_OUTSIDE = re.compile(r'Path\.home\(\)|expanduser|environ\[.(LOCALAPPDATA|APPDATA|USERPROFILE|HOME|TEMP|TMP|TMPDIR).\]'
+                             r'|getenv\(|tempfile\.|gettempdir|\$env:|\$HOME\b|~/|mktemp|TMPDIR')
+
+
+class UninstallTests(unittest.TestCase):
+    """Each uninstaller, run as its one line runs it, against a fake hermes, fake login entries and fake processes
+    on a machine in a temporary directory: LOCALAPPDATA, APPDATA, TEMP and USERPROFILE for Windows, HOME and TMPDIR
+    for macOS. What it runs cannot reach a real hermes: on Windows its PATH holds the fakes and System32, on macOS
+    the fakes and Git Bash's tools."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.folder = Path(directory.name)
+        self.machine = self.folder / 'machine'
+        self.tools = self.folder / 'bin'
+        self.tools.mkdir()
+        self.calls = self.folder / 'calls'
+        self.other_calls = self.folder / 'other-calls'
+        self.processes = self.folder / 'processes'
+        self.processes.write_text('')
+        (self.folder / 'hermes.py').write_text(FAKE_UNINSTALL_HERMES, encoding='utf-8')
+        fake = [sys.executable, str(self.folder / 'hermes.py'), str(self.calls)]
+        (self.tools / 'hermes.cmd').write_text('@' + ' '.join(f'"{part}"' for part in fake) + ' %*\r\n')
+        record = f'printf "%s\\n" "$(basename "$0") $*" >> "{self.other_calls.as_posix()}"\n'
+        fakes = {
+            'hermes': 'exec ' + ' '.join(f'"{Path(part).as_posix()}"' for part in fake) + ' "$@"\n',
+            'claude': record,
+            'launchctl': record,
+            'uname': 'echo Darwin\n',
+            'open': record,
+            # Lists the processes in self.processes as `ps -A -o pid= -o command=` does.
+            'ps': f'cat "{self.processes.as_posix()}"\n',
+        }
+        for name, body in fakes.items():
+            (self.tools / name).write_text(f'#!/bin/sh\n{body}', newline='\n')
+            (self.tools / name).chmod(0o755)
+        (self.tools / 'claude.cmd').write_text(f'@echo claude %*>>"{self.other_calls}"\r\n')
+
+    def calls_made(self) -> list[list[str]]:
+        """The fake hermes's calls since the last time they were read."""
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+        self.calls.unlink(missing_ok=True)
+        return calls
+
+    def other_calls_made(self) -> list[str]:
+        """The other fakes' calls since the last time they were read."""
+        calls = self.other_calls.read_text().splitlines() if self.other_calls.exists() else []
+        self.other_calls.unlink(missing_ok=True)
+        return calls
+
+    def without_hermes(self):
+        (self.tools / 'hermes.cmd').unlink()
+        (self.tools / 'hermes').unlink()
+
+    def places(self, platform: str) -> dict[str, Path]:
+        """Where each platform keeps what apt-scraper, Hermes and Claude Code put on the machine."""
+        if platform == 'windows':
+            local = self.machine / 'LocalAppData'
+            programs = self.machine / 'AppData' / 'Microsoft' / 'Windows' / 'Start Menu' / 'Programs'
+            return {'hermes': local / 'hermes', 'data': local / 'apt-scraper', 'temp': self.machine / 'Temp',
+                    'user': self.machine / 'UserProfile', 'login': programs / 'Startup' / 'apt-scraper dashboard.lnk',
+                    'shortcut': programs / 'apt-scraper.lnk', 'log': self.machine / 'Temp' / 'apt-scraper-dashboard-x1.log'}
+        home = self.machine / 'home'
+        return {'hermes': home / '.hermes', 'data': home / 'Library' / 'Application Support' / 'apt-scraper',
+                'temp': self.machine / 'tmp', 'user': home, 'login': home / LAUNCH_AGENT, 'shortcut': home / APP,
+                'log': self.machine / 'tmp' / 'apt-scraper-dashboard.x1'}
+
+    def profile(self, platform: str) -> Path:
+        return self.places(platform)['hermes'] / 'profiles' / 'apt-scraper'
+
+    def mark(self, platform: str) -> Path:
+        return self.places(platform)['hermes'] / 'profiles' / '.deleted' / 'apt-scraper'
+
+    def environment(self, platform: str) -> dict[str, str]:
+        places = self.places(platform)
+        for place in ('hermes', 'temp', 'user'):
+            places[place].mkdir(parents=True, exist_ok=True)
+        environment = {**os.environ, 'HERMES_HOME': str(places['hermes']), 'PYTHONIOENCODING': 'utf-8'}
+        environment.pop('HERMES_NONINTERACTIVE', None)
+        if platform == 'windows':
+            return {**environment, 'LOCALAPPDATA': str(self.machine / 'LocalAppData'),
+                    'APPDATA': str(self.machine / 'AppData'), 'TEMP': str(places['temp']), 'TMP': str(places['temp']),
+                    'USERPROFILE': str(places['user']),
+                    'PATH': os.pathsep.join([str(self.tools), str(Path(os.environ['SystemRoot']) / 'System32')])}
+        return {**environment, 'HOME': places['user'].as_posix(), 'TMPDIR': places['temp'].as_posix(),
+                'PATH': os.pathsep.join([str(self.tools), str(Path(BASH).parent)])}
+
+    def keep(self, platform: str) -> list[str]:
+        """Puts what Hermes and Claude Code keep of their own on the machine, which no uninstall touches, and
+        returns every file on the machine."""
+        shutil.rmtree(self.machine, ignore_errors=True)
+        places = self.places(platform)
+        self.environment(platform)
+        claude = places['user'] / '.local' / 'bin' / ('claude.exe' if platform == 'windows' else 'claude')
+        for path in (places['hermes'] / 'config.yaml', places['hermes'] / '.env',
+                     places['hermes'] / 'profiles' / 'apt-scraper-other' / 'config.yaml',
+                     places['hermes'] / 'profiles' / '.deleted' / 'other', claude,
+                     places['user'] / '.local' / 'share' / 'claude' / 'versions' / '2.1.284',
+                     places['user'] / '.claude.json', places['user'] / '.claude' / 'settings.json',
+                     places['temp'] / 'hermes-dashboard-x1.log', places['user'] / '.secrets' / 'other' / 'token.json'):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('kept\n')
+        return self.files()
+
+    def install(self, platform: str):
+        """Puts on the machine what the installer, the bootstrap, the profile and the gallery leave there."""
+        places = self.places(platform)
+        profile = self.profile(platform)
+        for path in ('config.yaml', 'distribution.yaml', 'dashboard-address', 'dashboard.vbs', 'google_token.json',
+                     'cron/jobs.json', 'apt-scraper/connections.json', 'apt-scraper/browser/Default/Cookies',
+                     'browser-profile/brave/Default/Cookies', 'workspace/gallery/listings.sqlite3',
+                     'workspace/search/environment/pyvenv.cfg', 'plugins/claude-subscription-directsdk/plugin.yaml'):
+            (profile / path).parent.mkdir(parents=True, exist_ok=True)
+            (profile / path).write_text('apt-scraper\n')
+        for path in (places['data'] / 'listings.sqlite3', places['data'] / 'sample.sqlite3',
+                     places['data'] / 'repo' / '.git' / 'HEAD', places['data'] / 'repo' / 'install.ps1',
+                     places['login'], places['log'], places['log'].with_name(places['log'].name + '.err')):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('apt-scraper\n')
+        if platform == 'macos':
+            (places['shortcut'] / 'MacOS').mkdir(parents=True)
+            (places['shortcut'] / 'MacOS' / 'apt-scraper').write_text('apt-scraper\n')
+        else:
+            places['shortcut'].write_text('apt-scraper\n')
+        self.save_gallery_connection(platform)
+
+    def files(self) -> list[str]:
+        return sorted(path.relative_to(self.machine).as_posix() for path in self.machine.rglob('*') if path.is_file())
+
+    def run_uninstall(self, platform: str, everything: bool = False, replacements: dict[str, str] | None = None,
+                      prelude: str = '', environment: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+        """Runs the uninstaller as its one line does, with each of `replacements` made once in its text. On Windows,
+        `prelude` runs before the line in the same session."""
+        environment = {**self.environment(platform), **(environment or {})}
+        if platform == 'windows':
+            text = (ROOT / 'uninstall.ps1').read_text(encoding='utf-8')
+            for old, new in (replacements or {}).items():
+                self.assertEqual(text.count(old), 1, old)
+                text = text.replace(old, new)
+            script = self.folder / 'uninstall.ps1'
+            script.write_text(text, encoding='utf-8')
+            line = EVERYTHING_LINE if everything else UNINSTALL_LINE
+            command = [shutil.which('powershell'), '-NoProfile', '-Command',
+                       f"$text = Get-Content -Raw -LiteralPath '{script}'; {prelude}{line}"]
+            return subprocess.run(command, env=environment, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                  encoding='utf-8', errors='replace', timeout=120)
+        arguments = ['--everything'] if everything else []
+        return subprocess.run([BASH, '-s', '--', *arguments], input=(ROOT / 'uninstall.sh').read_text(encoding='utf-8'),
+                              env=environment, capture_output=True, text=True, encoding='utf-8', errors='replace',
+                              timeout=120)
+
+    def shell_home(self) -> str:
+        """The macOS HOME as the uninstaller spells it: Git Bash spells HOME its own way."""
+        return subprocess.run([BASH, '-c', 'printf %s "$HOME"'], env=self.environment('macos'), capture_output=True,
+                              text=True, check=True).stdout
+
+    def assert_removed(self, result: subprocess.CompletedProcess, kept: list[str]):
+        """apt-scraper is gone, asking nothing, and only what Hermes and Claude Code keep is left."""
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.files(), kept)
+        self.assertNotIn(QUESTION.strip(), result.stdout + result.stderr)
+        self.assertNotIn('Type ', result.stdout + result.stderr)
+
+    def test_the_uninstallers_remove_everything_apt_scraper_put_on_the_machine_through_hermes(self):
+        for platform in ('windows', 'macos'):
+            with self.subTest(platform):
+                kept = self.keep(platform)
+                self.install(platform)
+                result = self.run_uninstall(platform)
+                self.assert_removed(result, kept)
+                self.assertEqual(self.calls_made(), [PROFILE_DELETE])
+                output = result.stdout
+                self.assertLess(output.index('This removes apt-scraper from this computer:'), output.index('==> '))
+                for hint in ('Hermes, the Hermes gateway service and Claude Code stay.', '  hermes gateway uninstall\n',
+                             '  hermes uninstall\n', CLAUDE_UNINSTALL):
+                    self.assertIn(hint, output)
+                other_calls = self.other_calls_made()
+                if platform == 'macos':
+                    uid = subprocess.run([BASH, '-c', 'id -u'], capture_output=True, text=True, check=True).stdout.strip()
+                    self.assertEqual(other_calls, [f'launchctl bootout gui/{uid}/{LAUNCH_AGENT_LABEL}'])
+                else:
+                    self.assertEqual(other_calls, [])
+
+    def test_the_uninstallers_skip_what_is_missing_so_they_run_twice(self):
+        for platform in ('windows', 'macos'):
+            with self.subTest(platform):
+                kept = self.keep(platform)
+                self.install(platform)
+                for calls in ([PROFILE_DELETE], []):
+                    result = self.run_uninstall(platform)
+                    self.assert_removed(result, kept)
+                    self.assertEqual(self.calls_made(), calls)
+                    self.assertEqual(result.stderr, '')
+                self.other_calls_made()
+
+    def test_the_uninstallers_remove_the_profile_and_the_rest_without_hermes(self):
+        self.without_hermes()
+        for platform in ('windows', 'macos'):
+            with self.subTest(platform):
+                kept = self.keep(platform)
+                if platform == 'macos':
+                    self.assertNotEqual(subprocess.run([BASH, '-c', 'command -v hermes'], env=self.environment(platform),
+                                                       capture_output=True).returncode, 0)
+                self.install(platform)
+                self.assert_removed(self.run_uninstall(platform), kept)
+                self.assert_removed(self.run_uninstall(platform, everything=True), kept)
+                self.assertEqual(self.calls_made(), [])
+                self.other_calls_made()
+
+    def test_the_uninstallers_remove_what_is_left_of_a_profile_hermes_deleted_and_its_mark(self):
+        for platform in ('windows', 'macos'):
+            with self.subTest(platform):
+                kept = self.keep(platform)
+                (self.profile(platform) / 'workspace').mkdir(parents=True)
+                (self.profile(platform) / 'workspace' / 'left.txt').write_text('left\n')
+                self.mark(platform).write_text('deleted\n')
+                self.assert_removed(self.run_uninstall(platform), kept)
+                self.assertEqual(self.calls_made(), [])
+                self.other_calls_made()
+
+    def test_the_uninstallers_with_everything_also_uninstall_the_gateway_service_and_hermes_but_not_claude_code(self):
+        cases = (('macos', {}, [PROFILE_DELETE, GATEWAY_UNINSTALL, HERMES_UNINSTALL]),
+                 ('windows', {}, [PROFILE_DELETE, GATEWAY_STATUS_DEFAULT, GATEWAY_UNINSTALL, HERMES_UNINSTALL]),
+                 ('windows', {'FAKE_GATEWAY_STATUS': TASK_REGISTERED},
+                  [PROFILE_DELETE, GATEWAY_STATUS_DEFAULT, [*GATEWAY_UNINSTALL, '--as-administrator'], HERMES_UNINSTALL]))
+        for platform, environment, calls in cases:
+            with self.subTest(platform, **environment):
+                kept = self.keep(platform)
+                self.install(platform)
+                replacements = {ELEVATED_UNINSTALL: AS_ADMINISTRATOR} if platform == 'windows' else None
+                result = self.run_uninstall(platform, everything=True, environment=environment, replacements=replacements)
+                self.assert_removed(result, kept)
+                self.assertEqual(self.calls_made(), calls)
+                self.assertNotIn('claude', ' '.join(self.other_calls_made()))
+                self.assertLess(result.stdout.index('It also removes the Hermes gateway service and Hermes.'),
+                                result.stdout.index('==> '))
+                self.assertIn(CLAUDE_UNINSTALL, result.stdout)
+                self.assertNotIn('or run this line again', result.stdout)
+
+    def test_the_powershell_uninstaller_stops_before_hermes_when_the_uac_prompt_for_the_gateway_is_declined(self):
+        kept = self.keep('windows')
+        self.install('windows')
+        result = self.run_uninstall('windows', everything=True, environment={'FAKE_GATEWAY_STATUS': TASK_REGISTERED},
+                                    replacements={ELEVATED_UNINSTALL: 'Deny-Elevation'}, prelude=DECLINED)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        errors = re.sub(r'\s+', ' ', result.stderr)
+        self.assertIn("apt-scraper is removed. The gateway's Scheduled Task stays", errors)
+        self.assertIn('Run this again with -Everything and approve the prompt.', errors)
+        self.assertEqual(self.files(), kept)
+        self.assertEqual(self.calls_made(), [PROFILE_DELETE, GATEWAY_STATUS_DEFAULT])
+
+    def test_the_powershell_uninstaller_leaves_the_session_it_runs_in_as_it_was(self):
+        self.keep('windows')
+        self.install('windows')
+        result = self.run_uninstall('windows', environment={'HERMES_NONINTERACTIVE': 'kept'}, prelude=(
+            "$ErrorActionPreference = 'Continue'; $text | Invoke-Expression | Out-Null; "
+            '"session: $ErrorActionPreference $env:HERMES_NONINTERACTIVE '
+            '$([bool](Get-Command Write-Step -ErrorAction SilentlyContinue)) '
+            '$([bool](Get-Variable ProfileHome -ErrorAction SilentlyContinue))"; return; '))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('session: Continue kept False False', result.stdout)
+        self.assertEqual(self.calls_made(), [PROFILE_DELETE])
+
+    def waiting(self, *command: str) -> subprocess.Popen:
+        process = subprocess.Popen(list(command), creationflags=subprocess.CREATE_NO_WINDOW)
+        self.addCleanup(lambda: (process.kill(), process.wait()))
+        return process
+
+    def test_the_powershell_uninstaller_stops_only_what_apt_scraper_starts(self):
+        self.keep('windows')
+        self.install('windows')
+        profile = self.profile('windows')
+        data = self.places('windows')['data']
+        launcher = self.places('windows')['hermes'] / 'bin' / 'hermes.py'
+        elsewhere = self.folder / 'elsewhere' / 'hermes.py'
+        gallery = profile / 'skills' / 'gallery' / 'scripts' / 'gallery.py'
+        for path in (launcher, elsewhere, gallery):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(WAITING)
+        # cscript runs the login entry's launcher as wscript does, without a window.
+        (profile / 'dashboard.vbs').write_text('WScript.Sleep 120000\r\n')
+        python = sys.executable
+        stopped = [self.waiting(python, '-c', WAITING, '--remote-debugging-port=9333',
+                                f'--user-data-dir={profile}\\apt-scraper\\browser', '--no-first-run'),
+                   self.waiting(python, '-c', WAITING, f'--user-data-dir={profile}\\browser-profile\\brave'),
+                   self.waiting('cscript', '//nologo', str(profile / 'dashboard.vbs')),
+                   self.waiting(python, str(gallery), '--database', str(data / 'listings.sqlite3'), '--port', '8765', 'serve'),
+                   self.waiting(python, str(launcher), '-p', 'apt-scraper', 'dashboard', '--no-open'),
+                   self.waiting(python, str(launcher), '--profile=apt-scraper', 'chat')]
+        # Bystanders whose command lines name the profile, and processes of another profile or another Hermes.
+        running = [self.waiting(python, '-c', WAITING, str(profile / 'config.yaml')),
+                   self.waiting(python, '-c', WAITING, str(profile)),
+                   self.waiting(python, '-c', WAITING, str(profile / 'dashboard.vbs')),
+                   self.waiting(python, '-c', WAITING, f'--user-data-dir={profile}-other\\browser'),
+                   self.waiting(python, '-c', WAITING, f'--user-data-dir={profile}\\apt-scraper\\browser-old'),
+                   self.waiting(python, str(gallery), 'open'),
+                   self.waiting(python, str(elsewhere), '-p', 'apt-scraper', 'dashboard'),
+                   self.waiting(python, str(launcher), '-p', 'apt-scraper-other', 'dashboard')]
+        result = self.run_uninstall('windows')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for process in stopped:
+            self.assertIsNotNone(process.poll(), process.args)
+        for process in running:
+            self.assertIsNone(process.poll(), process.args)
+        self.assertFalse(data.exists())
+
+    def test_the_shell_uninstaller_stops_only_what_apt_scraper_starts(self):
+        self.keep('macos')
+        self.install('macos')
+        home = self.shell_home()
+        root = f'{home}/.hermes'
+        profile = f'{root}/profiles/apt-scraper'
+        data = f'{home}/Library/Application Support/apt-scraper'
+        brave = '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser'
+        venv = f'{root}/hermes-agent/venv/bin'
+        listed = [
+            (True, f'{brave} --remote-debugging-port=9333 --user-data-dir={profile}/apt-scraper/browser --no-first-run'),
+            (True, f'{brave} --user-data-dir={profile}/browser-profile/brave'),
+            (True, f'{venv}/python3 {profile}/skills/gallery/scripts/gallery.py --database {data}/listings.sqlite3 '
+                   '--port 8765 serve'),
+            (True, f'{venv}/python3 {data}/repo/profile/skills/gallery/scripts/gallery.py --port 8765 --sample serve'),
+            (True, f'{venv}/python3 {home}/.local/bin/hermes -p apt-scraper dashboard --no-open --port 9119'),
+            (True, f'{venv}/hermes --profile=apt-scraper chat'),
+            # Bystanders whose command lines name the profile, and processes of another profile or another Hermes.
+            (False, f'vim {profile}/config.yaml'),
+            (False, f'tail -f {profile}/logs/agent.log'),
+            (False, f'/opt/homebrew/bin/python3 -c pass {profile}'),
+            (False, f'{brave} --user-data-dir={profile}-other/browser'),
+            (False, f'{venv}/python3 {profile}/skills/gallery/scripts/gallery.py open'),
+            (False, '/opt/homebrew/bin/python3 /Users/someone/.local/bin/hermes -p apt-scraper dashboard'),
+            (False, '/usr/local/bin/hermes --profile apt-scraper dashboard'),
+            (False, f'{venv}/hermes -p apt-scraper-other dashboard'),
+            (False, f'{venv}/python3 {home}/.local/bin/hermes gateway run'),
+        ]
+        processes, lines = [], []
+        for number, (stops, command) in enumerate(listed):
+            pid_file = self.folder / f'pid-{number}'
+            process = subprocess.Popen([BASH, '-c', f'echo $$ > "{pid_file.as_posix()}"; exec sleep 120'])
+            self.assertTrue(wait_for(lambda: pid_file.exists() and pid_file.read_text().strip()))
+            pid = pid_file.read_text().strip()
+            self.addCleanup(lambda pid=pid, process=process: (
+                subprocess.run([BASH, '-c', f'kill {pid} 2>/dev/null'], check=False), process.wait(10)))
+            processes.append((command, process, stops))
+            lines.append(f'{pid:>6} {command}')
+        self.processes.write_text('\n'.join(lines) + '\n', newline='\n')
+        result = self.run_uninstall('macos')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for command, process, stops in processes:
+            if stops:
+                self.assertIsNotNone(process.wait(15), command)
+            else:
+                self.assertIsNone(process.poll(), command)
+
+    # The uninstallers kept in step with what the bootstraps, the installers and the gallery create.
+
+    def test_every_location_the_installers_write_outside_the_profile_is_removed_or_left_on_purpose(self):
+        found = {(name, line.strip()) for name in ('install.ps1', 'install.sh', 'bootstrap.ps1', 'bootstrap.sh')
+                 for line in (ROOT / name).read_text(encoding='utf-8').splitlines() if OUTSIDE.search(line)}
+        self.assertEqual(found, set(OUTSIDE_THE_PROFILE))
+        for (name, _), removal in OUTSIDE_THE_PROFILE.items():
+            if removal is not None:
+                uninstaller = 'uninstall.ps1' if name.endswith('.ps1') else 'uninstall.sh'
+                self.assertIn(removal, (ROOT / uninstaller).read_text(encoding='utf-8'), name)
+
+    def test_every_location_the_profile_scripts_write_outside_the_profile_is_removed_or_left_on_purpose(self):
+        profile = ROOT / 'profile'
+        found = {(path.relative_to(profile).as_posix(), line.strip())
+                 for path in sorted(profile.rglob('*'))
+                 if path.suffix in ('.py', '.sh', '.ps1', '.vbs') and 'web' not in path.relative_to(profile).parts
+                 for line in path.read_text(encoding='utf-8').splitlines() if PROFILE_OUTSIDE.search(line)}
+        self.assertEqual(found, set(PROFILE_OUTSIDE_THE_PROFILE))
+        for (name, _), removals in PROFILE_OUTSIDE_THE_PROFILE.items():
+            for uninstaller, removal in (removals or {}).items():
+                self.assertIn(removal, (ROOT / uninstaller).read_text(encoding='utf-8'), name)
+
+    def gallery_scripts(self):
+        scripts = str(ROOT / 'profile' / 'skills' / 'gallery' / 'scripts')
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+            self.addCleanup(sys.path.remove, scripts)
+
+    def on_the_machine(self, platform: str, hermes_home: Path | None = None):
+        """The environment the profile's scripts see on the machine of `platform`, in this process."""
+        user = str(self.places(platform)['user'])
+        environment = {'LOCALAPPDATA': str(self.machine / 'LocalAppData'), 'USERPROFILE': user, 'HOME': user}
+        if hermes_home:
+            environment['HERMES_HOME'] = str(hermes_home)
+        patched = mock.patch.dict(os.environ, environment)
+        patched.start()
+        if not hermes_home:
+            os.environ.pop('HERMES_HOME', None)
+        return patched
+
+    def store_paths(self, platform: str) -> list[Path]:
+        """Where the gallery's store keeps its files: in the profile under Hermes, in the data directory without."""
+        self.gallery_scripts()
+        import store
+        paths = []
+        for hermes_home in (self.profile(platform), None):
+            patched = self.on_the_machine(platform, hermes_home)
+            try:
+                with mock.patch.object(sys, 'platform', 'win32' if platform == 'windows' else 'darwin'):
+                    paths += [store.store_path(), store.store_path(sample=True)]
+            finally:
+                patched.stop()
+        return paths
+
+    def save_gallery_connection(self, platform: str) -> Path:
+        """Saves a gallery connection as the gallery does each time it opens, in the machine's home."""
+        self.gallery_scripts()
+        import launch
+        patched = self.on_the_machine(platform, self.profile(platform))
+        try:
+            # Never the owner's own .secrets.
+            self.assertTrue(launch.secrets_directory().is_relative_to(self.machine), launch.secrets_directory())
+            server = types.SimpleNamespace(server_port=8765, access_token='test-token')
+            launch.save_connection(self.places(platform)['data'] / 'listings.sqlite3', server)
+            return launch.connection_file(self.places(platform)['data'] / 'listings.sqlite3', 8765)
+        finally:
+            patched.stop()
+
+    def install_through_the_installer(self, platform: str) -> subprocess.CompletedProcess:
+        """Runs the bootstrap with a fake git, then the installer's own locations, its profile step, its dashboard
+        step and its login step against the fake hermes, and writes the gallery's stores where the store puts them."""
+        environment = self.environment(platform)
+        template = self.folder / 'template'
+        source = self.folder / 'checkout' / 'apt-scraper'
+        for path, text in ((template / '.git' / 'HEAD', 'ref\n'), (template / 'install.ps1', 'exit 0\r\n'),
+                           (template / 'install.sh', 'exit 0\n'), (source / 'config.yaml', DISTRIBUTION_CONFIG),
+                           (source / 'distribution.yaml', 'name: apt-scraper\n')):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, newline='')
+        (self.folder / 'git.py').write_text(FAKE_GIT)
+        git = [sys.executable, self.folder / 'git.py', self.folder / 'git-calls', template]
+        if platform == 'windows':
+            (self.tools / 'git.cmd').write_text('@' + ' '.join(f'"{part}"' for part in git) + ' %*\r\n')
+            bootstrap = subprocess.run([shutil.which('powershell'), '-NoProfile', '-Command',
+                                        f"Get-Content -Raw -LiteralPath '{ROOT / 'bootstrap.ps1'}' | Invoke-Expression"],
+                                       env=environment, capture_output=True, text=True, timeout=60)
+            self.assertEqual(bootstrap.returncode, 0, bootstrap.stdout + bootstrap.stderr)
+            dashboard = section('install.ps1', "Write-Step 'Hermes web dashboard'", CLOSING_POWERSHELL)
+            self.assertEqual(dashboard.count('Start-Process $chatUrl'), 1)
+            script = self.folder / 'install.ps1'
+            script.write_text(section('install.ps1', "$ErrorActionPreference = 'Stop'", "Write-Step 'Claude Code'")
+                              + f"$ProfileSource = '{source}'\n$hermes = '{self.tools / 'hermes.cmd'}'\n"
+                              + section('install.ps1', 'Write-Step "Hermes profile', '# The account connections use')
+                              + dashboard.replace('Start-Process $chatUrl', ''), encoding='utf-8-sig')
+            result = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)],
+                                    env=environment, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+        else:
+            (self.tools / 'git').write_text('#!/bin/sh\nexec ' + ' '.join(f'"{Path(part).as_posix()}"' for part in git)
+                                            + ' "$@"\n', newline='\n')
+            (self.tools / 'git').chmod(0o755)
+            bootstrap = subprocess.run([BASH, '-s'], input=(ROOT / 'bootstrap.sh').read_text(encoding='utf-8'),
+                                       env=environment, capture_output=True, text=True, timeout=60)
+            self.assertEqual(bootstrap.returncode, 0, bootstrap.stdout + bootstrap.stderr)
+            script = self.folder / 'install.sh'
+            script.write_text(section('install.sh', 'set -euo pipefail', "step 'Claude Code'")
+                              + f"PROFILE_SOURCE='{source.as_posix()}'\n"
+                              + section('install.sh', 'step "Hermes profile', '# The account connections use')
+                              + section('install.sh', "step 'Hermes web dashboard'", CLOSING_SHELL), newline='\n')
+            result = subprocess.run([BASH, script.as_posix()], env=environment, stdin=subprocess.DEVNULL,
+                                    capture_output=True, text=True, timeout=120)
+        for path in self.store_paths(platform):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('listings\n')
+        self.assertTrue(self.save_gallery_connection(platform).is_file())
+        return result
+
+    def test_the_uninstallers_remove_everything_the_bootstraps_the_installers_and_the_gallery_create(self):
+        for platform in ('windows', 'macos'):
+            with self.subTest(platform):
+                kept = self.keep(platform)
+                result = self.install_through_the_installer(platform)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                created = set(self.files()) - set(kept)
+                places = self.places(platform)
+                for place in ('data', 'login', 'shortcut'):
+                    self.assertTrue(places[place].exists(), place)
+                self.assertTrue(any(path.startswith(places['temp'].relative_to(self.machine).as_posix()
+                                                    + '/apt-scraper-dashboard') for path in created), created)
+                self.assertTrue((self.profile(platform) / 'dashboard-address').exists())
+                self.calls_made()
+                self.other_calls_made()
+                self.assert_removed(self.run_uninstall(platform), kept)
+                self.assertEqual(self.calls_made(), [PROFILE_DELETE])
+                self.other_calls_made()
 
 
 if __name__ == '__main__':
