@@ -4,6 +4,9 @@
   "prequential": {
     "held_out": [],
     "known_positive_actions": [],
+    "rank_definition": "Refitted model rank over the historical candidate set, for model comparisons.",
+    "displayed_median_rank": null,
+    "displayed_median_interval": null,
     "median_rank": null,
     "median_interval": null,
     "top_20": null,

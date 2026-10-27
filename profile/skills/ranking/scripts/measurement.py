@@ -76,11 +76,14 @@ def replay(events, fitter=fit_model):
             already_positive = previous is not None and previous[0] == 1
             destination = known_positive if already_positive else held_out
             destination.append({'listing': identifier, 'kind': event['kind'], 'rank': order.index(identifier) + 1,
-                                'candidates': len(order), 'already_positive': already_positive})
+                                'displayed_rank': listing['rank'], 'candidates': len(order), 'already_positive': already_positive})
     ranks = [item['rank'] for item in held_out]
+    displayed = [item['displayed_rank'] for item in held_out]
     top = [int(rank <= 20) for rank in ranks]
     pair_count = sum(event['kind'] == 'pair' for event in events)
     return {'held_out': held_out, 'known_positive_actions': known_positive,
+            'rank_definition': 'Refitted model rank over the historical candidate set, for model comparisons.',
+            'displayed_median_rank': median(displayed) if displayed else None, 'displayed_median_interval': bootstrap(displayed),
             'median_rank': median(ranks) if ranks else None, 'median_interval': bootstrap(ranks),
             'top_20': fmean(top) if top else None, 'top_20_interval': bootstrap(top, fmean),
             'pairwise_answers': pair_count, 'pairwise_scored': len(answers), 'pairwise_ties': ties,

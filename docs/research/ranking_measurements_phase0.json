@@ -18,7 +18,10 @@
       "pairwise_accuracy": null,
       "pairwise_interval": null,
       "pairwise_interval_90": null,
-      "excluded": 50
+      "excluded": 50,
+      "displayed_median_rank": null,
+      "displayed_median_interval": null,
+      "rank_definition": "Refitted model rank over the historical candidate set, for model comparisons."
     },
     "leave_one_out": {
       "zillow:0000": 208,
@@ -2395,6 +2398,7 @@
         "listing": "zillow:0003",
         "kind": "favorite",
         "rank": 19,
+        "displayed_rank": 21,
         "candidates": 24,
         "already_positive": false
       },
@@ -2402,6 +2406,7 @@
         "listing": "zillow:0008",
         "kind": "favorite",
         "rank": 2,
+        "displayed_rank": 2,
         "candidates": 24,
         "already_positive": false
       },
@@ -2409,6 +2414,7 @@
         "listing": "zillow:0014",
         "kind": "favorite",
         "rank": 10,
+        "displayed_rank": 11,
         "candidates": 24,
         "already_positive": false
       },
@@ -2416,6 +2422,7 @@
         "listing": "zillow:0021",
         "kind": "favorite",
         "rank": 14,
+        "displayed_rank": 16,
         "candidates": 24,
         "already_positive": false
       },
@@ -2423,11 +2430,18 @@
         "listing": "zillow:0005",
         "kind": "contact",
         "rank": 19,
+        "displayed_rank": 21,
         "candidates": 24,
         "already_positive": false
       }
     ],
     "known_positive_actions": [],
+    "rank_definition": "Refitted model rank over the historical candidate set, for model comparisons.",
+    "displayed_median_rank": 16,
+    "displayed_median_interval": [
+      2,
+      21
+    ],
     "median_rank": 14,
     "median_interval": [
       2,

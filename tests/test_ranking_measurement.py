@@ -6,13 +6,14 @@ import sqlite3
 import sys
 import unittest
 from unittest import mock
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/ranking/scripts'))
 
 from test_rerank import StoreTestCase, fill  # noqa: E402
 from test_scoring import GARDEN, entry, garden_neighborhood, inputs, neighborhood  # noqa: E402
-from scoring import DEFAULT_HYPERPARAMETERS, questions  # noqa: E402
+from scoring import DEFAULT_HYPERPARAMETERS, fit_model, questions  # noqa: E402
 from measurement import agreement, bootstrap, garden, pair_accuracy, replay, simulate, store_report, wilson  # noqa: E402
 from extraction_retest import collect, prepare  # noqa: E402
 from test_feature_record import extraction  # noqa: E402
@@ -20,9 +21,36 @@ from ranking_experiments import write_report  # noqa: E402
 from rerank import rerank  # noqa: E402
 from learning import decode, encode  # noqa: E402
 from schema import MIGRATIONS, compress_learning_events  # noqa: E402
+from rescore_ranking_feedback import validate_saved_curves  # noqa: E402
 
 
 class MeasurementTests(unittest.TestCase):
+    def test_refitted_and_displayed_ranks_are_distinct_for_alternative_models(self):
+        snapshot = inputs([entry('a', price=1000), entry('b', price=2000), entry('c', price=3000)])
+        for number, listing in enumerate(snapshot['listings'], 1):
+            listing['rank'] = number
+        event = {'kind': 'favorite', 'listing': 'a', 'other': None, 'inputs': snapshot}
+        def expensive_first(inputs):
+            model = fit_model(inputs)
+            weights = [0.0] * len(model.fit.weights)
+            weights[model.design.index('price') + 1] = 2
+            return replace(model, fit=replace(model.fit, weights=weights))
+        def cheap_first(inputs):
+            model = expensive_first(inputs)
+            return replace(model, fit=replace(model.fit, weights=[-weight for weight in model.fit.weights]))
+        expensive, cheap = replay([event], expensive_first), replay([event], cheap_first)
+        self.assertEqual(expensive['held_out'][0]['rank'], 3)
+        self.assertEqual(cheap['held_out'][0]['rank'], 1)
+        self.assertEqual(expensive['held_out'][0]['displayed_rank'], 1)
+        self.assertEqual(expensive['displayed_median_rank'], cheap['displayed_median_rank'])
+
+    def test_rescoring_rejects_truncated_or_nonfinite_saved_curves(self):
+        source = {'runs': 1, 'curves': [{'labels': 0}, {'labels': 5}], 'run_curves': [[0.5, 0.6]]}
+        trajectories = [{'pairs': [('a', 'b')] * 5}]
+        self.assertEqual(validate_saved_curves(source, trajectories), [0, 5])
+        for curves in ([], [[]], [[0.5]], [[0.5, float('nan')]]):
+            with self.assertRaises(ValueError):
+                validate_saved_curves({**source, 'run_curves': curves}, trajectories)
     def test_bootstrap_uses_symmetric_tail_indices(self):
         with mock.patch('measurement.random.Random') as generator:
             generator.return_value.choices.side_effect = [[1], [2], [3], [4]]
