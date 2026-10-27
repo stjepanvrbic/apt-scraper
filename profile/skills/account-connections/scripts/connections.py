@@ -4,7 +4,8 @@ Commands:
   connections.py check [CHANNEL ...] [--handle HANDLE]   run the checks with test messages, store and print
   connections.py status                                  print every channel, checking stale ones first
   connections.py require CHANNEL                         exit 0 only if CHANNEL is connected
-  connections.py browser on|off                          turn the account setup's browser on or off
+  connections.py browser on|off|status                   turn the account setup's browser on or off, or
+                                                         exit 0 only if no setup uses it
 
 Channels: gmail, calendar, gateway, imessage. A stored result older than a day is stale, and a result
 that could not be checked is always stale. status and require check stale results again and never
@@ -16,7 +17,8 @@ logins. Hermes reads the settings for that at every new browser session, from th
 the scheduled jobs share, so they are on only while a setup runs. `browser on` records the time and turns them
 on, `browser off` turns them off. `status`, and the listing correspondence job before every run, turn them off
 once the record is older than SETUP_BROWSER_IDLE, so a setup that stopped without `browser off` cannot leave
-them on, and that job does not run while a setup uses the browser.
+them on. That job does not start a run while a setup uses the browser, `browser on` exits 4 while a run of it
+goes, and its contact forms check `browser status` first.
 """
 
 from __future__ import annotations
@@ -31,8 +33,14 @@ import sys
 import tempfile
 import time
 from datetime import datetime, timedelta, timezone
+from contextlib import contextmanager
 from functools import cache
 from pathlib import Path
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 NOT_CONNECTED = 3
 
@@ -70,6 +78,10 @@ KILL_WAIT_SECONDS = 5
 CHECK_BUDGET_SECONDS = 150
 SETUP_BROWSER_SETTINGS = ("browser.use_real_profile", "browser.headed", "browser.real_profile_autoclose")
 SETUP_BROWSER_IDLE = timedelta(minutes=30)
+SETUP_LOCK_WAIT_SECONDS = 60
+# A listing correspondence run that never reached the job's next gate, such as one the gateway's exit cut off,
+# stops holding the browser back after this long.
+CONTACT_RUN_LIMIT = timedelta(hours=1)
 OUT_OF_TIME = "The check ran out of time before reaching it. Check this connection on its own."
 
 
@@ -417,31 +429,113 @@ def set_setup_browser(value: str) -> None:
             raise RuntimeError(f"Setting {key} to {value} failed: {last_line(process)}")
 
 
-def setup_browser_on() -> None:
-    """The record comes first, so the settings are never on without one."""
-    path = setup_browser_path()
+def contact_run_path() -> Path:
+    return hermes_home() / "apt-scraper" / "contact-run"
+
+
+class BrowserBusy(Exception):
+    pass
+
+
+@contextmanager
+def setup_lock():
+    """Held around every change of the setup record, the settings and the contact run record, because `hermes
+    config set` rewrites config.yaml without a lock of its own. The operating system releases the lock of a
+    process that dies, and waiting for it ends after SETUP_LOCK_WAIT_SECONDS."""
+    path = hermes_home() / "apt-scraper" / "setup-browser.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
-    set_setup_browser("true")
+    with open(path, "a+b") as handle:
+        deadline = time.monotonic() + SETUP_LOCK_WAIT_SECONDS
+        while True:
+            try:
+                handle.seek(0)
+                if os.name == "nt":
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() > deadline:
+                    raise RuntimeError("Another change of the account setup's browser did not finish in time.") from None
+                time.sleep(0.1)
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def record_age(path: Path) -> timedelta | None:
+    try:
+        return timedelta(seconds=time.time() - path.stat().st_mtime)
+    except FileNotFoundError:
+        return None
+
+
+def setup_browser_on() -> None:
+    """The record comes first, so the settings are never on without one. Refused while a listing
+    correspondence run goes, because its next contact form would get the same browser."""
+    with setup_lock():
+        age = record_age(contact_run_path())
+        if age is not None and age <= CONTACT_RUN_LIMIT:
+            raise BrowserBusy("A listing correspondence run is filling in contact forms. Try again in a minute.")
+        path = setup_browser_path()
+        path.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+        set_setup_browser("true")
+
+
+def turn_off(seen: int | None) -> None:
+    """Under the lock. The record goes last, so a failure leaves it for the next try. A record rewritten since it
+    was seen at modification time `seen` belongs to a setup that turned the browser on again, which keeps it."""
+    set_setup_browser("false")
+    try:
+        current = setup_browser_path().stat().st_mtime_ns
+    except FileNotFoundError:
+        return
+    if seen is not None and current != seen:
+        set_setup_browser("true")
+        return
+    setup_browser_path().unlink(missing_ok=True)
 
 
 def setup_browser_off() -> None:
-    """The record goes last, so a failure leaves it for the next try."""
-    set_setup_browser("false")
-    setup_browser_path().unlink(missing_ok=True)
+    with setup_lock():
+        turn_off(None)
+
+
+def running_under_lock() -> bool:
+    try:
+        seen = setup_browser_path().stat().st_mtime_ns
+    except FileNotFoundError:
+        return False
+    if time.time() - seen / 1e9 <= SETUP_BROWSER_IDLE.total_seconds():
+        return True
+    turn_off(seen)
+    return setup_browser_path().exists()
 
 
 def setup_browser_running() -> bool:
     """Whether a setup uses the browser now. A record older than SETUP_BROWSER_IDLE is a setup that stopped
     without `browser off`: its settings are turned off here. Raises when that fails."""
-    try:
-        modified = datetime.fromtimestamp(setup_browser_path().stat().st_mtime, timezone.utc)
-    except FileNotFoundError:
+    if not setup_browser_path().exists():
         return False
-    if datetime.now(timezone.utc) - modified <= SETUP_BROWSER_IDLE:
+    with setup_lock():
+        return running_under_lock()
+
+
+def contact_job_gate(due: bool) -> bool:
+    """The listing correspondence job's wake decision. Hermes runs a job's pre-run script only while no run of
+    that job goes, so the previous run's record is cleared first. The job wakes only with work and while no
+    setup uses the browser, and the run it starts is recorded, so `browser on` waits for it to end."""
+    with setup_lock():
+        contact_run_path().unlink(missing_ok=True)
+        if running_under_lock() or not due:
+            return False
+        contact_run_path().write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
         return True
-    setup_browser_off()
-    return False
 
 
 def command_check(channels: list[str], handle: str | None) -> int:
@@ -477,10 +571,17 @@ def command_require(channel: str) -> int:
 
 def command_browser(state: str) -> int:
     try:
+        if state == "status":
+            running = setup_browser_running()
+            print("The account setup uses the user's browser." if running else "No account setup uses the browser.")
+            return NOT_CONNECTED if running else 0
         if state == "on":
             setup_browser_on()
         else:
             setup_browser_off()
+    except BrowserBusy as busy:
+        print(busy)
+        return 4
     except (RuntimeError, OSError, CommandTimedOut, OutOfTime) as error:
         print(f"Turning the account setup's browser {state} failed: {error}", file=sys.stderr)
         return 1
@@ -497,8 +598,8 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("status", help="print every channel, checking stale results without test messages")
     require = commands.add_parser("require", help="exit 0 only if the channel is connected")
     require.add_argument("channel", choices=CHANNELS)
-    browser = commands.add_parser("browser", help="turn the account setup's browser on or off")
-    browser.add_argument("state", choices=("on", "off"))
+    browser = commands.add_parser("browser", help="turn the account setup's browser on or off, or check it")
+    browser.add_argument("state", choices=("on", "off", "status"))
     arguments = parser.parse_args(argv)
     if arguments.command == "check":
         unknown = [channel for channel in arguments.channels if channel not in CHANNELS]

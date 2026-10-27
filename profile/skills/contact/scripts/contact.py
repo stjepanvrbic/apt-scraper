@@ -519,15 +519,16 @@ def command_due(store):
     if replies:
         print(f'{replies} repl{"y" if replies == 1 else "ies"} to answer')
     # The account setup's browser carries the user's logins in a visible window, and this job's contact forms
-    # would get it too, so the job waits while a setup uses it.
+    # would get it too, so the job waits while a setup uses it, and the setup waits for a run to end.
     try:
-        setup = connections.setup_browser_running()
+        wake = connections.contact_job_gate(bool(due))
     except (RuntimeError, OSError, connections.CommandTimedOut, connections.OutOfTime) as error:
-        print(f"The account setup's browser settings could not be turned off: {error}")
-        setup = True
-    if setup and due:
-        print('Waiting while the account setup uses the browser.')
-    print(json.dumps({'wakeAgent': bool(due) and not setup}))
+        print(f"The account setup's browser could not be checked: {error}")
+        wake = False
+    else:
+        if due and not wake:
+            print('Waiting while the account setup uses the browser.')
+    print(json.dumps({'wakeAgent': wake}))
     return 0
 
 

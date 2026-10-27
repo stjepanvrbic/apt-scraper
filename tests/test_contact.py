@@ -797,6 +797,7 @@ class GateTests(ContactTest):
         self.assertFalse(wake)
         self.assertIn('Waiting while the account setup uses the browser.', summary)
         self.assertTrue(record.exists())
+        self.assertFalse((self.home / 'apt-scraper' / 'contact-run').exists())
         self.assertEqual(self.setup_browser_calls(), [])
 
     def test_an_account_setup_that_stopped_without_turning_its_browser_off_is_turned_off_and_the_agent_wakes(self):
@@ -804,6 +805,7 @@ class GateTests(ContactTest):
         wake, _ = self.gate()
         self.assertTrue(wake)
         self.assertFalse(record.exists())
+        self.assertTrue((self.home / 'apt-scraper' / 'contact-run').exists())
         self.assertEqual(self.setup_browser_calls(), [['browser.use_real_profile', 'false'], ['browser.headed', 'false'],
                                                       ['browser.real_profile_autoclose', 'false']])
 
@@ -933,6 +935,13 @@ class GateTests(ContactTest):
 
 
 class ShippedJobTests(unittest.TestCase):
+    def test_a_contact_form_checks_that_no_account_setup_uses_the_users_browser_before_its_first_browser_action(self):
+        skill = (ROOT / 'profile' / 'skills' / 'contact' / 'SKILL.md').read_text(encoding='utf-8')
+        forms = skill[skill.index('### Contact forms'):skill.index('### Replies')]
+        first_step = forms[forms.index('\n1. '):forms.index('\n2. ')]
+        self.assertLess(first_step.index('connections.py" browser status'), first_step.index('open the form'))
+        self.assertIn('stop for this listing without `fail` or `done`', first_step)
+
     def test_job_runs_the_shipped_gate_with_the_contact_skill_and_delivers_nothing(self):
         jobs = json.loads((ROOT / 'profile' / 'cron' / 'jobs.json').read_text(encoding='utf-8'))['jobs']
         [job] = [job for job in jobs if job['id'] == 'apt-scraper-contact']

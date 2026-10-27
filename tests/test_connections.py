@@ -8,6 +8,7 @@ import stat
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -631,6 +632,90 @@ class ConnectionsTest(unittest.TestCase):
         self.environment["FAKE_CONFIG_FAILS"] = ""
         self.run_main("status")
         self.assertFalse(self.setup_record().exists())
+
+    def setting_values(self):
+        """The last value `config set` gave each setup setting."""
+        values = {}
+        for call in self.config_calls():
+            values[call[4]] = call[5]
+        return values
+
+    def contact_run(self, minutes_ago):
+        record = self.home / "apt-scraper" / "contact-run"
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text("run", encoding="utf-8")
+        moment = time.time() - minutes_ago * 60
+        os.utime(record, (moment, moment))
+
+    def off_with(self, during_off):
+        """Turns off a setup idle for 31 minutes and calls during_off once, between the first `config set ... false`
+        and the rest of the turn-off."""
+        self.run_main("browser", "on")
+        self.age_setup_record(31)
+        original = connections.set_setup_browser
+        calls = []
+
+        def set_setup_browser(value):
+            if value == "false" and not calls:
+                calls.append(value)
+                during_off()
+            original(value)
+
+        with mock.patch.object(connections, "set_setup_browser", set_setup_browser):
+            return connections.setup_browser_running()
+
+    def test_browser_on_while_a_stale_setup_is_turned_off_waits_and_leaves_the_browser_on_with_its_record(self):
+        turning_on = threading.Thread(target=connections.setup_browser_on)
+
+        def start_browser_on():
+            turning_on.start()
+            turning_on.join(3)
+
+        with mock.patch.dict(os.environ, self.environment):
+            self.off_with(start_browser_on)
+            turning_on.join(60)
+        self.assertTrue(self.setup_record().exists())
+        self.assertEqual(self.setting_values(), dict.fromkeys(connections.SETUP_BROWSER_SETTINGS, "true"))
+
+    def test_a_record_rewritten_while_a_stale_setup_is_turned_off_is_kept_and_the_browser_left_on(self):
+        def rewrite_record():
+            self.setup_record().write_text("on again", encoding="utf-8")
+            os.utime(self.setup_record())
+
+        with mock.patch.dict(os.environ, self.environment):
+            self.assertTrue(self.off_with(rewrite_record))
+        self.assertTrue(self.setup_record().exists())
+        self.assertEqual(self.setting_values(), dict.fromkeys(connections.SETUP_BROWSER_SETTINGS, "true"))
+
+    def test_browser_on_waits_for_a_listing_correspondence_run_until_it_ends_or_runs_too_long(self):
+        self.contact_run(10)
+        code, output = self.run_main("browser", "on")
+        self.assertEqual(code, 4)
+        self.assertIn("listing correspondence run", output)
+        self.assertEqual((self.config_calls(), self.setup_record().exists()), ([], False))
+        self.contact_run(61)
+        code, _ = self.run_main("browser", "on")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.config_calls(), self.setup_settings("true"))
+
+    def test_the_contact_job_gate_records_the_run_it_wakes_and_clears_it_at_the_next_gate(self):
+        record = self.home / "apt-scraper" / "contact-run"
+        with mock.patch.dict(os.environ, self.environment):
+            self.assertTrue(connections.contact_job_gate(True))
+            self.assertTrue(record.exists())
+            self.assertFalse(connections.contact_job_gate(False))
+            self.assertFalse(record.exists())
+        self.run_main("browser", "on")
+        with mock.patch.dict(os.environ, self.environment):
+            self.assertFalse(connections.contact_job_gate(True))
+        self.assertFalse(record.exists())
+
+    def test_browser_status_exits_0_only_while_no_setup_uses_the_browser(self):
+        self.assertEqual(self.run_main("browser", "status")[0], 0)
+        self.run_main("browser", "on")
+        self.assertEqual(self.run_main("browser", "status")[0], connections.NOT_CONNECTED)
+        self.run_main("browser", "off")
+        self.assertEqual(self.run_main("browser", "status")[0], 0)
 
 
 class SkillTest(unittest.TestCase):

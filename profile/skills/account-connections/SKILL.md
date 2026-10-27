@@ -53,7 +53,7 @@ On their own, the browser tools drive a fresh browser without the user's logins,
 python "${HERMES_SKILL_DIR}/scripts/connections.py" browser on
 ```
 
-Hermes then copies the profile of the user's default browser (Chrome, Edge or Brave) and starts that browser on the copy, in a visible window apart from the windows the user works in. The listing correspondence job does not run meanwhile, because its contact forms would get the same browser.
+Hermes then copies the profile of the user's default browser (Chrome, Edge or Brave) and starts that browser on the copy, in a visible window apart from the windows the user works in. Its contact forms would share that browser, so the listing correspondence job starts no run while a setup uses it, and `browser on` exits 4 while a run of that job goes: tell the user in one line that you wait for it, run `sleep 60` and try again, for up to 10 minutes.
 
 Turn it off again whenever the setup ends, however it ends: after the final `check`, when the user stops or declines the rest, when a step fails and you report it, and in a window without the user's logins as well. Then tell the user they can close your browser window.
 
