@@ -64,7 +64,7 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 ### Ranking
 
 - Ranks change only on a rerank, which the user starts with Score and rerank in the gallery or by asking the agent. Between reranks the order holds still.
-- A rerank ranks every available listing that has a feature record, and gives each a rank and a one-line reason. A listing found or changed since the last rerank, or waiting for its feature record, shows after the ranked listings, marked as not ranked yet with the reason why.
+- A rerank ranks every available listing that has a feature record, and gives each a rank and a short reason, listing the values for and against it as separate items. A listing found or changed since the last rerank, or waiting for its feature record, shows after the ranked listings, marked as not ranked yet with the reason why.
 - Favorites and contact requests count for their listings, and dismissals against them, so listings with similar photos, price, description, location and amenities rise or fall. A note is read once into a sentiment, which labels its listing, and into likes and dislikes on the feature record's ratings, flags and traits. A pairwise answer counts the chosen listing over the other.
 - Stated likes and dislikes, and the likes and dislikes read from notes, set the starting weight of the features they name. Labels can outweigh them: when the favorites keep having something the user said they dislike, it stops counting against listings.
 - Location counts through the areas of the criteria, nearness to the favorites' locations, distance to the nearest rapid-transit station and distance to each place, each weighted by the location priorities.
