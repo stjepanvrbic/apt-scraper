@@ -1,7 +1,7 @@
 # Removes everything apt-scraper put on this machine: the dashboard and the account setup's browser while
 # they run, the dashboard's login entry and the Start menu shortcut, the Hermes profile apt-scraper and its
-# deletion mark, and apt-scraper's folder in the local application data with the listing store and the
-# clone. Hermes, its gateway service and Claude Code stay unless given -Everything, which also removes the
+# deletion mark, apt-scraper's folder in the local application data with the listing store and the clone,
+# and the gallery's saved connections in the user's .secrets folder. Hermes, its gateway service and Claude Code stay unless given -Everything, which also removes the
 # gateway service and Hermes. Claude Code always stays, because it holds the user's own login.
 # Needs no clone and asks nothing; whatever is already gone is skipped, so it is safe to run twice.
 # Written for:
@@ -19,6 +19,7 @@
     $Programs = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
     $Shortcuts = @("$Programs\Startup\$ProfileName dashboard.lnk", "$Programs\$ProfileName.lnk")
     $DashboardLogs = Join-Path ([IO.Path]::GetTempPath()) 'apt-scraper-dashboard-*'
+    $Secrets = "$env:USERPROFILE\.secrets\apt-scraper"
     $Line = 'https://raw.githubusercontent.com/stjepanvrbic/apt-scraper/main/uninstall.ps1'
 
     $everything = $false
@@ -51,14 +52,40 @@
         }
     }
 
-    # The dashboard runs as hermes from this Hermes root with the profile's name, its login entry and
-    # shortcut as wscript on the profile's dashboard.vbs, and the account setup's browser on a user-data
-    # directory inside the profile. Only processes naming these paths are stopped.
+    # A command line's arguments, with Windows's quotes taken out.
+    function Split-CommandLine([string]$CommandLine) {
+        @([regex]::Matches($CommandLine, '(?:[^\s"]|"[^"]*")+') | ForEach-Object { $_.Value.Replace('"', '') })
+    }
+
+    # Only what apt-scraper starts: the account setup's browser on its user-data directory in the profile, or on
+    # the profile copy Hermes made there before; wscript or cscript on the profile's dashboard.vbs; the gallery
+    # server, whose store would keep the data folder from being removed; and hermes from this Hermes root with
+    # the profile's name, which is the dashboard. Comparisons ignore case, as Windows paths do.
+    function Test-ProfileProcess($Process) {
+        $arguments = Split-CommandLine $Process.CommandLine
+        $browser = "--user-data-dir=$ProfileHome\apt-scraper\browser"
+        $copiedBrowser = "--user-data-dir=$ProfileHome\browser-profile\"
+        if ($arguments | Where-Object { $_ -eq $browser -or $_.StartsWith($copiedBrowser, [StringComparison]::OrdinalIgnoreCase) }) {
+            return $true
+        }
+        if ($Process.Name -in @('wscript.exe', 'cscript.exe') -and $arguments -contains "$ProfileHome\dashboard.vbs") { return $true }
+        $galleries = @("$ProfileHome\skills\gallery\scripts\gallery.py", "$DataDirectory\repo\profile\skills\gallery\scripts\gallery.py")
+        if (($arguments | Where-Object { $_ -in $galleries }) -and $arguments -contains 'serve') { return $true }
+        if (-not ($arguments | Select-Object -First 2 | Where-Object { $_.StartsWith("$HermesRoot\", [StringComparison]::OrdinalIgnoreCase) })) {
+            return $false
+        }
+        for ($index = 0; $index -lt $arguments.Count; $index++) {
+            if ($arguments[$index] -eq "--profile=$ProfileName") { return $true }
+            if ($arguments[$index] -in @('-p', '--profile') -and $index + 1 -lt $arguments.Count -and $arguments[$index + 1] -eq $ProfileName) {
+                return $true
+            }
+        }
+        $false
+    }
+
     function Stop-ProfileProcesses {
-        $inProfile = [regex]::Escape($ProfileHome) + '(?=$|[\\"\s])'
-        $profileHermes = [regex]::Escape($HermesRoot) + '\\.*\s(-p|--profile)[\s=]+"?' + [regex]::Escape($ProfileName) + '(?=$|["\s])'
         $processes = @(Get-CimInstance Win32_Process | Where-Object {
-            $_.ProcessId -ne $PID -and $_.CommandLine -and ($_.CommandLine -match $inProfile -or $_.CommandLine -match $profileHermes)
+            $_.ProcessId -ne $PID -and $_.CommandLine -and (Test-ProfileProcess $_)
         })
         foreach ($process in $processes) { Stop-Process -Id $process.ProcessId -Force -ErrorAction Ignore }
         $deadline = (Get-Date).AddSeconds(10)
@@ -73,10 +100,11 @@
     }
 
     Write-Host 'This removes apt-scraper from this computer:'
-    Write-Host '  - the apt-scraper dashboard and the account setup''s browser window, if they run,'
+    Write-Host '  - the apt-scraper dashboard, the gallery and the account setup''s browser window, if they run,'
     Write-Host '  - the dashboard''s login entry and the apt-scraper shortcut in the Start menu,'
     Write-Host "  - the Hermes profile $ProfileName with its settings, scheduled jobs, Google token, connection results, setup browser profile and Python environment ($ProfileHome),"
-    Write-Host "  - the apt-scraper folder with the listing store and the downloaded copy of apt-scraper ($DataDirectory)."
+    Write-Host "  - the apt-scraper folder with the listing store and the downloaded copy of apt-scraper ($DataDirectory),"
+    Write-Host "  - the gallery's saved connections ($Secrets)."
     if ($everything) {
         Write-Host 'It also removes the Hermes gateway service and Hermes. Windows may ask for administrator approval to remove the gateway''s Scheduled Task.'
         Write-Host 'Hermes keeps its own settings and data. Claude Code stays, because it holds your Claude login.'
@@ -91,7 +119,7 @@
         Write-Step 'Dashboard login entry and apt-scraper shortcut'
         foreach ($shortcut in $Shortcuts) { Remove-Path $shortcut }
 
-        Write-Step 'Dashboard and setup browser'
+        Write-Step 'Dashboard, gallery and setup browser'
         Stop-ProfileProcesses
 
         # `hermes profile delete` stops the profile's backends, releases what the gateway holds in it and
@@ -111,6 +139,11 @@
         }
         Remove-Path $DataDirectory
         Get-ChildItem -Path $DashboardLogs -ErrorAction Ignore | ForEach-Object { Remove-Path $_.FullName }
+
+        # The gallery keeps its address and access token there each time it opens. The .secrets folder is the
+        # user's and stays.
+        Write-Step "Gallery connections $Secrets"
+        Remove-Path $Secrets
 
         if ($everything -and $hermes) {
             # The installer added the gateway's Scheduled Task as administrator, and only an administrator

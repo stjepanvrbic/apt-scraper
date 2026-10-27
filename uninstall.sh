@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Removes everything apt-scraper put on this machine: the dashboard and the account setup's browser while
 # they run, the dashboard's LaunchAgent and the apt-scraper app in Applications, the Hermes profile
-# apt-scraper and its deletion mark, and ~/Library/Application Support/apt-scraper with the listing store
-# and the clone. Hermes, its gateway service and Claude Code stay unless given --everything, which also
+# apt-scraper and its deletion mark, ~/Library/Application Support/apt-scraper with the listing store and
+# the clone, and the gallery's saved connections in ~/.secrets/apt-scraper. Hermes, its gateway service and Claude Code stay unless given --everything, which also
 # removes the gateway service and Hermes. Claude Code always stays, because it holds the user's own login.
 # Needs no clone and asks nothing; whatever is already gone is skipped, so it is safe to run twice.
 # Written for:
@@ -20,6 +20,7 @@ DASHBOARD_AGENT="$HOME/Library/LaunchAgents/$DASHBOARD_LABEL.plist"
 APP="$HOME/Applications/$PROFILE_NAME.app"
 DASHBOARD_LOGS="${TMPDIR:-/tmp}"
 DASHBOARD_LOGS="${DASHBOARD_LOGS%/}/apt-scraper-dashboard."
+SECRETS="$HOME/.secrets/apt-scraper"
 LINE=https://raw.githubusercontent.com/stjepanvrbic/apt-scraper/main/uninstall.sh
 export PATH="$HOME/.local/bin:$PATH"
 # Hermes asks nothing then, and takes the answer it would default to.
@@ -35,16 +36,25 @@ run_hermes() {
     if [ "$status" -ne 0 ]; then problem "'hermes $*' failed with exit code $status."; fi
 }
 
-# The dashboard runs as hermes with the profile's name, and the account setup's browser on a user-data
-# directory inside the profile. Only processes naming these are stopped.
+# Only what apt-scraper starts: the account setup's browser on its user-data directory in the profile, or on
+# the profile copy Hermes made there before; the gallery server, whose store is in the data folder; and hermes
+# from this Hermes root with the profile's name, which is the dashboard. ps joins the arguments with spaces,
+# so each is matched between spaces.
 profile_processes() {
-    local pid command
-    ps -A -o pid= -o command= 2>/dev/null | while read -r pid command; do
+    local pid first second rest command
+    ps -A -o pid= -o command= 2>/dev/null | while read -r pid first second rest; do
         [ "$pid" = "$$" ] && continue
-        case " $command " in
-            *"$PROFILE_HOME/"* | *"$PROFILE_HOME "* | \
-            *hermes*" -p $PROFILE_NAME "* | *hermes*" --profile $PROFILE_NAME "* | *hermes*" --profile=$PROFILE_NAME "*)
-                printf '%s\n' "$pid" ;;
+        command=" $first $second $rest "
+        case $command in
+            *" --user-data-dir=$PROFILE_HOME/apt-scraper/browser "* | *" --user-data-dir=$PROFILE_HOME/browser-profile/"*)
+                printf '%s\n' "$pid"; continue ;;
+            *" $PROFILE_HOME/skills/gallery/scripts/gallery.py "*" serve "* | \
+            *" $DATA_DIRECTORY/repo/profile/skills/gallery/scripts/gallery.py "*" serve "*)
+                printf '%s\n' "$pid"; continue ;;
+        esac
+        case $first$'\n'$second in "$HERMES_ROOT/"* | *$'\n'"$HERMES_ROOT/"*) ;; *) continue ;; esac
+        case $command in
+            *" -p $PROFILE_NAME "* | *" --profile $PROFILE_NAME "* | *" --profile=$PROFILE_NAME "*) printf '%s\n' "$pid" ;;
         esac
     done
 }
@@ -77,10 +87,11 @@ main() {
     if command -v hermes >/dev/null; then hermes_present=true; fi
 
     echo 'This removes apt-scraper from this computer:'
-    echo "  - the apt-scraper dashboard and the account setup's browser window, if they run,"
+    echo "  - the apt-scraper dashboard, the gallery and the account setup's browser window, if they run,"
     echo "  - the dashboard's login entry and the apt-scraper app in Applications,"
     echo "  - the Hermes profile $PROFILE_NAME with its settings, scheduled jobs, Google token, connection results, setup browser profile and Python environment ($PROFILE_HOME),"
-    echo "  - the apt-scraper folder with the listing store and the downloaded copy of apt-scraper ($DATA_DIRECTORY)."
+    echo "  - the apt-scraper folder with the listing store and the downloaded copy of apt-scraper ($DATA_DIRECTORY),"
+    echo "  - the gallery's saved connections ($SECRETS)."
     if $everything; then
         echo 'It also removes the Hermes gateway service and Hermes. Hermes keeps its own settings and data.'
         echo 'Claude Code stays, because it holds your Claude login.'
@@ -96,7 +107,7 @@ main() {
     rm -f "$DASHBOARD_AGENT"
     rm -rf "$APP"
 
-    step 'Dashboard and setup browser'
+    step 'Dashboard, gallery and setup browser'
     stop_profile_processes
 
     # `hermes profile delete` stops the profile's backends, releases what the gateway holds in it and
@@ -112,6 +123,11 @@ main() {
     case "$PWD/" in "$DATA_DIRECTORY/"*) cd "$HOME" ;; esac
     rm -rf "$DATA_DIRECTORY"
     rm -f "$DASHBOARD_LOGS"*
+
+    # The gallery keeps its address and access token there each time it opens. ~/.secrets is the user's and
+    # stays.
+    step "Gallery connections $SECRETS"
+    rm -rf "$SECRETS"
 
     if $everything && $hermes_present; then
         step 'Hermes gateway service'

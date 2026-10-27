@@ -50,7 +50,7 @@ macOS, in Terminal:
 curl -fsSL https://raw.githubusercontent.com/stjepanvrbic/apt-scraper/main/uninstall.sh | bash
 ```
 
-The line first lists what it removes, then removes it without asking anything: the running dashboard and the account setup's browser window, the dashboard's login entry and the apt-scraper shortcut, the Hermes profile `apt-scraper` with your search, scheduled jobs, Google token, connection results, setup browser profile and Python environment, and the apt-scraper folder in `%LOCALAPPDATA%` or `~/Library/Application Support` with the listing store and the downloaded copy of apt-scraper. A later install starts fresh. Running it again changes nothing.
+The line first lists what it removes, then removes it without asking anything: the running dashboard, gallery and account setup browser window, the dashboard's login entry and the apt-scraper shortcut, the Hermes profile `apt-scraper` with your search, scheduled jobs, Google token, connection results, setup browser profile and Python environment, and the apt-scraper folder in `%LOCALAPPDATA%` or `~/Library/Application Support` with the listing store and the downloaded copy of apt-scraper, and the gallery's saved connections in `.secrets\apt-scraper` in your user folder on Windows or `~/.secrets/apt-scraper` on macOS. The rest of `.secrets` stays. A later install starts fresh. Running it again changes nothing.
 
 Hermes, the Hermes gateway service and Claude Code stay, because you may use them for other things. The line ends with how to remove them: `hermes gateway uninstall` and `hermes uninstall` for Hermes, and Claude Code's own uninstall. To remove the Hermes gateway service and Hermes as well, Windows, in PowerShell:
 
