@@ -629,7 +629,10 @@ class ConnectionsTest(unittest.TestCase):
         """The `config set` calls that point the browser tools at url, or with "" back at their own browser."""
         allowed = ["-p", "apt-scraper", "config", "set", "browser.allow_private_urls", "true" if url else "false"]
         address = ["-p", "apt-scraper", "config", "set", "browser.cdp_url", url]
-        return [allowed, address] if url else [address, allowed]
+        if url:
+            return [allowed, address]
+        return [address, allowed, *(["-p", "apt-scraper", "config", "set", key, "false"]
+                                    for key in connections.REAL_PROFILE_SETTINGS)]
 
     def config_calls(self):
         return [call for call in self.calls("hermes") if call[2:4] == ["config", "set"]]
@@ -779,6 +782,17 @@ class ConnectionsTest(unittest.TestCase):
         self.assertEqual(self.config_calls()[2:], self.setup_settings(""))
         self.assertFalse(self.setup_record().exists())
         self.assertFalse(self.browser_alive(pid))
+
+    def test_a_setup_of_the_real_profile_version_left_on_across_an_upgrade_is_turned_off_with_its_settings(self):
+        record = self.setup_record()
+        record.parent.mkdir(parents=True)
+        record.write_text("on", encoding="utf-8")
+        self.age_setup_record(31)
+        self.run_main("status")
+        self.assertEqual(self.config_calls(), self.setup_settings(""))
+        self.assertEqual(connections.REAL_PROFILE_SETTINGS,
+                         ("browser.use_real_profile", "browser.headed", "browser.real_profile_autoclose"))
+        self.assertFalse(record.exists())
 
     def test_status_leaves_a_running_setup_and_a_profile_without_one_alone(self):
         self.run_main("status")

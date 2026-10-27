@@ -806,7 +806,9 @@ class GateTests(ContactTest):
         self.assertTrue(wake)
         self.assertFalse(record.exists())
         self.assertTrue((self.home / 'apt-scraper' / 'contact-run').exists())
-        self.assertEqual(self.setup_browser_calls(), [['browser.cdp_url', ''], ['browser.allow_private_urls', 'false']])
+        self.assertEqual(self.setup_browser_calls(), [['browser.cdp_url', ''], ['browser.allow_private_urls', 'false'],
+                                                      ['browser.use_real_profile', 'false'], ['browser.headed', 'false'],
+                                                      ['browser.real_profile_autoclose', 'false']])
 
     def test_nothing_to_do_keeps_the_agent_asleep(self):
         self.contacted()

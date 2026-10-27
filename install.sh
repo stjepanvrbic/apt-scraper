@@ -84,6 +84,13 @@ step 'Browser tools'
 if [ -z "$(hermes -p "$PROFILE_NAME" config get browser.backend)" ]; then
     hermes -p "$PROFILE_NAME" config set browser.backend off
 fi
+# The account setup of an earlier version turned on real-profile browsing while it ran. One cut off by
+# this upgrade would give the contact forms a copy of the user's own browser profile.
+for key in browser.use_real_profile browser.headed browser.real_profile_autoclose; do
+    if [ "$(hermes -p "$PROFILE_NAME" config get "$key")" = true ]; then
+        hermes -p "$PROFILE_NAME" config set "$key" false
+    fi
+done
 
 # The search runs curl_cffi in an environment of its own, built from hash-pinned wheels with the Python
 # Hermes runs cron scripts with, which `hermes pm env` puts on PATH.

@@ -83,6 +83,9 @@ KILL_WAIT_SECONDS = 5
 # the bounded kill after a timeout stays inside that, so every channel gets a stored result.
 CHECK_BUDGET_SECONDS = 150
 SETUP_BROWSER_SETTING = "browser.cdp_url"
+# Ticket 0052's setup turned on real-profile browsing instead, and one left on across an upgrade would give the
+# contact forms a copy of the user's own browser profile, so every turn-off turns these off too.
+REAL_PROFILE_SETTINGS = ("browser.use_real_profile", "browser.headed", "browser.real_profile_autoclose")
 SETUP_BROWSER_IDLE = timedelta(minutes=30)
 SETUP_LOCK_WAIT_SECONDS = 60
 # A listing correspondence run that never reached the job's next gate, such as one the gateway's exit cut off,
@@ -638,14 +641,16 @@ def set_setup_browser(url: str) -> None:
     """Points the browser tools at `url`, or with "" back at their own browser. Hermes takes a browser at a debugging
     address for one on another computer and refuses it private addresses then, such as the dashboard on 127.0.0.1
     and the end of Google's authorization at localhost, so they are allowed while the setup's browser, which runs on
-    this computer, is set, and refused again once it is cleared."""
+    this computer, is set, and refused again once it is cleared. Clearing also turns off REAL_PROFILE_SETTINGS."""
     hermes = shutil.which("hermes")
     if hermes is None:
         raise RuntimeError("The hermes command is not on PATH.")
     allowed = ("browser.allow_private_urls", "true" if url else "false")
     settings = [allowed, (SETUP_BROWSER_SETTING, url)]
+    if not url:
+        settings = [*reversed(settings), *((key, "false") for key in REAL_PROFILE_SETTINGS)]
     runner = Runner()
-    for key, value in settings if url else reversed(settings):
+    for key, value in settings:
         process = runner.run([hermes, "-p", "apt-scraper", "config", "set", key, value], "hermes config set")
         if process.returncode != 0:
             raise RuntimeError(f"Setting {key} failed: {last_line(process)}")
