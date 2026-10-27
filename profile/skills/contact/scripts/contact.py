@@ -518,7 +518,7 @@ def command_due(store):
         print(f'{starts} new contact request{"" if starts == 1 else "s"}')
     if replies:
         print(f'{replies} repl{"y" if replies == 1 else "ies"} to answer')
-    # The account setup's browser carries the user's logins in a visible window, and this job's contact forms
+    # The account setup's browser carries the user's sign-ins in a visible window, and this job's contact forms
     # would get it too, so the job waits while a setup uses it, and the setup waits for a run to end.
     try:
         wake = connections.contact_job_gate(bool(due))

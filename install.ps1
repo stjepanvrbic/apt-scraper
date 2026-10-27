@@ -121,6 +121,13 @@ Write-Step 'Browser tools'
 if (-not (Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', 'browser.backend')).Trim()) {
     Invoke-OnConsole $hermes @('-p', $ProfileName, 'config', 'set', 'browser.backend', 'off')
 }
+# The account setup of an earlier version turned on real-profile browsing while it ran. One cut off by
+# this upgrade would give the contact forms a copy of the user's own browser profile.
+foreach ($key in 'browser.use_real_profile', 'browser.headed', 'browser.real_profile_autoclose') {
+    if ((Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', $key)).Trim() -eq 'true') {
+        Invoke-OnConsole $hermes @('-p', $ProfileName, 'config', 'set', $key, 'false')
+    }
+}
 
 # The search runs curl_cffi in an environment of its own, built from hash-pinned wheels with the Python
 # Hermes runs cron scripts with, which `hermes pm env` puts on PATH.
