@@ -1021,13 +1021,22 @@ class BootstrapTests(unittest.TestCase):
 
     # macOS: bootstrap.sh piped into bash, with HOME in the temporary directory.
 
-    def shell_tools(self, git: bool = True, installer_exit: int = 0, command_line_tools: bool = False):
-        """`command_line_tools`: whether the Xcode command line tools are installed, so that their installer refuses to run."""
+    def shell_tools(self, git: bool = True, installer_exit: int = 0, command_line_tools: bool = False,
+                    install_after_seconds: int | None = None):
+        """`command_line_tools`: whether the Xcode command line tools are installed, so that their installer refuses
+        to run. `install_after_seconds`: when their installer is opened, how long it takes to install them."""
+        self.tools_installed = self.folder / 'command-line-tools'
         fakes = {
-            'git': f'exec {self.git} "$@"\n' if git else 'echo "xcrun: error: invalid active developer path" >&2\nexit 1\n',
+            # Without the tools, git fails until the marker file that Apple's installer stands in for exists.
+            'git': f'exec {self.git} "$@"\n' if git else
+                   f'if [ -e "{self.tools_installed.as_posix()}" ]; then exec {self.git} "$@"; fi\n'
+                   'echo "xcrun: error: invalid active developer path" >&2\nexit 1\n',
             'xcode-select': f'printf "%s\\n" "xcode-select $*" >> "{self.other_calls.as_posix()}"\n'
                             + ('echo "xcode-select: error: command line tools are already installed" >&2\nexit 1\n'
-                               if command_line_tools else ''),
+                               if command_line_tools else
+                               # The dialog installs the tools after a while, in the background, as Apple's does.
+                               f'(sleep {install_after_seconds}; touch "{self.tools_installed.as_posix()}") &\n'
+                               if install_after_seconds is not None else ''),
         }
         for name, body in fakes.items():
             (self.tools / name).write_text(f'#!/bin/sh\n{body}', newline='\n')
@@ -1039,9 +1048,11 @@ class BootstrapTests(unittest.TestCase):
     def shell_environment(self) -> dict[str, str]:
         return {**os.environ, 'HOME': self.folder.as_posix(), 'PATH': f'{self.tools}{os.pathsep}{os.environ["PATH"]}'}
 
-    def run_shell_bootstrap(self, *arguments: str) -> subprocess.CompletedProcess:
+    def run_shell_bootstrap(self, *arguments: str, poll_seconds: int = 5, wait_seconds: int = 60) -> subprocess.CompletedProcess:
+        environment = {**self.shell_environment, 'COMMAND_LINE_TOOLS_POLL_SECONDS': str(poll_seconds),
+                       'COMMAND_LINE_TOOLS_WAIT_SECONDS': str(wait_seconds)}
         return subprocess.run([BASH, '-s', '--', *arguments], input=(ROOT / 'bootstrap.sh').read_text(encoding='utf-8'),
-                              env=self.shell_environment, capture_output=True, text=True, timeout=60)
+                              env=environment, capture_output=True, text=True, timeout=60)
 
     def test_the_shell_bootstrap_clones_and_runs_the_installer_then_updates_and_runs_it_again(self):
         self.shell_tools()
@@ -1063,11 +1074,20 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(result.returncode, 3)
         self.assertEqual(len(self.installer_runs_made()), 1)
 
-    def test_the_shell_bootstrap_without_the_command_line_tools_opens_their_installer_and_stops(self):
+    def test_the_shell_bootstrap_without_the_command_line_tools_opens_their_installer_waits_for_them_and_goes_on(self):
+        self.shell_tools(git=False, install_after_seconds=2)
+        result = self.run_shell_bootstrap(poll_seconds=1)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Press Install in the dialog that opened; this continues once they are installed.', result.stdout)
+        self.assertEqual(self.other_calls_made(), ['xcode-select --install'])
+        self.assertEqual(self.git_calls_made()[0][:1], ['clone'])
+        self.assertEqual(len(self.installer_runs_made()), 1)
+
+    def test_the_shell_bootstrap_stops_when_the_command_line_tools_do_not_get_installed(self):
         self.shell_tools(git=False)
-        result = self.run_shell_bootstrap()
+        result = self.run_shell_bootstrap(poll_seconds=1, wait_seconds=2)
         self.assertEqual(result.returncode, 1)
-        self.assertIn('Install them in the dialog that opened, then run this again.', result.stderr)
+        self.assertIn('did not get installed. Install them in the dialog, then run this again.', result.stderr)
         self.assertEqual(self.other_calls_made(), ['xcode-select --install'])
         self.assertEqual((self.git_calls_made(), self.installer_runs_made()), ([], []))
 
