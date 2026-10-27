@@ -1,7 +1,7 @@
 ---
 title: One line uninstalls apt-scraper completely
 type: Feature
-state: In Progress
+state: Done
 priority: 1
 assignee: agent
 milestone:
@@ -22,7 +22,7 @@ One line pasted into a terminal, on Windows and on macOS, removes everything apt
 - [x] A missing piece (no Hermes, no profile, no clone, no login entry) is skipped silently, so the line is safe to run twice.
 - [x] README's Install section gets an Uninstall subsection with both lines, in the same form as the install lines, and docs/spec.md Installation says what the uninstall removes and keeps.
 - [x] Tests in the existing installer style with the fake `hermes` and fake login entries: each item removed, missing items skipped, `--everything` runs the extra commands, Claude Code untouched.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
@@ -46,6 +46,7 @@ Verification: fake hermes and a throwaway HOME / LOCALAPPDATA-shaped directory i
 
 ## Result
 
+- Delivered in [PR #48](https://github.com/stjepanvrbic/apt-scraper/pull/48), merged to `main` as b5e0f15 after one review round; its two blocking findings (gallery credentials left behind, process matching too broad) were fixed before the merge.
 `uninstall.ps1` and `uninstall.sh` are written for the one line, in the bootstrap scripts' shape: the PowerShell one in a script block that throws instead of exiting and leaves the caller's session as it was, the shell one in `main`, called on the last line. They take their roots from `LOCALAPPDATA` and `APPDATA` or `HOME`, as the installers do, and print what they remove before the first step. In order, they:
 
 1. remove the dashboard's login entry and the apt-scraper shortcut: the two Start menu shortcuts on Windows; the LaunchAgent, booted out first, and `~/Applications/apt-scraper.app` on macOS. `dashboard.vbs` goes with the profile,
