@@ -1,9 +1,9 @@
 ---
 title: Scheduled agents save their results through file tools, not the terminal
 type: Chore
-state: In Progress
+state: Done
 priority: 3
-assignee: agent
+assignee:
 milestone:
 parent:
 blocked_by: [0021]
@@ -18,7 +18,7 @@ The search, listing-features and review agents that cron wakes save and correct 
 
 - [x] Each of the three jobs' wake sessions runs with file tools only, and its save and correct-and-resave paths work, the next run handing a rejected save back for correction, since Hermes runs no code of a cron job after its session.
 - [x] A test per job shows the session's toolset excludes the terminal.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
