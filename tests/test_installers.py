@@ -508,6 +508,101 @@ class ProfileStepTests(unittest.TestCase):
                 self.assertTrue((self.profile / 'memories').is_dir())
 
 
+# What Hermes 0.22.5's `config get` prints for each browser setting the installers set, while config.yaml leaves it
+# unset: the default it fills in (hermes_cli/config_defaults.py), with booleans spelled as YAML spells them.
+BROWSER_DEFAULTS = {'browser.backend': '', 'browser.use_real_profile': 'false', 'browser.headed': 'false',
+                    'browser.real_profile_autoclose': 'false'}
+BROWSER_SETTINGS = {'browser.backend': 'off', 'browser.use_real_profile': 'true', 'browser.headed': 'true',
+                    'browser.real_profile_autoclose': 'true'}
+# Stands in for hermes's `config get` and `config set` on the config in the JSON file in argv[2], filling in
+# BROWSER_DEFAULTS as Hermes does. It logs every `config set` to the file in argv[1].
+FAKE_CONFIG_HERMES = textwrap.dedent(f"""\
+    import json, sys
+    from pathlib import Path
+    log, config, *arguments = sys.argv[1:]
+    values = json.loads(Path(config).read_text())
+    if arguments[2:4] == ['config', 'get']:
+        print({{**{BROWSER_DEFAULTS!r}, **values}}[arguments[4]])
+    elif arguments[2:4] == ['config', 'set']:
+        values[arguments[4]] = arguments[5]
+        Path(config).write_text(json.dumps(values))
+        with open(log, 'a') as calls:
+            calls.write(json.dumps(arguments) + '\\n')
+    """)
+
+
+class BrowserStepTests(unittest.TestCase):
+    """Each installer's browser step, run alone against a fake hermes on a config in a temporary directory."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.folder = Path(directory.name)
+        self.calls = self.folder / 'calls'
+        self.config = self.folder / 'config.json'
+        (self.folder / 'hermes.py').write_text(FAKE_CONFIG_HERMES)
+        self.fake = [sys.executable, str(self.folder / 'hermes.py'), str(self.calls), str(self.config)]
+
+    def run_step(self, installer: str, config: dict) -> tuple[subprocess.CompletedProcess, list[list[str]], dict]:
+        """Runs the step on config. Returns its result, the `config set` calls and the config it left."""
+        self.calls.unlink(missing_ok=True)
+        self.config.write_text(json.dumps(config))
+        if installer == 'install.ps1':
+            hermes = self.folder / 'hermes.cmd'
+            hermes.write_text('@' + ' '.join(f'"{part}"' for part in self.fake) + ' %*\r\n')
+            script = self.folder / 'step.ps1'
+            script.write_text(textwrap.dedent(f"""\
+                $ErrorActionPreference = 'Stop'
+                $ProfileName = 'apt-scraper'
+                $hermes = '{hermes}'
+                function Write-Step([string]$Message) {{ }}
+                """) + section(installer, RUNNERS, 'function Get-Version')
+                + section(installer, "Write-Step 'Browser for the account setup'", '# The search runs'),
+                encoding='utf-8-sig')
+            command = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)]
+            environment = dict(os.environ)
+        else:
+            tools = self.folder / 'bin'
+            tools.mkdir(exist_ok=True)
+            fake = ' '.join(f'"{Path(part).as_posix()}"' for part in self.fake)
+            (tools / 'hermes').write_text(f'#!/bin/sh\nexec {fake} "$@"\n', newline='\n')
+            (tools / 'hermes').chmod(0o755)
+            script = self.folder / 'step.sh'
+            script.write_text("set -euo pipefail\nPROFILE_NAME=apt-scraper\nstep() { :; }\n"
+                              + section(installer, "step 'Browser for the account setup'", '# The search runs'),
+                              newline='\n')
+            environment = {**os.environ, 'PATH': f'{tools}{os.pathsep}{os.environ["PATH"]}'}
+            command = [BASH, script.as_posix()]
+        result = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=60)
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+        return result, calls, json.loads(self.config.read_text())
+
+    def test_the_installers_turn_on_the_real_profile_browser_in_a_config_that_leaves_it_unset(self):
+        for installer in ('install.ps1', 'install.sh'):
+            with self.subTest(installer):
+                result, calls, config = self.run_step(installer, {})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(calls, [['-p', 'apt-scraper', 'config', 'set', key, value]
+                                         for key, value in BROWSER_SETTINGS.items()])
+                self.assertEqual(config, BROWSER_SETTINGS)
+
+    def test_the_installers_leave_browser_settings_the_config_already_sets(self):
+        for installer in ('install.ps1', 'install.sh'):
+            for config in (BROWSER_SETTINGS, {'browser.backend': 'browser-use', 'browser.headed': 'true'}):
+                with self.subTest(installer, config=config):
+                    result, calls, after = self.run_step(installer, config)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual([call[4] for call in calls], [key for key in BROWSER_SETTINGS if key not in config])
+                    self.assertEqual(after, {**BROWSER_SETTINGS, **config})
+
+    def test_the_distribution_config_sets_what_the_installers_set(self):
+        text = (ROOT / 'profile' / 'config.yaml').read_text(encoding='utf-8')
+        browser = text[text.index('\nbrowser:\n'):]
+        for key, value in BROWSER_SETTINGS.items():
+            spelled = f'"{value}"' if value == 'off' else value
+            self.assertIn(f'\n  {key.split(".")[1]}: {spelled}\n', browser)
+
+
 class QuestionTests(unittest.TestCase):
     """A question that a command asks on the console shows before the installer waits for its answer."""
 
@@ -725,6 +820,7 @@ class QuestionTests(unittest.TestCase):
             "Get-NativeOutput claude @('--version')",
             "Get-NativeOutput claude @('auth', 'status') -AllowFailure",
             "Get-NativeOutput $hermes @('--version')",
+            "Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', $key)",
             "Get-NativeOutput $hermes @('pm', 'env')",
             "Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', 'delegation.model')",
             "Get-NativeOutput $hermes @('-p', 'default', 'gateway', 'status') -AllowFailure",

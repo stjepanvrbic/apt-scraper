@@ -79,11 +79,11 @@ Share only information in the listing's `approvals` whose purpose fits the messa
 
 ### Contact forms
 
-Fill in forms with the browser tools (`browser_navigate`, `browser_snapshot`, `browser_type`, `browser_click`). They run Hermes's own browser, not the user's. Computer use is not available here, because a cron run has nobody to approve it.
+Fill in forms with the browser tools (`browser_navigate`, `browser_snapshot`, `browser_type`, `browser_click`). They run in a window of the user's browser on a copy of its profile, the one the account setup uses, so a site may know the user and fill in fields from their account. Such a field counts as personal information like any other. Computer use is not available here, because a cron run has nobody to approve it.
 
 1. Open the form and take a snapshot. List the fields it requires.
 2. If it requires personal information that the listing's approvals do not hold for this purpose, `ask` the user for it with that `field` and `"purpose": "contact form"`, and stop for this listing. Ask for every missing field in one question.
-3. Fill in the message and the approved fields only. Leave optional personal fields empty.
+3. Fill in the message and the approved fields only. Leave optional personal fields empty, and empty any the site filled in.
 4. Submit, take a snapshot, and check that the page confirms the submission.
 5. Run `submitted` with the message text and the form URL.
 

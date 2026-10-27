@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import sys
@@ -565,6 +566,32 @@ class ConnectionsTest(unittest.TestCase):
         _, output = self.run_main("check", "imessage", "--handle", "+15551234567")
 
         self.assertRegex(output, r"The test text did not finish within [23] seconds\.")
+
+
+class SkillTest(unittest.TestCase):
+    """The account-connections skill drives web pages with Hermes's browser tools, never with computer use."""
+
+    def setUp(self):
+        self.text = (SCRIPTS.parent / "SKILL.md").read_text(encoding="utf-8")
+        self.sections = {part.split("\n", 1)[0]: part for part in re.split(r"^## ", self.text, flags=re.M)[1:]}
+
+    def test_the_google_and_telegram_steps_use_the_browser_tools_and_open_nothing_in_the_users_own_windows(self):
+        for name in ("Google: Gmail and Calendar", "Messaging gateway"):
+            with self.subTest(name):
+                section = self.sections[name]
+                self.assertIn("browser_navigate", section)
+                self.assertNotRegex(section, r"(?i)computer[ _-]use|cmd /c start|\bopen \"|address bar|t\.me/")
+
+    def test_computer_use_is_named_only_for_what_no_browser_can_do(self):
+        lines = [line for line in self.text.splitlines() if re.search(r"(?i)computer[ _-]use", line)]
+        self.assertTrue(lines)
+        for line in lines:
+            with self.subTest(line[:60]):
+                self.assertRegex(line, r"Terminal|terminal program")
+        self.assertIn("Never use `computer_use` on a web page", self.sections["The browser"])
+
+    def test_nothing_reads_the_botfather_chat_while_it_shows_the_token(self):
+        self.assertIn("take no snapshot, screenshot or `browser_vision` of the window", self.sections["Messaging gateway"])
 
 
 if __name__ == "__main__":

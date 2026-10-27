@@ -4,3 +4,11 @@ model:
 
 delegation:
   model: sonnet
+
+# The account setup drives a visible window of the user's own browser, started on a copy of its
+# profile, with the built-in browser tools.
+browser:
+  backend: "off"
+  use_real_profile: true
+  headed: true
+  real_profile_autoclose: true

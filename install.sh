@@ -77,6 +77,19 @@ rm -f "$saved_config"
 step 'Google Workspace skill'
 hermes -p "$PROFILE_NAME" skills install google-workspace --yes
 
+# The account setup works through Hermes's browser tools in a visible window of the user's own
+# browser, started on a copy of its profile with their logins, so nothing needs a window in front.
+# `config get` fills in Hermes's defaults, so a kept config.yaml gains each setting while it has the
+# default value.
+step 'Browser for the account setup'
+for setting in 'browser.backend||off' 'browser.use_real_profile|false|true' 'browser.headed|false|true' \
+    'browser.real_profile_autoclose|false|true'; do
+    IFS='|' read -r key default value <<< "$setting"
+    if [ "$(hermes -p "$PROFILE_NAME" config get "$key")" = "$default" ]; then
+        hermes -p "$PROFILE_NAME" config set "$key" "$value"
+    fi
+done
+
 # The search runs curl_cffi in an environment of its own, built from hash-pinned wheels with the Python
 # Hermes runs cron scripts with, which `hermes pm env` puts on PATH.
 step 'Search environment'
