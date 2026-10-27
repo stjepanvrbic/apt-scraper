@@ -157,27 +157,33 @@ Invoke-OnConsole $hermes @('-p', $ProfileName, 'computer-use', 'status')
 # One gateway on the machine serves every profile. It runs the scheduled jobs, the messaging gateway
 # and every chat turn, including the dashboard's, so it starts at login and the search keeps running
 # while no chat is open. Hermes refuses gateway services for named profiles.
-# Installing the login entry and starting the gateway are two commands. `gateway install` asks whether
-# to open the UAC prompt for a Scheduled Task. On yes it hands the install to an elevated copy of Hermes
-# and returns, and that copy also starts the gateway when given --start-now, as administrator, where
-# no chat or dashboard of this user can reach it. On no it installs a Startup-folder entry itself.
-# Until the Scheduled Task or the Startup entry exists, `gateway start` offers to install again, so
-# the gateway is started by this unelevated `gateway start` once `gateway status` shows one of them.
+# Installing the login entry and starting the gateway are two commands. Run without administrator
+# rights, `gateway install` asks in the terminal whether to open the UAC prompt for a Scheduled Task,
+# and on yes hands the install to an elevated copy of Hermes. The UAC prompt is that question, so the
+# installer runs `gateway install` elevated itself, hidden, as Hermes's _launch_elevated_gateway_command
+# runs its elevated commands: Hermes then asks nothing and adds the Scheduled Task. Nothing starts the
+# gateway from there: an install given --start-now starts it as administrator, where no chat or dashboard
+# of this user can reach it. The gateway is started by this unelevated `gateway start` once the entry
+# exists. A machine that has the entry skips the prompt.
 Write-Step 'Hermes gateway service'
-Invoke-OnConsole $hermes @('-p', 'default', 'gateway', 'install', '--if-missing', '--no-start-now', '--start-on-login')
-$loginEntryDeadline = (Get-Date).AddSeconds(120)
-$waiting = $false
-while (($gatewayStatus = Get-NativeOutput $hermes @('-p', 'default', 'gateway', 'status') -AllowFailure) -notmatch
-       'Scheduled Task registered|Windows login item installed') {
-    if ((Get-Date) -gt $loginEntryDeadline) {
-        throw ("The gateway's login entry did not appear within 2 minutes of 'hermes gateway install'. If you " +
-            "approved the UAC prompt, the administrator install did not finish. Run the install again, and answer " +
-            "n to the UAC question to use a Startup-folder entry, which needs no administrator approval. " +
+$loginEntry = 'Scheduled Task registered|Windows login item installed'
+if ((Get-NativeOutput $hermes @('-p', 'default', 'gateway', 'status') -AllowFailure) -notmatch $loginEntry) {
+    Write-Host 'Windows asks for administrator approval to add the gateway to the Scheduled Tasks, so it starts at login.'
+    try {
+        $installer = Start-Process -FilePath $hermes -ArgumentList @('-p', 'default', 'gateway', 'install', '--if-missing', '--no-start-now', '--start-on-login') -Verb RunAs `
+            -WindowStyle Hidden -PassThru -Wait -ErrorAction Stop
+    } catch {
+        throw ('The gateway cannot start at login without the Scheduled Task, and adding it needs administrator ' +
+            "approval, which was not given ($($_.Exception.Message)). Run the install again and approve the prompt.")
+    }
+    if ($installer.ExitCode -ne 0) {
+        throw "The administrator 'hermes gateway install' failed with exit code $($installer.ExitCode)."
+    }
+    $gatewayStatus = Get-NativeOutput $hermes @('-p', 'default', 'gateway', 'status') -AllowFailure
+    if ($gatewayStatus -notmatch $loginEntry) {
+        throw ("The gateway's login entry is missing after the administrator 'hermes gateway install'. " +
             "'hermes -p default gateway status' printed:`n$gatewayStatus")
     }
-    if (-not $waiting) { Write-Host 'Waiting for the administrator install to add the gateway login entry...' }
-    $waiting = $true
-    Start-Sleep -Seconds 1
 }
 Invoke-OnConsole $hermes @('-p', 'default', 'gateway', 'start')
 
@@ -186,8 +192,7 @@ Invoke-OnConsole $hermes @('-p', 'default', 'gateway', 'start')
 # `gateway ensure` names that state, as Hermes's own clients see it: gateway_elevated, or
 # gateway_other_session for one in another Windows logon session. Only an administrator can stop it,
 # and Hermes's `gateway stop` offers no UAC prompt, so the installer runs `gateway stop` elevated
-# through one, as Hermes's _launch_elevated_gateway_command runs its elevated commands: hidden, with
-# no console the user sees. There `gateway stop` cannot ask before it interrupts live sessions, so it
+# through one, hidden like the install above. There `gateway stop` cannot ask before it interrupts live sessions, so it
 # gets --yes, and the user is told before the prompt. Once that stop has exited and `gateway status`
 # shows no gateway, the gateway is started again, unelevated. Of Hermes's text, the installer shows
 # the sentence that names the gateway, not the remedy, which sends the user to an administrator prompt.

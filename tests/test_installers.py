@@ -130,10 +130,10 @@ READY = (json.dumps({'endpoint': {'pid': 1}, 'reason_code': None, 'state': 'read
 # Stands in for hermes's Windows gateway commands as Hermes 0.22.5 runs them (hermes_cli/gateway_windows.py).
 # It logs every call to the file in argv[1]. The login entry is the file in argv[2]; a gateway running as
 # administrator is marked by '<entry>.elevated', one running as the user by '<entry>.running'.
-# `gateway install` asks QUESTION as Hermes does and logs the answer. On n it adds a Startup entry itself.
-# On y it hands the install to an elevated copy and returns: that copy adds the Scheduled Task after
-# FAKE_HERMES_HELPER_SECONDS, or never when that is unset, and starts the gateway as administrator when
-# given --start-now. With --if-missing over an existing entry, it does nothing.
+# Run as administrator (FAKE_HERMES_ELEVATED set), `gateway install` adds the Scheduled Task without asking,
+# starts the gateway as administrator when given --start-now, and exits with FAKE_HERMES_ELEVATED when that
+# is a number. Run as the user, it asks QUESTION as Hermes does and logs the answer; on n it adds a Startup
+# entry itself. With --if-missing over an existing entry, it does nothing.
 # `gateway status` shows the login entry and whether a gateway process runs. `gateway start` logs whether the
 # entry existed and a gateway ran as administrator; without the entry it asks to install it, and it starts a
 # gateway as the user unless one runs. `gateway stop` ends any gateway after a second. `gateway ensure`
@@ -153,16 +153,19 @@ FAKE_GATEWAY_HERMES = textwrap.dedent(f"""\
         if '--if-missing' in arguments and entry.exists():
             print('✓ Gateway service already installed')
             sys.exit()
+        administrator = os.environ.get('FAKE_HERMES_ELEVATED')
+        if administrator:
+            if administrator.isdigit():
+                sys.exit(int(administrator))
+            entry.touch()
+            if '--start-now' in arguments:
+                elevated.touch()
+            print('✓ Scheduled Task registered')
+            sys.exit()
         answer = input({QUESTION!r})
         record({{'answer': answer}})
         if answer != 'y':
             entry.touch()
-        elif os.environ.get('FAKE_HERMES_HELPER_SECONDS'):
-            marks = [entry] + ([elevated] if '--start-now' in arguments else [])
-            touch = ''.join(f'pathlib.Path({{str(mark)!r}}).touch();' for mark in marks)
-            subprocess.Popen([sys.executable, '-c', f"import pathlib, time; time.sleep({{os.environ['FAKE_HERMES_HELPER_SECONDS']}}); {{touch}}"],
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             creationflags=getattr(subprocess, 'DETACHED_PROCESS', 0))
     elif command == ['gateway', 'status']:
         print(f'✓ Scheduled Task registered: {LOGIN_ENTRY}' if entry.exists() else '✗ Gateway service not installed')
         print('✓ Gateway process running (PID: 49984)' if elevated.exists() or running.exists()
@@ -194,6 +197,11 @@ GATEWAY_ENSURE = ['-p', 'default', 'gateway', 'ensure', '--timeout', '60']
 STARTED = {'entry': True, 'elevated': False}
 GATEWAY_STOP = ['-p', 'default', 'gateway', 'stop', '--yes']
 ELEVATED_STOP = "Start-Process -FilePath $hermes -ArgumentList @('-p', 'default', 'gateway', 'stop', '--yes') -Verb RunAs"
+ELEVATED_INSTALL = ("Start-Process -FilePath $hermes -ArgumentList @('-p', 'default', 'gateway', 'install', '--if-missing', "
+                    "'--no-start-now', '--start-on-login') -Verb RunAs")
+# What Windows PowerShell 5.1's Start-Process -Verb RunAs throws when the user answers No.
+DECLINED = ("function Deny-Elevation { throw [InvalidOperationException]::new("
+            "'This command cannot be run due to the error: The operation was canceled by the user.') }\n")
 GATEWAY_STEP_POWERSHELL = "Write-Step 'Hermes gateway service'"
 TEST_MESSAGE_POWERSHELL = "Write-Step 'Test message"
 
@@ -524,7 +532,7 @@ class QuestionTests(unittest.TestCase):
         hermes = self.folder / 'hermes.cmd'
         hermes.write_text('@' + ' '.join(f'"{part}"' for part in self.fake) + ' %*\r\n')
         step = section('install.ps1', GATEWAY_STEP_POWERSHELL, TEST_MESSAGE_POWERSHELL)
-        deadline = '(Get-Date).AddSeconds(120)'
+        deadline = '(Get-Date).AddMinutes(2)'
         self.assertEqual(step.count(deadline), 1)
         for old, new in (replacements or {}).items():
             self.assertEqual(step.count(old), 1, old)
@@ -538,20 +546,61 @@ class QuestionTests(unittest.TestCase):
             + step.replace(deadline, f'(Get-Date).AddSeconds({deadline_seconds})'), encoding='utf-8-sig')
         return ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)]
 
+    def run_gateway_step(self, environment: dict[str, str] | None = None, **step) -> subprocess.CompletedProcess:
+        return subprocess.run(self.powershell_gateway_step(**step), env=environment or self.environment,
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+
+    def run_on_a_fresh_machine(self, elevated: str = 'administrator', **step) -> subprocess.CompletedProcess:
+        """Runs the gateway step on a machine without the login entry. The step's elevated `gateway install` runs
+        here without the elevation, which no test may ask for; the fake acts as administrator."""
+        replacements = {ELEVATED_INSTALL: ELEVATED_INSTALL.replace(' -Verb RunAs', ''), **step.pop('replacements', {})}
+        return self.run_gateway_step({**self.environment, 'FAKE_HERMES_ELEVATED': elevated},
+                                     replacements=replacements, **step)
+
     def run_on_a_machine_with_an_administrator_gateway(self, **step) -> subprocess.CompletedProcess:
-        """Runs the gateway step where the owner's machine was: the login entry installed, so `gateway install`
-        asks nothing, and a gateway running as administrator."""
+        """Runs the gateway step where the owner's machine was: the login entry installed, so nothing asks for
+        administrator approval to add it, and a gateway running as administrator."""
         self.entry.touch()
         Path(f'{self.entry}.elevated').touch()
-        return subprocess.run(self.powershell_gateway_step(**step), env=self.environment, stdin=subprocess.DEVNULL,
-                              capture_output=True, text=True, timeout=120)
+        return self.run_gateway_step(**step)
 
-    def test_the_powershell_installer_shows_the_question_hermes_asks_in_the_gateway_step_and_reads_the_answer(self):
-        asked, output, exit_code = answer_when_asked(self.powershell_gateway_step(), self.environment, 'n')
-        self.assertTrue(asked, output)
-        self.assertEqual(exit_code, 0, output)
-        self.assertEqual(self.calls_made(), [GATEWAY_INSTALL, {'answer': 'n'}, GATEWAY_STATUS, GATEWAY_START,
-                                             STARTED, GATEWAY_ENSURE])
+    def test_the_powershell_installer_adds_the_login_entry_through_the_uac_prompt_without_a_question_first(self):
+        result = self.run_on_a_fresh_machine()
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        self.assertNotIn(QUESTION.strip(), output)
+        self.assertIn('Windows asks for administrator approval to add the gateway', output)
+        self.assertEqual(self.calls_made(), [GATEWAY_STATUS, GATEWAY_INSTALL, GATEWAY_STATUS, GATEWAY_START, STARTED,
+                                             GATEWAY_ENSURE])
+        self.assertTrue(self.entry.exists())
+        self.assertFalse(Path(f'{self.entry}.elevated').exists())
+        self.assertTrue(Path(f'{self.entry}.running').exists())
+
+    def test_the_powershell_installer_skips_the_uac_prompt_on_a_machine_that_has_the_login_entry(self):
+        self.entry.touch()
+        result = self.run_gateway_step()
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        self.assertNotIn('administrator approval', output)
+        self.assertEqual(self.calls_made(), [GATEWAY_STATUS, GATEWAY_START, STARTED, GATEWAY_ENSURE])
+
+    def test_the_powershell_installer_reports_a_declined_uac_prompt_for_the_login_entry(self):
+        result = self.run_gateway_step(
+            replacements={ELEVATED_INSTALL: ELEVATED_INSTALL.replace('Start-Process -FilePath $hermes', 'Deny-Elevation')},
+            prelude=DECLINED)
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertEqual(self.calls_made(), [GATEWAY_STATUS])
+        flat = ' '.join(output.split())
+        self.assertIn('adding it needs administrator approval, which was not given', flat)
+        self.assertIn('The operation was canceled by the user', flat)
+
+    def test_the_powershell_installer_reports_a_failed_administrator_install(self):
+        result = self.run_on_a_fresh_machine(elevated='3')
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("The administrator 'hermes gateway install' failed with exit code 3", output)
+        self.assertEqual(self.calls_made(), [GATEWAY_STATUS, GATEWAY_INSTALL])
 
     def test_the_shell_installer_shows_the_question_hermes_asks_in_the_gateway_step_and_reads_the_answer(self):
         tools = self.folder / 'bin'
@@ -572,30 +621,7 @@ class QuestionTests(unittest.TestCase):
     def test_the_powershell_installer_never_asks_hermes_to_start_the_gateway_from_its_install(self):
         text = (ROOT / 'install.ps1').read_text(encoding='utf-8')
         self.assertEqual(text.count("'--start-now'"), 0)
-        self.assertIn(f"Invoke-OnConsole $hermes @({', '.join(repr(part) for part in GATEWAY_INSTALL)})", text)
-
-    def test_the_powershell_installer_waits_for_the_elevated_install_before_it_starts_the_gateway(self):
-        asked, output, exit_code = answer_when_asked(self.powershell_gateway_step(),
-                                                     {**self.environment, 'FAKE_HERMES_HELPER_SECONDS': '4'}, 'y')
-        self.assertTrue(asked, output)
-        self.assertEqual(exit_code, 0, output)
-        calls = self.calls_made()
-        self.assertEqual(calls[:2], [GATEWAY_INSTALL, {'answer': 'y'}])
-        self.assertEqual(calls[-3:], [GATEWAY_START, STARTED, GATEWAY_ENSURE])
-        # It asked Hermes for the login entry until the elevated copy had added it, and started nothing meanwhile.
-        self.assertGreater(len(calls[2:-3]), 1)
-        self.assertEqual(set(map(tuple, calls[2:-3])), {tuple(GATEWAY_STATUS)})
-        self.assertIn('Waiting for the administrator install', output)
-        self.assertFalse(Path(f'{self.entry}.elevated').exists())
-
-    def test_the_powershell_installer_stops_with_a_clear_error_when_the_elevated_install_never_adds_the_entry(self):
-        asked, output, exit_code = answer_when_asked(self.powershell_gateway_step(deadline_seconds=3),
-                                                     self.environment, 'y')
-        self.assertTrue(asked, output)
-        self.assertNotEqual(exit_code, 0, output)
-        self.assertIn("The gateway's login entry did not appear within 2 minutes", output)
-        self.assertIn('Gateway service not installed', output)
-        self.assertNotIn(GATEWAY_START, self.calls_made())
+        self.assertEqual(text.count(ELEVATED_INSTALL), 1)
 
     def test_the_powershell_installer_stops_a_gateway_running_as_administrator_through_one_uac_prompt(self):
         """Approved: the step's elevated `gateway stop` runs, here without the elevation, which no test may ask
@@ -605,8 +631,8 @@ class QuestionTests(unittest.TestCase):
         output = result.stdout + result.stderr
         self.assertEqual(result.returncode, 0, output)
         calls = self.calls_made()
-        self.assertEqual(calls[:6], [GATEWAY_INSTALL, GATEWAY_STATUS, GATEWAY_START, {'entry': True, 'elevated': True},
-                                     GATEWAY_ENSURE, GATEWAY_STOP])
+        self.assertEqual(calls[:5], [GATEWAY_STATUS, GATEWAY_START, {'entry': True, 'elevated': True}, GATEWAY_ENSURE,
+                                     GATEWAY_STOP])
         self.assertEqual(calls[-4:], [GATEWAY_STATUS, GATEWAY_START, STARTED, GATEWAY_ENSURE])
         self.assertFalse(Path(f'{self.entry}.elevated').exists())
         self.assertTrue(Path(f'{self.entry}.running').exists())
@@ -616,15 +642,13 @@ class QuestionTests(unittest.TestCase):
         self.assertIn('Windows asks for administrator approval to stop it.', flat)
 
     def test_the_powershell_installer_reports_a_declined_uac_prompt_and_what_keeps_it_from_continuing(self):
-        # What Windows PowerShell 5.1's Start-Process -Verb RunAs throws when the user answers No.
-        declined = ("function Deny-Elevation { throw [InvalidOperationException]::new("
-                    "'This command cannot be run due to the error: The operation was canceled by the user.') }\n")
         result = self.run_on_a_machine_with_an_administrator_gateway(
-            replacements={'Start-Process -FilePath $hermes': 'Deny-Elevation'}, prelude=declined)
+            replacements={ELEVATED_STOP: ELEVATED_STOP.replace('Start-Process -FilePath $hermes', 'Deny-Elevation')},
+            prelude=DECLINED)
         output = result.stdout + result.stderr
         self.assertNotEqual(result.returncode, 0, output)
-        self.assertEqual(self.calls_made(), [GATEWAY_INSTALL, GATEWAY_STATUS, GATEWAY_START,
-                                             {'entry': True, 'elevated': True}, GATEWAY_ENSURE])
+        self.assertEqual(self.calls_made(), [GATEWAY_STATUS, GATEWAY_START, {'entry': True, 'elevated': True},
+                                             GATEWAY_ENSURE])
         self.assertTrue(Path(f'{self.entry}.elevated').exists())
         flat = ' '.join(output.split())
         self.assertIn(ELEVATED_NAMED, flat)
@@ -632,9 +656,11 @@ class QuestionTests(unittest.TestCase):
         self.assertIn('The install cannot continue while it runs', flat)
         self.assertIn('The operation was canceled by the user', flat)
 
-    def test_the_powershell_installer_asks_for_administrator_approval_only_to_stop_the_gateway(self):
+    def test_the_powershell_installer_asks_for_administrator_approval_only_through_windows_prompts(self):
+        """Both elevated commands are the user's approval: the prompt itself, with no question in the terminal."""
         text = (ROOT / 'install.ps1').read_text(encoding='utf-8')
-        self.assertEqual(text.count('-Verb RunAs'), 1)
+        self.assertEqual(text.count('-Verb RunAs'), 2)
+        self.assertEqual(text.count(ELEVATED_INSTALL), 1)
         self.assertEqual(text.count(ELEVATED_STOP), 1)
 
     def test_the_powershell_installer_shows_the_output_of_a_failed_command_whose_output_it_reads(self):
@@ -702,6 +728,7 @@ class QuestionTests(unittest.TestCase):
             "Get-NativeOutput $hermes @('pm', 'env')",
             "Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', 'delegation.model')",
             "Get-NativeOutput $hermes @('-p', 'default', 'gateway', 'status') -AllowFailure",
+            "Get-NativeOutput $hermes @('-p', 'default', 'gateway', 'status') -AllowFailure",
             "Get-NativeOutput $hermes @('-p', 'default', 'gateway', 'ensure', '--timeout', '60') -AllowFailure",
             "Get-NativeOutput $hermes @('-p', 'default', 'gateway', 'status') -AllowFailure",
             "Get-NativeOutput $hermes @('-p', $ProfileName, 'chat', '-q', 'Reply with exactly: ready', '--oneshot', '-Q')",
@@ -709,7 +736,6 @@ class QuestionTests(unittest.TestCase):
         for asks in ("Invoke-OnConsole claude @('auth', 'login')",
                      "Invoke-OnConsole $hermes @('update')",
                      "Invoke-OnConsole $hermes @('profile', 'install', $ProfileSource, '--force', '--yes')",
-                     "Invoke-OnConsole $hermes @('-p', 'default', 'gateway', 'install', '--if-missing', '--no-start-now', '--start-on-login')",
                      "Invoke-OnConsole $hermes @('-p', 'default', 'gateway', 'start')",
                      "Invoke-OnConsole $hermes @('-p', $ProfileName, 'computer-use', 'install', '--upgrade')"):
             self.assertIn(asks, named('Invoke-OnConsole'))
