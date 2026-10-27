@@ -25,6 +25,10 @@ def parse(text):
     return datetime.fromisoformat(text) if text else None
 
 
+def run_record(row):
+    return {'started_at': row['started_at'], 'finished_at': row['finished_at'], **json.loads(row['report'] or '{}')} if row else None
+
+
 class SearchState:
     def __init__(self, path):
         self.path = Path(path)
@@ -94,15 +98,19 @@ class SearchState:
         with self.connect() as connection:
             connection.execute('UPDATE runs SET finished_at = ?, report = ? WHERE id = ?', (now.isoformat(), json.dumps(report), run_id))
 
-    def running_since(self):
+    def latest_run(self):
+        """The run started last, as it recorded itself: started_at, and once it finished, finished_at and its report. A run
+        that never finished, because its process was killed, stays unfinished until a later run supersedes it."""
         with self.connect() as connection:
-            row = connection.execute('SELECT started_at FROM runs WHERE finished_at IS NULL ORDER BY id DESC LIMIT 1').fetchone()
-            return parse(row['started_at']) if row else None
+            return run_record(connection.execute('SELECT * FROM runs ORDER BY id DESC LIMIT 1').fetchone())
+
+    def running_since(self):
+        latest = self.latest_run()
+        return parse(latest['started_at']) if latest and not latest['finished_at'] else None
 
     def last_run(self):
         with self.connect() as connection:
-            row = connection.execute('SELECT * FROM runs WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1').fetchone()
-            return {'started_at': row['started_at'], 'finished_at': row['finished_at'], **json.loads(row['report'])} if row else None
+            return run_record(connection.execute('SELECT * FROM runs WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1').fetchone())
 
     def has_searched(self):
         with self.connect() as connection:

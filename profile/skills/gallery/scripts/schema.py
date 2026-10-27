@@ -118,7 +118,21 @@ def implicit_signals(connection):
     connection.execute('CREATE INDEX implicit_signals_listing_visit ON implicit_signals(listing_id, fingerprint, visit_id)')
 
 
-MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals)
+def notes_session_per_database(connection):
+    """A session in chat_session may be one that other databases share, bound to a working folder that no longer exists.
+    Each database starts a Hermes session of its own in notes_session and keeps its messages. A gallery server started
+    before the migration still writes the shared session to chat_session, so that table stays and nothing reads it.
+    A reply still running belongs to the shared session, so the gallery cannot collect it and closes it with an error
+    the user can act on."""
+    connection.execute('CREATE TABLE notes_session (id INTEGER PRIMARY KEY CHECK (id = 1), session_id TEXT)')
+    connection.execute('INSERT INTO notes_session VALUES (1, NULL)')
+    connection.execute("""UPDATE chat_messages SET status = 'error', prompt = NULL,
+        error = 'The gallery was updated while this reply was running, and the reply could not be collected. Send the message again if you still need it.'
+        WHERE status = 'running'""")
+
+
+MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals,
+              notes_session_per_database)
 
 
 def migrate(connection):

@@ -325,19 +325,24 @@ class Search:
     def status(self):
         problems = []
         missing = self.state.missing_settings(self.store)
-        last = self.state.last_run()
+        latest, last, running_since = self.state.latest_run(), self.state.last_run(), self.state.running_since()
         now = self.now()
         if missing:
             state = 'waiting for the interview'
             problems.append('The interview is not complete, so the search waits for it.')
-        elif last is None:
+        elif latest is None:
             state = 'not started'
             problems.append('The search has not run yet.')
-        elif now - datetime.fromisoformat(last['finished_at']) > STOPPED_AFTER:
+        elif now - (last_active := datetime.fromisoformat(latest['finished_at'] or latest['started_at'])) > STOPPED_AFTER:
             state = 'stopped'
-            problems.append(f'The search last ran at {last["finished_at"][:16]} UTC. Scheduled runs happen only while the Hermes gateway runs.')
-        else:
+            problems.append(f'The search last ran at {last_active:%Y-%m-%d %H:%M} UTC. Scheduled runs happen only while the Hermes gateway runs.')
+        elif running_since:
             state = 'running'
+            if now - running_since > 2 * RUN_BUDGET:
+                problems.append(f'The search run that started at {running_since:%Y-%m-%d %H:%M} UTC has not finished after '
+                                f'{(now - running_since) // timedelta(minutes=1)} minutes.')
+        else:
+            state = 'failed' if latest.get('error') else 'finished'
         environment = self.state.problem()
         if environment:
             problems.append(environment)
@@ -349,7 +354,7 @@ class Search:
         shown = [item for item in listings if item['matches_criteria'] and item['status'] == 'available' and not item['dismissed']]
         first_seen, reported_at = self.state.first_seen(), self.state.reported_at()
         return {
-            'state': state, 'problems': problems, 'running_since': self.state.running_since() and self.state.running_since().isoformat(),
+            'state': state, 'problems': problems, 'running_since': running_since.isoformat() if state == 'running' else None,
             'last_run': last, 'shown': len(shown), 'awaiting_judgment': len(self.pending()) if not missing else 0,
             'unavailable': sum(item['status'] == 'unavailable' for item in listings),
             'new_since_report': sum(first_seen.get(item['id'], reported_at) > reported_at for item in shown),
