@@ -1,9 +1,9 @@
 ---
 title: A user without a messaging gateway is asked for Compare answers
 type: Bug
-state: In Progress
+state: Done
 priority: 2
-assignee: agent
+assignee:
 milestone:
 parent: 0015
 blocked_by: []
@@ -19,7 +19,7 @@ Once the interview is complete and the first feature records exist, the user is 
 - [x] On a profile with no messaging gateway, the first conversation after the first two eligible feature records asks the user to answer 5 to 8 questions in the gallery's Compare tab, once.
 - [x] With a gateway connected, the invitation is still sent through it once, as now.
 - [x] A test covers both paths against a real store.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 

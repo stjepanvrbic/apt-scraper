@@ -1,9 +1,9 @@
 ---
 title: A reason's station distance reads as one item of its list
 type: Bug
-state: In Progress
+state: Done
 priority: 3
-assignee: agent
+assignee:
 milestone:
 parent:
 blocked_by: []
@@ -20,7 +20,7 @@ Each value a listing's reason or explanation names reads as one thing, so the st
 - [x] The review pass's citations of that value still match the explanation's value exactly.
 - [x] A count is grammatical: "1 bathroom", "2 bathrooms".
 - [x] Tests cover both values in `scoring.py`'s reason and explanation.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 

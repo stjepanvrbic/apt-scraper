@@ -6,7 +6,7 @@ priority: 2
 assignee: Stjepan Vrbic
 milestone:
 parent: 0015
-blocked_by: [0043]
+blocked_by: []
 related: [0014, 0033]
 ---
 

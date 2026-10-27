@@ -1,9 +1,9 @@
 ---
 title: The review pass reads the preferences of the rerank it reviews
 type: Bug
-state: In Progress
+state: Done
 priority: 4
-assignee: agent
+assignee:
 milestone:
 parent:
 blocked_by: []
@@ -18,7 +18,7 @@ The review task describes the ranking state of the rerank it reviews, so a prefe
 
 - [x] The task's preferences, note readings, starting weights and label counts come from the inputs the rerank used, stored with its waiting review as the check's scores are.
 - [x] A test saves a note reading between a rerank and its review and checks that the review task does not contain it.
-- [ ] Merged to `main` through a reviewed pull request.
+- [x] Merged to `main` through a reviewed pull request.
 
 ## Spec
 
