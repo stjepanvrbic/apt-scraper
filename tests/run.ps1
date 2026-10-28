@@ -14,7 +14,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-if (-not ($Bare -or $env:CI -or $env:USERNAME -eq 'WDAGUtilityAccount')) {
+if (-not ($Bare -or $env:CI -or $env:APT_SCRAPER_SANDBOX)) {
     Write-Host 'This PC is neither CI nor a Windows Sandbox. Run the checks in a sandbox:' -ForegroundColor Red
     Write-Host '  powershell -ExecutionPolicy Bypass -File tests\sandbox.ps1'
     Write-Host 'or pass -Bare to run them here anyway.'

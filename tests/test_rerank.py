@@ -11,8 +11,6 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
-import numpy as np
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
 
 from record import CATEGORIES, FLAGS, RATINGS, SEED_TAGS  # noqa: E402
@@ -78,22 +76,18 @@ def least_cpu_seconds(call, runs=TIMING_RUNS):
     return min(times), result
 
 
-# The spec's two seconds are judged on the owner's PC, where REFERENCE_WORK takes REFERENCE_SECONDS of CPU time
-# (Python 3.14, numpy 2.5.4, least of five runs). A slower machine, such as a shared CI runner or a sandbox, is
-# given the budget scaled by how much slower it runs the same work, timed once per process; a faster machine
-# keeps the spec's budget. The work mixes what a rerank does: numpy least squares and plain Python.
-REFERENCE_SECONDS = 0.37
+# The spec's two seconds are judged on the owner's PC, where reference_work takes REFERENCE_SECONDS of CPU time
+# (Python 3.14, least of five runs). A slower machine, such as a shared CI runner or a sandbox, is given the
+# budget scaled by how much slower it runs the same work, timed once per process; a faster machine keeps the
+# spec's budget. The work is plain Python arithmetic, as the rerank's scoring is: a numpy workload would count
+# the threads of its BLAS, which the rerank never uses.
+REFERENCE_SECONDS = 0.35
 
 
 def reference_work():
-    generator = np.random.default_rng(0)
-    design = generator.standard_normal((3000, 64))
-    target = generator.standard_normal(3000)
-    for _ in range(60):
-        np.linalg.lstsq(design, target, rcond=None)
-    total = 0
-    for value in range(6_000_000):
-        total += value % 7
+    total = 0.0
+    for value in range(8_000_000):
+        total += (value % 7) * 0.5 + value / (value + 1)
     return total
 
 

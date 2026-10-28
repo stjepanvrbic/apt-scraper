@@ -109,13 +109,14 @@ class RerankServerTests(GalleryServerCase):
 
     def test_http_rerank_and_order_read_fit_the_two_second_budget(self):
         fill(self.store, 300, 50)
+        budget = cpu_budget()
         started = time.perf_counter()
-        summary = self.request('/api/rerank', {})
+        summary = self.request('/api/rerank', {}, timeout=budget)
         items = self.request('/api/listings')['items']
         elapsed = time.perf_counter() - started
         self.assertEqual((summary['ranked'], len(summary['held_out'])), (300, 50))
         self.assertEqual(items[0]['rank'], 1)
-        self.assertLess(elapsed, cpu_budget(), speed_factor())
+        self.assertLess(elapsed, budget, speed_factor())
 
     def test_pending_reasons_follow_current_features_and_never_expose_an_old_explanation(self):
         identifiers = fill(self.store, 25, 3)

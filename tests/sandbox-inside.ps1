@@ -1,8 +1,11 @@
-# What tests\sandbox.ps1 runs inside the Windows Sandbox at logon: installs Python, Git for Windows and Node from
-# the mapped installers, copies the mapped checkout to a writable folder, runs tests\run.ps1 with its output in
-# out\log.txt, writes the exit code to out\exit-code and shuts the sandbox down. Not for running on a real machine.
+# What tests\sandbox.ps1 runs inside the Windows Sandbox through `wsb exec`, as System: installs Python, Git for
+# Windows and Node from the mapped installers, copies the mapped checkout to a writable folder, runs tests\run.ps1
+# with its output in out\log.txt, writes the exit code to out\exit-code and shuts the sandbox down. Not for
+# running on a real machine.
 $ErrorActionPreference = 'Stop'
-$desktop = Join-Path $env:USERPROFILE 'Desktop'
+# Where the sandbox mounts the mapped folders, whichever account runs this.
+$desktop = 'C:\Users\WDAGUtilityAccount\Desktop'
+$env:APT_SCRAPER_SANDBOX = '1'
 $source = Join-Path $desktop 'apt-scraper'
 $toolchain = Join-Path $desktop 'toolchain'
 $cache = Join-Path $desktop 'cache'

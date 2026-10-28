@@ -100,9 +100,6 @@ $configuration = @(
     (Get-MappedFolder $cache 'cache' $false),
     (Get-MappedFolder $out 'out' $false),
     '</MappedFolders>',
-    '<LogonCommand>',
-    "<Command>powershell -NoProfile -ExecutionPolicy Bypass -File $desktop\apt-scraper\tests\sandbox-inside.ps1</Command>",
-    '</LogonCommand>',
     '</Configuration>'
 ) -join ''
 Set-Content -Encoding ascii (Join-Path $run 'checks.wsb') $configuration
@@ -115,6 +112,11 @@ if ($LASTEXITCODE -ne 0 -or -not $started.Trim().StartsWith('{')) { throw "wsb s
 $id = ($started | ConvertFrom-Json).Id
 if (-not $id) { throw "wsb start returned no sandbox ID: $started" }
 Write-Host "    sandbox $id"
+# A sandbox started this way has no logged-on user, so the guest script runs through `wsb exec` as System, in a
+# process of its own that this script does not wait on: the exit-code file says when the run is over.
+$guest = "powershell -NoProfile -ExecutionPolicy Bypass -File $desktop\apt-scraper\tests\sandbox-inside.ps1"
+$null = Start-Process -NoNewWindow -FilePath (Get-Command wsb).Source `
+    -ArgumentList 'exec', '--id', $id, '--run-as', 'System', '-c', ('"' + $guest + '"')
 
 $script:shown = 0
 function Show-NewLines {
