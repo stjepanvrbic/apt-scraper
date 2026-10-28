@@ -28,6 +28,12 @@ def crossing(curve):
     return next((index * 5 for index, value in enumerate(curve) if value >= 0.75), None)
 
 
+def stop_condition(before, after):
+    if before is None:
+        return 'not established: threshold is censored at 40'
+    return 'fired' if after is None or after >= before else 'not fired'
+
+
 def threshold_uncertainty(baseline, candidate):
     generator = random.Random(0)
     before, after, reductions = [], [], []
@@ -79,7 +85,7 @@ def main():
               'censoring': 'A null threshold means not reached within 40 answers; no extrapolation.',
               'real_store': 'Actual-label replay is reported separately; this experiment uses simulated preferences.',
               'production': 'prior-only cold-start selector stays out; retain the variance selector',
-              'stop_condition': 'not established: threshold is censored at 40' if reduction is None else 'fired' if reduction <= 0 else 'not fired',
+              'stop_condition': stop_condition(before, after),
               'candidate_runs': curves}
     report['run'] = {'id': hashlib.sha256(json.dumps(report, sort_keys=True).encode()).hexdigest()[:16],
                      'date_utc': datetime.now(timezone.utc).date().isoformat(), 'command': shlex.join(['python', *sys.argv]),

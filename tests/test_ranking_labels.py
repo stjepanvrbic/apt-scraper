@@ -14,11 +14,19 @@ from test_implicit_signals import event  # noqa: E402
 from learning import decode  # noqa: E402
 from measurement import skip_above  # noqa: E402
 from ranking_selectors import cold_questions  # noqa: E402
-from ranking_selector_experiment import threshold_uncertainty  # noqa: E402
+from ranking_selector_experiment import threshold_uncertainty, stop_condition  # noqa: E402
 from measure_snapshot_cost import measure  # noqa: E402
 
 
 class ColdQuestionsTests(unittest.TestCase):
+    def test_a_censored_candidate_fires_the_stop_when_the_baseline_reached_the_target(self):
+        self.assertEqual(stop_condition(20, None), 'fired')
+        self.assertEqual(stop_condition(20, 25), 'fired')
+        self.assertEqual(stop_condition(20, 20), 'fired')
+        self.assertEqual(stop_condition(20, 15), 'not fired')
+        self.assertEqual(stop_condition(0, 0), 'fired')
+        self.assertTrue(stop_condition(None, None).startswith('not established'))
+
     def test_threshold_intervals_preserve_censoring_and_pair_users(self):
         report = threshold_uncertainty([[0.5, 0.8]], [[0.8, 0.9]])
         self.assertEqual(report['baseline_interval'], [5, 5])

@@ -7,6 +7,30 @@ function rows(database: string, query: string) {
   return JSON.parse(execFileSync('python', ['-c', 'import sqlite3,json,sys; c=sqlite3.connect(sys.argv[1]); c.row_factory=sqlite3.Row; print(json.dumps([dict(r) for r in c.execute(sys.argv[2])]))', database, query], { encoding: 'utf8' }));
 }
 
+test('a committed impression whose response is lost retries the same event once', async ({ page, gallery }) => {
+  let first: { event_id: string; listing_id: string } | undefined;
+  const retried: string[] = [];
+  await page.route('**/api/signals', async route => {
+    const event = route.request().postDataJSON().events[0];
+    if (event.kind !== 'impression') return route.continue();
+    if (!first) {
+      first = { event_id: event.event_id, listing_id: event.listing_id };
+      expect((await route.fetch()).ok()).toBe(true);
+      await route.abort();
+      return;
+    }
+    if (event.listing_id === first.listing_id) retried.push(event.event_id);
+    await route.continue();
+  });
+  await page.goto(gallery.url);
+  await page.getByRole('article').first().scrollIntoViewIfNeeded();
+  await expect.poll(() => first).toBeDefined();
+  await expect.poll(() => retried.length, { timeout: 15000 }).toBe(1);
+  expect(retried).toEqual([first!.event_id]);
+  await expect.poll(() => rows(gallery.database, "SELECT event_id, listing_id FROM implicit_signals WHERE kind = 'impression'")
+    .filter((row: { listing_id: string }) => row.listing_id === first!.listing_id)).toEqual([first]);
+});
+
 test('a visible card records an impression after one continuous second', async ({ page, gallery }) => {
   await page.clock.install();
   await page.goto(gallery.url);
