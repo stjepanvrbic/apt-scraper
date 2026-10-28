@@ -1,7 +1,7 @@
 ---
 title: The ranking learns the user's taste in measured phases
 type: Feature
-state: In Progress
+state: Done
 priority: 2
 assignee:
 milestone:
@@ -47,8 +47,8 @@ Phase 3, hypotheses:
 
 Phase 4, local encoder, authorized regardless of Phase 3 outcome:
 
-- [ ] A background job embeds every unique photo once per content with an image tower chosen for measured quality, cached by fingerprint and photo URL, centered per room type over the store, in its own ONNX Runtime/numpy environment and pinned by hash. Compare SigLIP 2 B/16 and larger variants, MobileCLIP2 S2 and larger variants, and stronger candidates found, at fp32/fp16 as well as int8; quantize only without measurable quality loss. Encoding stays off the rerank path, whose existing 2 s CPU check remains.
-- [ ] Three kinds of named column, nothing else: a text probe per visual hypothesis and per visual stated preference; per-room best-match similarity to the most similar favorite for kitchen, bathroom, living and bedroom, explained as "kitchen looks like your favorite X"; and a room-type check that flags an extraction disagreeing with the encoder on most photos.
+- [x] A background job embeds every unique photo once per content with an image tower chosen for measured quality, cached by fingerprint and photo URL, centered per room type over the store, in its own ONNX Runtime/numpy environment and pinned by hash. Compare SigLIP 2 B/16 and larger variants, MobileCLIP2 S2 and larger variants, and stronger candidates found, at fp32/fp16 as well as int8; quantize only without measurable quality loss. Encoding stays off the rerank path, whose existing 2 s CPU check remains.
+- [x] Three kinds of named column, nothing else: a text probe per visual hypothesis and per visual stated preference; per-room best-match similarity to the most similar favorite for kitchen, bathroom, living and bedroom, explained as "kitchen looks like your favorite X"; and a room-type check that flags an extraction disagreeing with the encoder on most photos.
 - [ ] Quality gates, measured before any column enters the model: room-type agreement with extraction at least 85% on 1,000 photos; AUC at least 0.85 for five probes against record fields (carpet, exposed brick, balcony, bathtub, open kitchen). Report user-side download size, peak memory and the 3,000-photo encoding time at 4 threads as information, not gates.
 - [ ] Blind test, criterion written down before the run: at least 30 unseen listings, the owner picks the 10 they would view blind to rank, precision at 10 of the model with the encoder at least 0.5 and above the model without it. Any gate or the blind test failing ends the phase with the encoder out.
 
@@ -60,7 +60,7 @@ Phase 5, implicit signals and drift:
 Throughout:
 
 - [ ] Spec › Ranking, Acceptance and Decisions are updated through the owner: the garden-unit item replaced by the prequential and pairwise criteria, the review pass without moves, questions "whose answer would tell the model most", a similarity item allowed in a reason, and "learning from N labels" in the Rankings tab.
-- [ ] Each phase is merged to `main` through a reviewed pull request with its measurements in Result, and can be the last.
+- [x] Each phase is merged to `main` through a reviewed pull request with its measurements in Result, and can be the last.
 
 ## Spec
 
@@ -97,6 +97,11 @@ Phases 0 to 2 change no visible UI but the Compare questions and the "why" line;
 - Evidence optimization uses up to 20 monotonic fixed-point steps with backtracking, not a claimed global optimum. Tags and hypotheses use per-column scales directly, with a 0.1 standard-deviation floor; a separate multiplicative group scale would be unidentifiable without another constraint. Composite components have a tighter default scale of 0.25.
 - Half-life selection uses log loss on the last ten journaled Compare answers and their original pre-action snapshots, choosing among no decay, 90, 30 and 7 days. Before ten usable historical snapshots it keeps no decay; the weak-negative weight stays 0.05. Synthetic answers arrive one per day with stationary tastes. Real action dates are captured where known; old favorite dates are not invented. No real recency benefit is claimed.
 
+- Phase 4: the room-type sample combines the 462 owner-store photos that extraction typed with the 1,784 test photos of the public Houses dataset (Ahmed and Moustafa, 2016, "House price estimation from visual and textual features"), whose room types its authors assigned, as the owner allowed for the 1,000-photo sample. Both are reported apart and together; the gate uses the 2,246 together.
+- Phase 4: the records cannot carry the probe check. The owner copy's 31 records have one carpet floor, three exposed-brick tags and no bathtub or open-kitchen field. The reference labels are a Sonnet read of contact sheets of all 63 owner listings and all 535 houses, under one written definition per probe, never shown an encoder score; one sheet was checked by hand against its photos. AUCs against the record fields that exist are reported as information.
+- Phase 4: the room prompts, probe phrasings, the two prompt poolings and MobileCLIP's two paddings were fixed after the first two candidates (SigLIP 2 B/16-224 and MobileCLIP2-S2) were measured and before the others; the contrast and centered probe rules after B/16-224's raw carpet AUC. Every choice among them is made on the dev fifth of the houses only, one probe rule for all five probes. The selection rule, most of the six gate measures met, then their mean, was fixed before the L/16, So400m and giant results. Apple's DFN5B CLIP ViT-H/14, found during the sweep, was measured under the same rule.
+- Phase 4: the image tower is the published ONNX export of each model (onnx-community for SigLIP 2, RuteNL's OpenCLIP exports for MobileCLIP2 and DFN5B), pinned by revision and file hash, not a PyTorch export of our own: the shipped path reproduces the sweep's embeddings at cosine 1.0. The OpenCLIP exports' fp16 and int8 graphs are converted locally (`tests/encoder_convert.py`); SigLIP 2's are the publisher's. `tests/encoder_build.py` is the build job: it verifies the pinned graph, runs the text tower and writes `model.json` and `probes.npy`.
+- Phase 4: with a gate unmet the encoder is off, and the installers neither build its environment nor download its model; its job ends at once. The code, the columns, the blind test and the build stay, so a model that passes is a rebuild of `model.json` away.
 - Owner decision, 2026-10-27: attempt Phase 4 regardless of the hypothesis result. Downloads are allowed for the isolated encoder experiment; the owner later withdrew its size and memory limits. Real-photo gates without a cached dataset and the blind test remain owner-run, unchecked items. Phase 5 is not authorized.
 
 - Phase 0: exact prequential replay needs action-time records and candidate sets. Existing feedback has neither timestamps nor historical values. A new transactional `learning_events` journal stores pre-action inputs; old history is explicitly unavailable rather than reconstructed from future records.
@@ -149,9 +154,9 @@ Real-store evidence: [inventory and replay](../research/ranking_real_store_phase
 | 0 | Merged PR #50 as `432fabd` after CodeRabbit approval | Measurement infrastructure; 1.00 s rerank; real labels 0; retest runtime prerequisite open |
 | 1 | Merged PR #51 as `7002c7b` after CodeRabbit approval | Prior candidate not promoted |
 | 2 | Merged PR #52 as `bf03fbb` after CodeRabbit approval | Impressions/reasons; cold-start candidate not promoted |
-| 3 | PR #53 rebased onto merged #54; all local checks green | Real labels 0; automatic pass not promoted |
-| 4 | Authorized, not started | Encoder experiment and owner-run blind test |
-| 5 | Not authorized | Owner decision and longitudinal data required |
+| 3 | Merged PR #53 as `cf1fe89` after CodeRabbit approval | Real labels 0; automatic pass not promoted |
+| 4 | This pull request | Encoder built and measured; probe gate unmet, encoder off; blind test ready, not run |
+| 5 | Not run | Needs four weeks of the owner's labels; the store has none |
 
 Re-review: the frozen-feedback rescorer now rejects inconsistent run counts, truncated curves/trajectories and non-finite accuracies before fitting. A regression test distinguishes displayed rank 1 from refitted ranks 1 and 3 under two alternative models. Both actual exposure and counterfactual model quality are reported.
 
@@ -224,3 +229,87 @@ The final review follow-up for PR #52 passed 697 Python tests and 317 subtests (
 Hypothesis review corrections: a legacy rerank without a review produces no task; survival comparisons require the hypothesis column to exist in the original pre-action fit; missing cached files leave that listing pending while unsafe paths still fail; judgment tasks reuse the listing-field formatter with address, price, rooms, size and the complete description. Hypothesis tasks are plain JSON as well. The proposed per-event prediction cache is not applied: predictions now also depend on which hypothesis column must exist, so caching an absent-column result by event alone would suppress other valid comparisons. An underlying-fit cache would be a separate optimization requiring a measured problem.
 
 Concurrent assessments now check the store revision and update only active hypotheses. A confirm, reject or new label arriving during computation prevents stale writes; the result reports the current state with `applied: false`. The interleaving regression passes for all three cases. Numerical trial results are unchanged because this guard affects only concurrent mutations.
+
+### Phase 4: local encoder built and measured, probe gate unmet, encoder off
+
+The encoder is built end to end: a background job (`apt-scraper-encoder`, `encoder-run.py` and `encoder.py`) embeds each unique photo once per content in its own onnxruntime/numpy/Pillow environment, cached by model and content with each URL's content, and derives the three kinds of named column: a probe per visual stated preference (through a `photo:<probe>` reading) and per visual hypothesis that names a probe, per-room best match with the most similar favorite (`looks_like:kitchen`, `bathroom`, `living`, `bedroom`, centered per room over the store, explained as "kitchen looks like your favorite …"), and the room-type check, which sends a record the encoder disagrees with on most photos to a second read. The text tower ran at build time only; 103 phrasings ship as `probes.npy` (632,960 bytes), pinned by hash. [The ranking guide](../ranking.md#the-photo-encoder) has the mechanism.
+
+Measured on 3,113 photos: the 973 unique photos of the 63 owner-store listings, 462 of them typed by extraction, and the 2,140 photos of the 535 homes of the public Houses dataset, split 20/80 into dev and test by house. Intervals are 95% bootstrap, clustered by listing for room types and stratified for AUCs, 2,000 resamples. Reference labels for the probes cover 598 listings. `docs/research/ranking_encoder_phase4.json` has every number below.
+
+| Candidate, fp32 | Room types, owner (462, extraction) | Houses test (1,784) | All (2,246) | Carpet | Exposed brick | Balcony | Bathtub | Open kitchen | Download |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SigLIP 2 B/16, 224 px | 0.870 [0.831, 0.908] | 0.982 | 0.959 [0.947, 0.972] | 0.576 | 0.972 | 0.884 | 0.931 | 0.794 | 372 MB |
+| MobileCLIP2-S2 | 0.827 | 0.975 | 0.944 | 0.550 | 0.925 | 0.899 | 0.909 | 0.838 | 146 MB |
+| MobileCLIP2-S4 | 0.853 [0.811, 0.895] | 0.984 | 0.957 [0.944, 0.970] | 0.606 | 0.948 | 0.900 | 0.927 | 0.849 | 1,289 MB |
+| SigLIP 2 L/16, 384 px | 0.857 [0.815, 0.898] | 0.967 | 0.944 [0.932, 0.957] | 0.683 | 0.966 | 0.929 | 0.881 | 0.733 | 1,266 MB |
+| SigLIP 2 So400m/16, 512 px | 0.864 [0.840, 0.887] | 0.966 | 0.945 [0.935, 0.957] | 0.696 [0.642, 0.751] | 0.976 [0.947, 0.995] | 0.914 [0.851, 0.963] | 0.856 [0.823, 0.886] | 0.808 [0.755, 0.857] | 1,716 MB |
+| SigLIP 2 giant (opt)/16, 384 px | 0.842 [0.817, 0.869] | 0.965 | 0.939 [0.927, 0.952] | 0.807 [0.763, 0.850] | 0.976 [0.949, 0.994] | 0.932 [0.887, 0.967] | 0.879 [0.849, 0.908] | 0.811 [0.756, 0.859] | 4,656 MB |
+| DFN5B CLIP ViT-H/14, 378 px | 0.853 | 0.960 | 0.938 | 0.629 | 0.956 | 0.859 | 0.880 | 0.756 | 2,534 MB |
+
+Probe AUCs are over the test listings (owner and test houses), with 301 carpet, 11 exposed-brick, 29 balcony, 251 bathtub and 121 open-kitchen positives. The pre-registered probe rule chosen on dev was the raw best-photo match for every candidate. Of the alternatives, contrast phrasings lift carpet (So400m 0.876) but sink bathtub (0.638), and per-store centering helps neither enough; no single rule passes all five probes for any candidate. Against the owner records' own fields, where they have both classes, So400m scores carpet 0.897 (1 positive, 29 negative), exposed brick 0.976 (3, 28) and private balcony 0.703 (13, 7, many read from the listing text rather than the photos), as information.
+
+Every candidate meets four of the six gate measures, so the selection falls to their mean: SigLIP 2 giant 0.891, So400m 0.866, MobileCLIP2-S4 0.865, L/16 0.856, B/16 0.853, MobileCLIP2-S2 0.844, DFN5B 0.836. SigLIP 2 giant is the best-measured encoder and is pinned in `model.json`; the shipped path reproduces its sweep embeddings at cosine 1.0 and its 93.94% room agreement. Meta's PE-Core L/14-336 was found too but its only ONNX export ships no tokenizer or preprocessing configuration, so it could not be run faithfully. MobileCLIP2 and DFN5B carry Apple's research-only AMLR license, which would have needed the owner's decision before shipping had either won.
+
+Lower precisions against fp32 of the same model, on the same 256 photos (`encoder_sweep.py compare`):
+
+| Model | Precision | Same room as fp32 | Room agreement on the sample's 205 typed photos, fp32 → this | Mean cosine to fp32 |
+| --- | --- | --- | --- | --- |
+| SigLIP 2 giant | fp16 | 0.992 | 0.932 → 0.932 | 0.9999 (least 0.9988) |
+| SigLIP 2 giant | int8 | 0.906 | 0.932 → 0.888 | 0.902 |
+| SigLIP 2 So400m | fp16 | 1.000 | 0.946 → 0.946 | 1.0000 |
+| SigLIP 2 So400m | int8 | 0.102 | 0.946 → 0.078 | 0.425 |
+| SigLIP 2 L/16 | fp16 | 1.000 | 0.961 → 0.961 | 1.0000 |
+| SigLIP 2 L/16 | int8 | 0.953 | 0.961 → 0.917 | 0.904 |
+| SigLIP 2 B/16 | fp16 | 1.000 | 0.961 → 0.961 | 1.0000 |
+| SigLIP 2 B/16 | int8 | 0.848 | 0.961 → 0.873 | 0.787 |
+| MobileCLIP2-S4 | fp16 | 1.000 | 0.966 → 0.966 | 1.0000 |
+| MobileCLIP2-S4 | int8 | 0.023 | 0.966 → 0.005 | 0.232 |
+| MobileCLIP2-S2 | fp16 | 1.000 | 0.961 → 0.961 | 1.0000 |
+| MobileCLIP2-S2 | int8 | 0.090 | 0.961 → 0.073 | 0.051 |
+
+fp16 costs no measurable quality (giant's changes the room type of 2 of 256 photos, with the same agreement); int8 costs quality everywhere and breaks So400m and both MobileCLIP2 sizes outright. DFN5B's lower precisions were not run: they can at best match its fp32, which ranks last. The shipped manifest keeps giant at fp32, the precision the gates were measured on: its fp16 graph would halve the download but is slower and larger in memory here (below), and download size is not a criterion.
+
+Resources, as information, on this machine (AMD Ryzen 9 9950X3D, 16 cores, 64 GB, Windows 11), measured by `encoder_resources.py` on 64 owner photos at 4 threads with nothing else running: giant fp32 downloads 4,655,539,399 bytes in two files, loads in 2.9 s, embeds at 2.79 s per photo, about 2 h 20 min for 3,000 photos (scaled from the 64), with a peak resident memory of 6.38 GB. Its fp16 graph downloads 2,328,223,375 bytes and runs at 3.04 s per photo with 6.93 GB peak, so ONNX Runtime's CPU kernels gain it nothing but the download. With the encoder on, every journal snapshot carries the photo features: 3.29 MB on the 300-listing, 50-favorite fixture, 2.53 MB of it the room similarities to the 50 favorites.
+
+Gates:
+
+- Room-type agreement at least 85% on at least 1,000 photos: met by every candidate, giant at 0.939 [0.927, 0.952] on 2,246 photos. The extraction-typed owner subset alone, 462 photos, is above 85% for all but MobileCLIP2-S2.
+- Five probe AUCs at least 0.85: unmet for every candidate. Carpet and open kitchen fail throughout.
+- The gallery rerank: the 300-listing, 50-favorite fixture with all four room columns and two probe columns on reranks in 1.59 CPU seconds, least of three, under 2 seconds; the same fixture without the encoder in 1.14 s. The first measurement was 2.44 s: with a favorite held out, the other favorites whose best room match it was change value, and eight held-out fits fell back to full Newton refits. The converged check now takes those labeled rows into its low-rank update; its held-out ranks equal exact refits for all 50 favorites, the largest score difference 1.4e-6.
+- Blind test: not run. The owner's store has zero labels, so no model fits a taste to test, and the unmet probe gate already keeps the encoder out. `ranking.py blind-test` is the one owner-run command for later ([the ranking guide](../ranking.md#the-blind-test)); it runs end to end on a synthetic labeled store in `tests/test_photo_ranking.py`, which also checks that the criterion and listings are stored before any pick, that the page shows photos and no rank, and that only a pass turns the encoder on.
+
+Stop condition fired: a gate failed, so the encoder is out, as the spike ended. The shipped `model.json` names the best-measured model with its failed gate, so `ranking.py status` says why the encoder is off, the installers download nothing for it (they still install the encoder job, which ends at once) and the ranking, its explanations, readings and journal are exactly as without an encoder. What the installer now installs: the `apt-scraper-encoder` cron job; the encoder's environment (onnxruntime 1.31.1, numpy 2.5.4, Pillow 13.0.0, flatbuffers, packaging and protobuf, hash-pinned wheels for Python 3.14 on Windows x64 and Apple-silicon macOS, checked to install and import on Python 3.14) and its model only for a model whose quality passed. onnxruntime has no Intel-Mac wheel for Python 3.14, so there the encoder would not install and the ranking would run without it.
+
+Verification: full Git Bash Python suite 753 passed and 330 subtests, zero skipped (372.94 s, on an idle machine); Ruff passes. No gallery file changed, so gallery lint and Playwright do not apply. The pinned requirements install with `pip --require-hashes` into a fresh Python 3.14.2 environment and import. `tests/test_photo_encoder.py` runs `encoder.py` end to end against a real SQLite store with a 408-byte ONNX tower; `tests/test_photo_ranking.py` covers the gate, the columns, the exact leave-one-out values, the readings, the hypotheses, the second read, the blind test and the 2-second rerank with the encoder on.
+
+### Phase 5 and the close-out
+
+Phase 5 of the plan, whether skip-above pairs or dwell labels enter the fit and the half-life, needs four weeks of the owner's labels on their own store. The authorized copy has zero labels, so both items stay unmet; the impressions, skip-above pairs and dwell diagnostic that would feed them are in place since Phase 2.
+
+Every phase against its bar:
+
+| Phase | Bar | Outcome |
+| --- | --- | --- |
+| 0 | Harness reproduces 3, 18, 25, 80, 115 on the 129-listing store | Unmet: that store no longer exists |
+| 0 | Extraction test-retest on 20 listings | Unmet: prepared, blocked on an isolated Hermes runtime |
+| 0 | Simulated users, intervals, variance selector | Done |
+| 1 | +0.05 pairwise accuracy at 20 labels | Unmet: −0.019 [−0.025, −0.013]; candidate not promoted |
+| 1 | 300-listing rerank under 2 s | Unmet by the candidate, 2.23 s; the installed fit takes 1.00 s |
+| 2 | 25% fewer labels to 0.75 accuracy | Unmet: 0.0 [−0.25, 0.20]; installed selector kept |
+| 2 | 0.65 Compare accuracy after 40 owner answers | Unmet: zero answers |
+| 3 | Garden split within two reranks; a survivor over 20 owner labels | Unmet: no garden store, zero labels |
+| 4 | Room types at least 85% on 1,000 photos | Done: giant 0.939 on 2,246 photos |
+| 4 | Five probe AUCs at least 0.85 | Unmet: carpet and open kitchen |
+| 4 | Rerank under 2 s with the encoder's columns | Done |
+| 4 | Blind test | Not run: zero labels, and the probe gate already failed |
+| 5 | Implicit signals and half-life over four weeks | Unmet: zero labels |
+
+What changed for the user over the ticket: Compare asks the pair with the largest posterior variance of its feature difference, identical records never; cards on screen are logged as impressions; favorite and dismiss take an optional reason; Rankings says how many labels the model learns from and shows hypotheses from an explicit trial; the journal records every action's pre-action state as plain JSON; the encoder's code and job are installed but off. The installed fit is the one on `main` before the ticket.
+
+Spec decisions the plan left to the owner, with a recommendation each:
+
+- **The garden-unit acceptance item** (Spec › Acceptance "Ranking"). Recommend replacing it with the prequential criteria the harness measures: once 20 labels exist, the median chronological held-out rank of favorites and contact requests is in the top 20 and no worse than the model without labels, and once 40 Compare answers exist, pairwise accuracy at least 0.65 with the lower 90% bound above 0.5. One tester's single-trait test cannot tell 6 from 7 of 16 units, and the store it was judged on is gone.
+- **Review-pass moves.** Recommend removing them and keeping the rewritten reasons, the flags and the findings. In four live runs no move stood with a gain, and moves are the one model output the spec has to guard with a reversal rule. Keep hypothesis proposals an explicit trial until a real store has a survivor.
+- **Pairwise wording.** Recommend "pairs the listings whose answer would tell the scoring model most: the largest posterior variance of their feature difference among the 40 best ranked", which is what Compare has done since Phase 0. "Least sure of the order" describes the replaced selector, which could pair two identical listings.
+- **Later preferences judged without photos.** Recommend keeping the text judgment and saying in the judgment when photos would decide it. The encoder that would close the gap did not pass its probes; the explicit hypothesis trial's budgeted photo re-read of the top 50 covers a visual preference until one does.
+- **The standard-library rule.** Recommend keeping the scoring core and every rerank on the standard library. The rerank meets its 2 seconds without numpy, including with the encoder's columns, and the encoder's numpy and onnxruntime live in its own environment. A numpy solver would be a second code path with no measured problem to solve.

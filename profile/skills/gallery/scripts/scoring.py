@@ -219,6 +219,18 @@ class Design:
             rows_without[favorite] = rows
         return rows_without
 
+    @cached_property
+    def rematched(self):
+        """For each favorite, the listings whose best photo match in some room is that favorite, so that leaving it out
+        gives them another value."""
+        result = {favorite: set() for favorite in self.favorites}
+        for name, best in self.photo_matches.items():
+            if self.index(name) is not None:
+                for index, pairs in enumerate(best):
+                    if pairs and pairs[0][1] in result:
+                        result[pairs[0][1]].add(self.ids[index])
+        return result
+
 
 @dataclass(frozen=True)
 class Observations:
@@ -706,16 +718,27 @@ def held_out_fit(model_design, full, data, unlabeled_weight, mean, precision, fa
     favorite's row until the row's own score settles. Another step would overshoot instead, because the full fit is
     confident of a favorite's score, so the row's curvature there is near zero. With converge, steps with that Hessian
     and the weak negative's curvature where its score settled follow until the change is below HELD_OUT_TOLERANCE,
-    and Newton iterations finish if that takes longer than HELD_OUT_ITERATIONS."""
+    and Newton iterations finish if that takes longer than HELD_OUT_ITERATIONS.
+
+    A labeled listing whose best photo match in a room is the favorite gets another value without it. Its row's old
+    curvature leaves that Hessian and the new row's joins it in the same low-rank update of the converged check, since
+    a labeled row weighs enough to slow its steps otherwise. Weak negatives that change stay with the steps."""
     dense_count = model_design.dense_count
     rows = model_design.rows_without[favorite]
     removed = [index for index, (listing, pair) in enumerate(zip(data.listings, data.pairs)) if listing == favorite or (pair and favorite in pair)]
     vectors = [expand(data.rows[index], len(mean)) for index in removed]
     curvature = [full.curvature[index] for index in removed]
+    rematched = model_design.rematched.get(favorite, ()) if converge else ()
+    if rematched:
+        at = {identifier: index for index, identifier in enumerate(model_design.ids)}
+        for index, listing in enumerate(data.listings):
+            if listing in rematched and index not in removed and data.weights[index] >= 1:
+                vectors += [expand(data.rows[index], len(mean)), expand(rows[at[listing]], len(mean))]
+                curvature += [full.curvature[index], -full.curvature[index]]
     solved = [full.factor.solve(vector) for vector in vectors]
     solved_columns = list(zip(*solved))
-    inverse = invert([[(1.0 if row == column else 0.0) - curvature[row] * dot(vectors[row], solved[column]) for column in range(len(removed))]
-                      for row in range(len(removed))])
+    inverse = invert([[(1.0 if row == column else 0.0) - curvature[row] * dot(vectors[row], solved[column]) for column in range(len(vectors))]
+                      for row in range(len(vectors))])
 
     def solve(vector):
         step = full.factor.solve(vector)

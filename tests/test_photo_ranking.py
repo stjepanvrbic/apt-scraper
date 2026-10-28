@@ -17,7 +17,7 @@ from blind_test import BlindTestUnavailable, blind_test, top  # noqa: E402
 from hypotheses import checked_proposals, pending_judgments  # noqa: E402
 from photo_catalog import GATE_PROBES, MATCH_ROOMS, PROBE_PROMPTS, vocabulary  # noqa: E402
 from rerank import rerank  # noqa: E402
-from scoring import design, display, fit_model  # noqa: E402
+from scoring import design, display, fit, fit_model, held_out_observations, leave_one_out, scores  # noqa: E402
 from test_rerank import StoreTestCase, fill, least_cpu_seconds  # noqa: E402
 
 MODEL = 'model-a'
@@ -114,6 +114,21 @@ class ColumnTests(EncoderTestCase):
         self.assertAlmostEqual(without, (0.2 - center) / scale)
         self.assertEqual(model_design.rows_without[second][index[other]].head[column + 1], model_design.likelihood_rows[index[other]].head[column + 1])
         self.assertEqual(model_design.rows_without[first][index[second]].head[column + 1], 0.0)
+
+    def test_the_leave_one_out_check_with_room_columns_matches_exact_refits(self):
+        identifiers = fill(self.store, 60, 12)
+        photo_features(self.store, identifiers)
+        pass_blind_test(self.store)
+        model = fit_model(self.store.ranking_inputs())
+        self.assertTrue(any(model.design.rematched.values()))
+        check = leave_one_out(model)
+        mean, precision = model.prior
+        for favorite in model.design.favorites:
+            data = held_out_observations(model.design, model.observations, favorite, model.unlabeled_weight)
+            weights = fit(data, mean, precision, model.design.dense_count, model.fit.weights).weights
+            exact = scores(model.design.rows_without[favorite], weights, model.design.dense_count)
+            for ours, theirs in zip(check.scores[favorite], exact):
+                self.assertAlmostEqual(ours, theirs, places=4)
 
     def test_a_probe_is_a_column_once_a_reading_names_it_and_earlier_readings_are_read_again(self):
         identifiers = fill(self.store, 10, 2)
