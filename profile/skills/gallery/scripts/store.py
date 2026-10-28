@@ -14,7 +14,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from code_features import FEATURES, configured_transit_feed, store_all_code_features, store_code_features
-from learning import compress, encode, label_clock
+from learning import encode, label_clock
 from schema import FINGERPRINT, LISTING_ID, MIGRATIONS, content_fingerprint, migrate
 from queries import RANKABLE, RANKING_EXCLUSION, answered_pairs, browse, paired, snapshot, user_noted, validate_page
 from record import SEED_TAGS, known_spelling, validate_extraction, validate_judgments
@@ -1132,7 +1132,7 @@ class ListingStore:
         if kind == 'favorite':
             inputs['impressions'] = self.favorite_impressions(connection, listing, occurred_at)
         connection.execute('INSERT INTO learning_events (occurred_at, kind, listing, other, inputs) VALUES (?, ?, ?, ?, ?)',
-                           (occurred_at, kind, listing, other, compress(encode(inputs))))
+                           (occurred_at, kind, listing, other, encode(inputs)))
 
     def favorite_impressions(self, connection, listing, occurred_at):
         visit = connection.execute('''SELECT s.visit_id FROM implicit_signals s JOIN listings l

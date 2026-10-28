@@ -5,6 +5,8 @@ import json
 import sqlite3
 import sys
 import unittest
+import zlib
+from contextlib import closing
 from unittest import mock
 from dataclasses import replace
 from pathlib import Path
@@ -19,8 +21,8 @@ from extraction_retest import collect, prepare  # noqa: E402
 from test_feature_record import extraction  # noqa: E402
 from ranking_experiments import write_report  # noqa: E402
 from rerank import rerank  # noqa: E402
-from learning import decode, encode  # noqa: E402
-from schema import MIGRATIONS, compress_learning_events, implicit_signals  # noqa: E402
+from learning import decode  # noqa: E402
+from schema import MIGRATIONS, plain_learning_events  # noqa: E402
 from rescore_ranking_feedback import validate_saved_curves  # noqa: E402
 
 
@@ -180,23 +182,45 @@ class JournalTests(StoreTestCase):
         self.assertEqual(report['known_positive_actions'][0]['kind'], 'contact')
         self.assertTrue(report['known_positive_actions'][0]['already_positive'])
 
-    def test_snapshots_are_compressed_and_existing_text_rows_migrate(self):
+    def legacy_journal(self, events):
+        legacy = self.home / 'legacy.sqlite3'
+        version = MIGRATIONS.index(plain_learning_events)
+        with closing(sqlite3.connect(legacy)) as connection, connection:
+            connection.row_factory = sqlite3.Row
+            for migration in MIGRATIONS[:version]:
+                migration(connection)
+            connection.executemany('INSERT INTO learning_events VALUES (?, ?, ?, ?, ?, ?)', events)
+            connection.execute(f'PRAGMA user_version = {version}')
+        return legacy
+
+    def test_snapshots_are_plain_json_and_compressed_rows_migrate_without_changing_events(self):
+        self.store.update_settings(preferences={'likes': ['Svijetla kuhinja — šuma'], 'dislikes': []})
         fill(self.store, 30, 2)
-        with self.store.connect(write=True) as connection:
+        with self.store.connect() as connection:
             events = list(connection.execute('SELECT * FROM learning_events ORDER BY id'))
-            self.assertIsInstance(events[0]['inputs'], bytes)
-            self.assertLess(len(events[0]['inputs']), len(encode(decode(events[0]['inputs'])).encode()) / 2)
-            original = [(event['id'], decode(event['inputs'])) for event in events]
-            for identifier, snapshot in original:
-                connection.execute('UPDATE learning_events SET inputs = ? WHERE id = ?', (encode(snapshot), identifier))
-            connection.execute('DROP TABLE implicit_signals')
-            implicit_signals(connection)
-            connection.execute(f'PRAGMA user_version = {MIGRATIONS.index(compress_learning_events)}')
-        self.store = type(self.store)(self.store.path)
+            self.assertIsInstance(events[0]['inputs'], str)
+            self.assertTrue(all(row[0] for row in connection.execute('SELECT json_valid(inputs) FROM learning_events')))
+        original = [tuple(event) for event in events]
+        older = [(*original[0][:-1], zlib.compress(original[0][-1].encode('utf-8'))), original[1]]
+        self.store = type(self.store)(self.legacy_journal(older))
         with self.store.connect() as connection:
             migrated = list(connection.execute('SELECT * FROM learning_events ORDER BY id'))
-        self.assertTrue(all(isinstance(event['inputs'], bytes) for event in migrated))
-        self.assertEqual([(event['id'], decode(event['inputs'])) for event in migrated], original)
+        self.assertEqual([tuple(event) for event in migrated], original)
+        self.store = type(self.store)(self.store.path)
+        with self.store.connect() as connection:
+            self.assertEqual([tuple(row) for row in connection.execute('SELECT * FROM learning_events ORDER BY id')], original)
+
+    def test_a_corrupt_compressed_row_aborts_the_conversion_without_partial_writes(self):
+        fill(self.store, 2, 2)
+        with self.store.connect() as connection:
+            events = [tuple(row) for row in connection.execute('SELECT * FROM learning_events ORDER BY id')]
+        older = [(*events[0][:-1], zlib.compress(events[0][-1].encode('utf-8'))), (*events[1][:-1], b'corrupt')]
+        legacy = self.legacy_journal(older)
+        with self.assertRaises(zlib.error):
+            type(self.store)(legacy)
+        with closing(sqlite3.connect(legacy)) as connection:
+            self.assertEqual(connection.execute('SELECT * FROM learning_events ORDER BY id').fetchall(), older)
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], MIGRATIONS.index(plain_learning_events))
     def test_store_replay_keeps_the_rank_before_later_favorites(self):
         identifiers = fill(self.store, 12, 0)
         rerank(self.store, seed=1)
