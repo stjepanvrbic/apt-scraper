@@ -25,6 +25,36 @@ from rescore_ranking_feedback import validate_saved_curves  # noqa: E402
 
 
 class MeasurementTests(unittest.TestCase):
+    def test_simulation_supplies_unmutated_pre_answer_history(self):
+        seen = []
+        def fitted(snapshot):
+            seen.append(copy.deepcopy(snapshot['history']))
+            return fit_model(snapshot)
+        def selector(snapshot, count, answered):
+            return questions(snapshot, DEFAULT_HYPERPARAMETERS, count, answered)
+        simulate(inputs(neighborhood(20)), selector, fitted, runs=1, labels=5)
+        self.assertEqual([len(history) for history in seen], [0, 5])
+        self.assertEqual([len(event['inputs']['pairs']) for event in seen[-1]], list(range(5)))
+        self.assertFalse(any(listing['paired'] for listing in seen[-1][0]['inputs']['listings']))
+
+    def test_replay_passes_only_prior_event_snapshots_to_a_history_aware_model(self):
+        initial = inputs(neighborhood(6))
+        for listing in initial['listings']:
+            listing['rank'] = 1
+        later = copy.deepcopy(initial)
+        later['listings'][0]['favorite'] = True
+        events = [{'kind': 'favorite', 'listing': 'listing:000', 'other': None, 'inputs': initial},
+                  {'kind': 'favorite', 'listing': 'listing:001', 'other': None, 'inputs': later}]
+        observed = []
+        def fitted(snapshot):
+            observed.append(snapshot['history'])
+            return fit_model(snapshot)
+        replay(events, fitted)
+        self.assertEqual(observed[0], [])
+        self.assertEqual(observed[1], [events[0]])
+        self.assertFalse(observed[1][0]['inputs']['listings'][0]['favorite'])
+        self.assertNotIn('history', events[0]['inputs'])
+
     def test_refitted_and_displayed_ranks_are_distinct_for_alternative_models(self):
         snapshot = inputs([entry('a', price=1000), entry('b', price=2000), entry('c', price=3000)])
         for number, listing in enumerate(snapshot['listings'], 1):

@@ -26,10 +26,10 @@ Phase 0, measure:
 
 Phase 1, priors and recency:
 
-- [ ] Columns are grouped (quality ratings, size and layout ratings, kitchen, bathroom, flags, categories, tags, price and size, location, judgments and hypotheses), each group's prior scale is set by maximizing the Laplace evidence, and tags and hypotheses have a per-column scale with a floor.
-- [ ] Composite columns for finish, light and space, with the components as deviations under a tighter scale, and the explanation names the composite and the component that deviates most.
-- [ ] Labels are weighted by age with a half-life chosen prequentially, with a floor, and hyperparameters are tuned prequentially only from 10 labels on; below that, the defaults.
-- [ ] Measured: on simulated users with 20 labels, pairwise accuracy on held-out pairs at least 0.05 above the model on `main`, averaged over 200 runs; on each real store, prequential median held-out rank no worse by more than 2 and better on at least one; the 300-listing, 50-favorite rerank under 2 s CPU. If simulation shows no gain, the priors stay and Result says why.
+- [x] Columns are grouped (quality ratings, size and layout ratings, kitchen, bathroom, flags, categories, tags, price and size, location, judgments and hypotheses), each group's prior scale is set by maximizing the Laplace evidence, and tags and hypotheses have a per-column scale with a floor.
+- [x] Composite columns for finish, light and space, with the components as deviations under a tighter scale, and the explanation names the composite and the component that deviates most.
+- [x] Labels are weighted by age with a half-life chosen prequentially, with a floor, and hyperparameters are tuned prequentially only from 10 labels on; below that, the defaults.
+- [x] Measured: on simulated users with 20 labels, pairwise accuracy on held-out pairs at least 0.05 above the model on `main`, averaged over 200 runs; on each real store, prequential median held-out rank no worse by more than 2 and better on at least one; the 300-listing, 50-favorite rerank under 2 s CPU. If simulation shows no gain, the priors stay and Result says why.
 
 Phase 2, labels worth more:
 
@@ -76,6 +76,11 @@ Phases 0 to 2 change no visible UI but the Compare questions and the "why" line;
 
 ## Deviations
 
+
+- Phase 1: the candidate stays in `tests/ranking_priors.py`; the installed `fit_model` and its priors are unchanged because both the simulation and CPU gates failed. Composite display and action-date capture are shared with the experiment, but the installed design creates no composite columns.
+- Evidence optimization uses up to 20 monotonic fixed-point steps with backtracking, not a claimed global optimum. Tags and hypotheses use per-column scales directly, with a 0.1 standard-deviation floor; a separate multiplicative group scale would be unidentifiable without another constraint. Composite components have a tighter default scale of 0.25.
+- Half-life selection uses log loss on the last ten journaled Compare answers and their original pre-action snapshots, choosing among no decay, 90, 30 and 7 days. Before ten usable historical snapshots it keeps no decay; the weak-negative weight stays 0.05. Synthetic answers arrive one per day with stationary tastes. Real action dates are captured where known; old favorite dates are not invented. No real recency benefit is claimed.
+
 - Owner decision, 2026-10-27: attempt Phase 4 regardless of the hypothesis result. Downloads are allowed only for that isolated encoder experiment, within its size gate. Real-photo gates without a cached dataset and the blind test remain owner-run, unchecked items. Phase 5 is not authorized.
 
 - Phase 0: exact prequential replay needs action-time records and candidate sets. Existing feedback has neither timestamps nor historical values. A new transactional `learning_events` journal stores pre-action inputs; old history is explicitly unavailable rather than reconstructed from future records.
@@ -101,7 +106,7 @@ On `feat/ranking_phase0_measure`, based on `main` at `324cb52`. The installed fi
 - Snapshot payload on the 300-listing fixture: mean 746,096.5 bytes before compression, 63,859.56 after; compressed range 63,844 to 63,866 bytes over 50 events. On the actual 63-listing copy, one snapshot is 173,739 raw bytes and 30,573 compressed bytes. Over 20 samples, snapshot read median is 2.197 ms [2.145, 2.223]; read plus compression inside a write transaction is 4.933 ms [4.865, 4.961]. No user feedback was fabricated or saved for this measurement. Existing SQLite free pages are reusable after migration; no immediate file-size shrink is claimed.
 - Stop condition: none for Phase 0. The missing real-data checks remain open. The ticket remains In Progress and the merge acceptance remains unchecked.
 
-Verification before the review fixes: full suite 665 tests and 317 subtests passed, zero skipped; Compare headless 11 passed. The review fixes have 19 targeted measurement tests passing, including compression migration, combined transitions, tie handling, prior-positive exclusion and cache selection. After the fixes: full Git Bash Python suite 674 passed and 317 subtests passed, zero skipped (327.02 s); full headless Playwright 40 passed, zero skipped (1.9 min); build, gallery lint and `ruff check .` pass. CodeRabbit re-review is pending for the updated head.
+Verification before the review fixes: full suite 665 tests and 317 subtests passed, zero skipped; Compare headless 11 passed. The review fixes have 19 targeted measurement tests passing, including compression migration, combined transitions, tie handling, prior-positive exclusion and cache selection. After the fixes: full Git Bash Python suite 674 passed and 317 subtests passed, zero skipped (327.02 s); full headless Playwright 40 passed, zero skipped (1.9 min); build, gallery lint and `ruff check .` pass. The final CodeRabbit review approved the updated head before merge.
 
 Tech debt fixed: the migration fixture now reconstructs the old schema completely; the Compare accessibility assertion accepts all three seeded listing prices; the guide no longer calls a fit with weak negatives the untouched prior.
 
@@ -125,8 +130,8 @@ Real-store evidence: [inventory and replay](../research/ranking_real_store_phase
 
 | Phase | Delivery | Measured outcome |
 | --- | --- | --- |
-| 0 | PR #50, review fixes verified locally; re-review pending | Measurement infrastructure; 1.00 s rerank; real labels 0; retest runtime prerequisite open |
-| 1 | PR #51, awaits rebase and corrected measurements | Prior candidate not promoted |
+| 0 | Merged PR #50 as `432fabd` after CodeRabbit approval | Measurement infrastructure; 1.00 s rerank; real labels 0; retest runtime prerequisite open |
+| 1 | PR #51 rebased onto merged #50; prior candidate rejected | Prior candidate not promoted |
 | 2 | PR #52, awaits rebase and corrected measurements | Impressions/reasons; cold-start candidate not promoted |
 | 3 | Local candidate, not published | Hypothesis lifecycle and controls under verification |
 | 4 | Authorized, not started | Encoder experiment and owner-run blind test |
@@ -135,3 +140,22 @@ Real-store evidence: [inventory and replay](../research/ranking_real_store_phase
 Re-review: the frozen-feedback rescorer now rejects inconsistent run counts, truncated curves/trajectories and non-finite accuracies before fitting. A regression test distinguishes displayed rank 1 from refitted ranks 1 and 3 under two alternative models. Both actual exposure and counterfactual model quality are reported.
 
 Re-review verification: 676 Python tests and 317 subtests passed, zero skipped (299.77 s); full headless Playwright 40 passed, zero skipped (1.7 min); gallery lint and Ruff pass. The synthetic chronological fixture has displayed median 16 [2, 21] and refitted median 14 [2, 19], showing the exploration-order difference explicitly.
+
+### Phase 1: rejected prior candidate
+
+`python tests/ranking_candidate_experiment.py docs/research/ranking_measurements_phase0.json docs/research/ranking_measurements_phase1.json` evaluates the exact same 200 users, first 20 answers and 100 held-out pairs per user from the checksummed feedback artifact.
+
+- Baseline accuracy 0.641675 [0.631225, 0.651625]. Candidate 0.622525 [0.611625, 0.632875]. Paired change -0.019150 [-0.025400, -0.012700], against the required +0.05. Intervals are 95% bootstrap over users, 2,000 resamples.
+- Candidate full rerank on 300 listings and 50 favorites, including store read/write and leave-one-out: 2.234375 CPU seconds, least of three, against under 2 seconds. The installed baseline measured 1.00 s in Phase 0.
+- On the 28 eligible real feature records with 200 simulated users, baseline accuracy is 0.754725 [0.745950, 0.763125], candidate 0.739975 [0.730050, 0.749650], paired change -0.014750 [-0.020950, -0.008300]. This also fails +0.05. These are virtual preferences, not user labels. See [real-feature prior experiment](../research/ranking_real_feature_priors_phase1.json).
+- Real-store replay and leave-one-out executed for both models on the authorized copy: zero user labels, no held-out ranks, and null medians and intervals. The real rank-improvement bar remains unmet. See [the baseline and candidate replay report](../research/ranking_real_store_phase1.json).
+- Stop condition fired: the simulation shows no gain. Priors, composites and decay stay out of the installed fit, as on `main`. The experiment remains reproducible for a real-data reassessment. The independent random rating fixture does not model the correlations in real apartment finishes, so this rejects promotion on available evidence, not every possible grouped prior.
+
+The targeted measurement and prior suite passes: 32 tests, zero skips. It covers original historical states, known and unknown action dates, evidence improvement and floors, composites, ties, and immutable simulated histories. After the rebase: full Git Bash Python suite 687 tests and 317 subtests passed (283.20 s); full headless Playwright 40 passed (1.7 min); gallery lint, build and Ruff pass. Zero skips. CodeRabbit re-review is pending.
+
+
+Review correction for Phase 1: the tuner no longer reconstructs past states from current inputs. Replay supplies the actual earlier journal snapshots, preserving past dismissals, feature records, readings and preferences, and excluding later labels. The frozen pair-only simulator constructs its history from its original corpus and answer prefixes. A regression test fails under the old reconstruction and passes with the historical snapshots. Undated legacy favorites retain full weight; legacy contact requests use their existing requested-at timestamp. Equal composite components are no longer falsely described as above the rest.
+
+The refreshed synthetic prior report is run `f580db55f8362e73`; the real-feature simulation is run `e072d6f741d8ac0f`, both dated 2026-10-27 UTC. Each report records its command and the least-of-three CPU timing rule. All 400 frozen trajectories have scorable historical pairs, so excluding unscorable journal events does not change these measured accuracies. A regression now covers nine scorable answers plus a missing-record answer (default retained), and ten scorable answers followed by a missing-record answer (only the ten usable snapshots compared).
+
+Final verification after these review fixes: full Git Bash Python suite 689 tests and 317 subtests passed (289.32 s), zero skips; Ruff passes. The production and gallery files are unchanged from the passing 40-test headless run, gallery lint and build.

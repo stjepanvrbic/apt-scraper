@@ -1,0 +1,56 @@
+{
+  "source": "authorized profile workspace copy",
+  "owner_label_count": 0,
+  "baseline": {
+    "listings": 63,
+    "events": 0,
+    "prequential": {
+      "held_out": [],
+      "known_positive_actions": [],
+      "rank_definition": "Refitted model rank over the historical candidate set, for model comparisons.",
+      "displayed_median_rank": null,
+      "displayed_median_interval": null,
+      "median_rank": null,
+      "median_interval": null,
+      "top_20": null,
+      "top_20_interval": null,
+      "pairwise_answers": 0,
+      "pairwise_scored": 0,
+      "pairwise_ties": 0,
+      "pairwise_unscorable": 0,
+      "pairwise_accuracy": null,
+      "pairwise_interval": null,
+      "pairwise_interval_90": null,
+      "excluded": 0
+    },
+    "leave_one_out": {},
+    "history_limit": "Only journaled actions have their original records, settings and candidate sets. Older labels cannot be replayed."
+  },
+  "candidate": {
+    "listings": 63,
+    "events": 0,
+    "prequential": {
+      "held_out": [],
+      "known_positive_actions": [],
+      "rank_definition": "Refitted model rank over the historical candidate set, for model comparisons.",
+      "displayed_median_rank": null,
+      "displayed_median_interval": null,
+      "median_rank": null,
+      "median_interval": null,
+      "top_20": null,
+      "top_20_interval": null,
+      "pairwise_answers": 0,
+      "pairwise_scored": 0,
+      "pairwise_ties": 0,
+      "pairwise_unscorable": 0,
+      "pairwise_accuracy": null,
+      "pairwise_interval": null,
+      "pairwise_interval_90": null,
+      "excluded": 0
+    },
+    "leave_one_out": {},
+    "history_limit": "Only journaled actions have their original records, settings and candidate sets. Older labels cannot be replayed."
+  },
+  "rank_bar_met": false,
+  "reason": "No favorites, contacts, user notes or Compare answers exist; rank medians and their intervals are undefined."
+}

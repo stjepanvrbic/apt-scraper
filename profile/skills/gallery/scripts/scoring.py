@@ -68,6 +68,11 @@ CODE_NUMBERS = {
     'bathrooms': ('bathrooms', float),
     'photos': ('photo_count', float),
 }
+COMPOSITES = {
+    'finish': ('kitchen_finish', 'bathroom_finish', 'condition', 'renovation_recency'),
+    'light': ('natural_light', 'window_size'),
+    'space': ('room_size', 'ceiling_height', 'layout_openness', 'storage'),
+}
 UNIT_LEVELS = {'garden': 'garden', 'garden or basement': 'garden', 'ground': 'ground', 'middle': 'middle', 'top': 'top'}
 FLAG_WORDS = {
     'in_unit_laundry': 'in-unit laundry', 'laundry_in_building': 'laundry in the building', 'dishwasher': 'dishwasher',
@@ -831,6 +836,19 @@ def fit_model(inputs, hyperparameters=None, *, weak_labels=None, warm_start=None
 
 def display(model_design, index, name):
     """How the listing's record states the value of a column, in words, or None when it does not state it."""
+    if name.startswith('composite:'):
+        record = model_design.listings[model_design.ids[index]]['record']
+        composite = name.split(':', 1)[1]
+        known = [(component, record['ratings'][component]['value']) for component in COMPOSITES[composite]
+                 if record and record['ratings'][component] != 'not shown']
+        if not known:
+            return None
+        average = fmean(value for _, value in known)
+        component, value = max(known, key=lambda item: abs(item[1] - average))
+        if value == average:
+            return f'{composite} {average:g} of 5'
+        direction = 'above' if value >= average else 'below'
+        return f'{composite} {average:g} of 5, {rating_words(component)} {direction} the rest'
     listing, raw = model_design.listings[model_design.ids[index]], model_design.raw[index]
     record, code = listing['record'], listing['code']
     if name not in raw:
