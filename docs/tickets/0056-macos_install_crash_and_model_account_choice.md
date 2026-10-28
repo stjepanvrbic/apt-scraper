@@ -17,10 +17,10 @@ The one-line install on macOS gets through the Claude Code step and the Claude l
 ## Acceptance
 
 - [x] `curl -fsSL .../bootstrap.sh | bash` runs `claude update` and `claude auth login` without Bun's `EINVAL: invalid argument, kqueue` (GitHub issue #55), and the login still reads the keyboard.
-- [x] A test fails on the earlier `bootstrap.sh` with the reported error and passes with the fix, in a real pseudo-terminal whose `/dev/tty` is an alias of the terminal device, as on macOS.
+- [x] A test fails on the earlier `bootstrap.sh` and passes with the fix, in a real pseudo-terminal under Git Bash, where `/dev/tty` is an alias of the terminal device as on macOS. Bun's kqueue error is simulated by a fake `claude` that fails when its standard input is `/dev/tty`; a run on a real Mac is still pending.
 - [x] Both installers ask "Use your Claude Pro or Max subscription? [Y/n]" first. Yes, Enter, and an install without a terminal to ask on take the Claude path as before. No skips Claude Code and the subscription plugin and runs `hermes -p apt-scraper model`; the provider and model it writes survive the profile install, and the test message goes through them.
 - [x] Tests for the yes, no and non-interactive paths on both platforms, with zero skipped tests.
-- [x] README, docs/spec.md, docs/intent.md and the agent instructions say the agent runs on the Claude subscription by default or on any provider Hermes supports, and that only Claude has been measured.
+- [x] README, docs/spec.md, docs/intent.md and the agent instructions say the agent runs on the Claude subscription by default or on any provider Hermes supports. README and docs/spec.md also say that only Claude models have been measured, and README's listing features, ranking review and billing sections name the picked provider's model and billing.
 
 ## Spec
 
