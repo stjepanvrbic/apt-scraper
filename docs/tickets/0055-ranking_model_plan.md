@@ -135,8 +135,8 @@ Real-store evidence: [inventory and replay](../research/ranking_real_store_phase
 | Phase | Delivery | Measured outcome |
 | --- | --- | --- |
 | 0 | Merged PR #50 as `432fabd` after CodeRabbit approval | Measurement infrastructure; 1.00 s rerank; real labels 0; retest runtime prerequisite open |
-| 1 | PR #51 rebased onto merged #50; prior candidate rejected | Prior candidate not promoted |
-| 2 | PR #52, local rebase and measurements complete; all local checks green | Impressions/reasons; cold-start candidate not promoted |
+| 1 | Merged PR #51 as `7002c7b` after CodeRabbit approval | Prior candidate not promoted |
+| 2 | PR #52 rebased onto merged #51; all local checks green | Impressions/reasons; cold-start candidate not promoted |
 | 3 | Local candidate, not published | Hypothesis lifecycle and controls under verification |
 | 4 | Authorized, not started | Encoder experiment and owner-run blind test |
 | 5 | Not authorized | Owner decision and longitudinal data required |
@@ -155,7 +155,7 @@ Re-review verification: 676 Python tests and 317 subtests passed, zero skipped (
 - Real-store replay and leave-one-out executed for both models on the authorized copy: zero user labels, no held-out ranks, and null medians and intervals. The real rank-improvement bar remains unmet. See [the baseline and candidate replay report](../research/ranking_real_store_phase1.json).
 - Stop condition fired: the simulation shows no gain. Priors, composites and decay stay out of the installed fit, as on `main`. The experiment remains reproducible for a real-data reassessment. The independent random rating fixture does not model the correlations in real apartment finishes, so this rejects promotion on available evidence, not every possible grouped prior.
 
-The targeted measurement and prior suite passes: 32 tests, zero skips. It covers original historical states, known and unknown action dates, evidence improvement and floors, composites, ties, and immutable simulated histories. After the rebase: full Git Bash Python suite 687 tests and 317 subtests passed (283.20 s); full headless Playwright 40 passed (1.7 min); gallery lint, build and Ruff pass. Zero skips. CodeRabbit re-review is pending.
+The targeted measurement and prior suite passes: 32 tests, zero skips. It covers original historical states, known and unknown action dates, evidence improvement and floors, composites, ties, and immutable simulated histories. After the rebase: full Git Bash Python suite 687 tests and 317 subtests passed (283.20 s); full headless Playwright 40 passed (1.7 min); gallery lint, build and Ruff pass. Zero skips. CodeRabbit approved final head `a4ea149` before the squash merge.
 
 
 Review correction for Phase 1: the tuner no longer reconstructs past states from current inputs. Replay supplies the actual earlier journal snapshots, preserving past dismissals, feature records, readings and preferences, and excluding later labels. The frozen pair-only simulator constructs its history from its original corpus and answer prefixes. A regression test fails under the old reconstruction and passes with the historical snapshots. Undated legacy favorites retain full weight; legacy contact requests use their existing requested-at timestamp. Equal composite components are no longer falsely described as above the rest.
