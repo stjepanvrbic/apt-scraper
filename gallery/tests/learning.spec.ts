@@ -15,12 +15,18 @@ test('a committed impression whose response is lost retries the same event once'
     if (event.kind !== 'impression') return route.continue();
     if (!first) {
       first = { event_id: event.event_id, listing_id: event.listing_id };
-      expect((await route.fetch()).ok()).toBe(true);
+      const response = await route.fetch();
+      expect(response.ok()).toBe(true);
+      expect(await response.json()).toEqual({ recorded: 1 });
       await route.abort();
       return;
     }
-    if (event.listing_id === first.listing_id) retried.push(event.event_id);
-    await route.continue();
+    if (event.listing_id !== first.listing_id) return route.continue();
+    const response = await route.fetch();
+    expect(response.ok()).toBe(true);
+    expect(await response.json()).toEqual({ recorded: 0 });
+    await route.fulfill({ response });
+    retried.push(event.event_id);
   });
   await page.goto(gallery.url);
   await page.getByRole('article').first().scrollIntoViewIfNeeded();
