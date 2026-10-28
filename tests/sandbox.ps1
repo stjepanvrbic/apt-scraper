@@ -3,7 +3,11 @@
 # installers this script downloads once and checks against their pinned hashes, copies the checkout, runs the
 # checks and shuts down. What the run prints shows here as it happens, and this exits with the checks' exit code.
 #   tests\sandbox.ps1 [-KeepOpen] [-TimeoutMinutes 120] [-MemoryMB 8192]
-# -KeepOpen leaves the sandbox open after the checks, to look around; close its window to end it.
+# The sandbox is started through the `wsb` command, so it has an ID, and it is stopped through `wsb stop` when the
+# checks end, when the timeout passes and when this script is interrupted: a sandbox that outlives its run holds
+# gigabytes of memory until the machine restarts. The script refuses to start while another sandbox runs.
+# -KeepOpen leaves the sandbox running after the checks, to look around with `wsb connect --id <ID>`; stop it
+# yourself with `wsb stop --id <ID>`.
 # Windows Sandbox is an optional feature of Windows 10 and 11 Pro, Enterprise and Education. To enable it, in an
 # administrator PowerShell:
 #   Enable-WindowsOptionalFeature -Online -FeatureName Containers-DisposableClientVM -All
@@ -28,15 +32,29 @@ $toolchain = @(
        Sha256 = '9231bf64d19bef391dd5ee8af65411d3799c3c44a842d2320849cc1da60b6b6d' }
 )
 
-$sandbox = Join-Path $env:windir 'System32\WindowsSandbox.exe'
-if (-not (Test-Path $sandbox)) {
-    Write-Host 'Windows Sandbox is not enabled. In an administrator PowerShell, run' -ForegroundColor Red
+function Get-RunningSandboxes {
+    $listing = wsb list --raw 2>$null | Out-String
+    if (-not $listing.Trim()) { return @() }
+    return @(($listing | ConvertFrom-Json).WindowsSandboxEnvironments | ForEach-Object { $_.Id })
+}
+
+if (-not (Get-Command wsb -ErrorAction SilentlyContinue)) {
+    Write-Host 'Windows Sandbox is not enabled, or its wsb command is missing. In an administrator PowerShell, run' -ForegroundColor Red
     Write-Host '  Enable-WindowsOptionalFeature -Online -FeatureName Containers-DisposableClientVM -All'
     Write-Host 'then restart Windows and run this again.'
     exit 1
 }
-if (Get-Process -Name WindowsSandbox, WindowsSandboxClient, WindowsSandboxServer, WindowsSandboxRemoteSession -ErrorAction SilentlyContinue) {
-    throw 'A Windows Sandbox is already open, and Windows runs one at a time. Close it and run this again.'
+$running = Get-RunningSandboxes
+if ($running.Count) {
+    Write-Host "A Windows Sandbox is already running, and Windows runs one at a time. Stop it first:" -ForegroundColor Red
+    $running | ForEach-Object { Write-Host "  wsb stop --id $_" }
+    exit 1
+}
+if (Get-Process -Name vmmemWindowsSandbox -ErrorAction SilentlyContinue) {
+    Write-Host 'A sandbox virtual machine is running that wsb does not list, left over from a session that was killed.' -ForegroundColor Red
+    Write-Host 'Only an administrator can stop it: in an administrator PowerShell, `hcsdiag list` shows it with the owner'
+    Write-Host 'WindowsSandbox, and `hcsdiag kill <ID>` stops that one. Leave the WSL and CmService entries alone.'
+    exit 1
 }
 
 $base = Join-Path $env:LOCALAPPDATA 'apt-scraper\sandbox'
@@ -70,32 +88,34 @@ foreach ($tool in $toolchain) {
 $desktop = 'C:\Users\WDAGUtilityAccount\Desktop'
 function Get-MappedFolder([string]$HostFolder, [string]$Name, [bool]$ReadOnly) {
     $escaped = [System.Security.SecurityElement]::Escape($HostFolder)
-    "    <MappedFolder><HostFolder>$escaped</HostFolder><SandboxFolder>$desktop\$Name</SandboxFolder>" +
+    "<MappedFolder><HostFolder>$escaped</HostFolder><SandboxFolder>$desktop\$Name</SandboxFolder>" +
     "<ReadOnly>$($ReadOnly.ToString().ToLower())</ReadOnly></MappedFolder>"
 }
 $configuration = @(
     '<Configuration>',
-    "  <MemoryInMB>$MemoryMB</MemoryInMB>",
-    '  <MappedFolders>',
+    "<MemoryInMB>$MemoryMB</MemoryInMB>",
+    '<MappedFolders>',
     (Get-MappedFolder $root 'apt-scraper' $true),
     (Get-MappedFolder $downloads 'toolchain' $true),
     (Get-MappedFolder $cache 'cache' $false),
     (Get-MappedFolder $out 'out' $false),
-    '  </MappedFolders>',
-    '  <LogonCommand>',
-    "    <Command>powershell -NoProfile -ExecutionPolicy Bypass -File $desktop\apt-scraper\tests\sandbox-inside.ps1</Command>",
-    '  </LogonCommand>',
+    '</MappedFolders>',
+    '<LogonCommand>',
+    "<Command>powershell -NoProfile -ExecutionPolicy Bypass -File $desktop\apt-scraper\tests\sandbox-inside.ps1</Command>",
+    '</LogonCommand>',
     '</Configuration>'
-) -join "`r`n"
-$wsb = Join-Path $run 'checks.wsb'
-Set-Content -Encoding ascii $wsb $configuration
-
-Write-Host "==> Starting Windows Sandbox; its log is $out\log.txt" -ForegroundColor Cyan
-Start-Process $sandbox -ArgumentList "`"$wsb`""
+) -join ''
+Set-Content -Encoding ascii (Join-Path $run 'checks.wsb') $configuration
 
 $log = Join-Path $out 'log.txt'
 $exitFile = Join-Path $out 'exit-code'
-$deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+Write-Host "==> Starting Windows Sandbox; its log is $log" -ForegroundColor Cyan
+$started = wsb start --config $configuration --raw 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0 -or -not $started.Trim().StartsWith('{')) { throw "wsb start failed: $started" }
+$id = ($started | ConvertFrom-Json).Id
+if (-not $id) { throw "wsb start returned no sandbox ID: $started" }
+Write-Host "    sandbox $id"
+
 $script:shown = 0
 function Show-NewLines {
     if (-not (Test-Path $log)) { return }
@@ -105,17 +125,34 @@ function Show-NewLines {
         $script:shown = $lines.Count
     }
 }
-while (-not (Test-Path $exitFile)) {
-    if ((Get-Date) -gt $deadline) {
+$code = 1
+$timedOut = $false
+try {
+    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    while (-not (Test-Path $exitFile)) {
+        if ((Get-Date) -gt $deadline) { $timedOut = $true; break }
+        Start-Sleep -Seconds 5
         Show-NewLines
-        throw "The sandbox did not finish within $TimeoutMinutes minutes. Its log is $log."
     }
-    Start-Sleep -Seconds 5
+    Start-Sleep -Seconds 2
     Show-NewLines
+    if (-not $timedOut) { $code = [int](Get-Content $exitFile | Select-Object -First 1) }
+} finally {
+    if ($KeepOpen -and -not $timedOut) {
+        Write-Host "==> Sandbox $id is left running. Look around with 'wsb connect --id $id'; stop it with 'wsb stop --id $id'." -ForegroundColor Yellow
+    } else {
+        wsb stop --id $id 2>$null | Out-Null
+        if ((Get-RunningSandboxes) -contains $id) {
+            Write-Host "==> Sandbox $id did not stop. Stop it with 'wsb stop --id $id'." -ForegroundColor Red
+        } else {
+            Write-Host "==> Sandbox $id stopped."
+        }
+    }
 }
-Start-Sleep -Seconds 2
-Show-NewLines
-$code = [int](Get-Content $exitFile | Select-Object -First 1)
+if ($timedOut) {
+    Write-Host "==> The sandbox did not finish within $TimeoutMinutes minutes. Its log is $log." -ForegroundColor Red
+    exit 1
+}
 if ($code -eq 0) { Write-Host "==> The checks passed in the sandbox. Log: $log" -ForegroundColor Green }
 else { Write-Host "==> The checks failed in the sandbox with exit code $code. Log: $log" -ForegroundColor Red }
 exit $code
