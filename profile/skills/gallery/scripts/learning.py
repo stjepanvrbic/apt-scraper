@@ -39,8 +39,10 @@ def label_clock(connection, listings, pairs):
             'pair_days': [answered[tuple(pair)] for pair in pairs]}
 
 
-def prediction(inputs, event, fitter=fit_model):
+def prediction(inputs, event, fitter=fit_model, *, required_column=None):
     model = fitter(inputs)
+    if required_column is not None and model.design.index(required_column) is None:
+        return None
     values = dict(zip(model.design.ids, scores(model.design.likelihood_rows, model.fit.weights, model.design.dense_count)))
     if event['listing'] not in values:
         return None

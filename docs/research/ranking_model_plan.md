@@ -234,7 +234,7 @@ Numbers to beat: on the 129-listing garden store, the pass proposes the finish o
 
 Only if phase 3 produces visual hypotheses the judgments cannot score, or photos matter for later preferences. Build the ONNX job, the per-photo cache, centering, probes, per-room best match, the room-type check.
 
-Numbers to beat: install under 150 MB of downloads and under 1 GB of memory; 3,000 photos in under 10 minutes at 4 threads; room-type agreement with extraction at least 85% on 1,000 photos; five probe AUCs at least 0.85; blind test on at least 30 unseen listings, criterion written before the run: precision at 10 against the owner's blind picks at least 0.5 and above the model without the encoder. Stop: any gate failing ends the phase with the encoder out, as the spike ended.
+Numbers to beat: ~~install under 150 MB of downloads and under 1 GB of memory; 3,000 photos in under 10 minutes at 4 threads~~ (withdrawn by the owner; report download size, memory and encoding time as information); room-type agreement with extraction at least 85% on 1,000 photos; five probe AUCs at least 0.85; blind test on at least 30 unseen listings, criterion written before the run: precision at 10 against the owner's blind picks at least 0.5 and above the model without the encoder. Stop: any gate failing ends the phase with the encoder out, as the spike ended.
 
 ### Phase 5: implicit signals and drift
 

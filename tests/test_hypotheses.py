@@ -3,7 +3,6 @@ import json
 import hashlib
 import sqlite3
 import sys
-import zlib
 from pathlib import Path
 from contextlib import closing
 from unittest import mock
@@ -22,6 +21,70 @@ from learning import prediction  # noqa: E402
 
 
 class HypothesisTests(StoreTestCase):
+    def test_a_legacy_rerank_without_a_review_cannot_prepare_a_pass(self):
+        fill(self.store, 8, 1)
+        rerank(self.store, seed=1)
+        with self.store.connect(write=True) as connection:
+            connection.execute('DELETE FROM reviews')
+        self.assertIsNone(self.store.last_rerank()['review'])
+        self.assertIsNone(prepare(self.store))
+
+    def test_feedback_before_judgments_is_not_evidence_for_survival(self):
+        save(self.store, self.prepare_case())
+        hypothesis = active(self.store)[0]
+        for identifier in self.identifiers[1:21]:
+            self.store.feedback(identifier, favorite=True)
+        save_judgments(self.store, [
+            {'hypothesis': hypothesis['id'], 'id': identifier,
+             'fingerprint': self.store.listing(identifier)['content_fingerprint'],
+             'verdict': 'has' if index < 21 else 'rules out', 'evidence': 'Fixture.'}
+            for index, identifier in enumerate(self.identifiers)])
+        result = assess(self.store)[0]
+        self.assertGreater(abs(result['weight']), 0.1)
+        self.assertEqual(result['comparisons'], {'rank': [], 'pair': []})
+        self.assertFalse(result['survives'])
+
+    def test_judgment_tasks_include_all_stored_listing_fields_and_full_description(self):
+        save(self.store, self.prepare_case())
+        identifier = self.identifiers[0]
+        description = 'Details. ' * 300 + 'Final evidence.'
+        self.store.upsert_listing(listing(id=identifier, price=2345, address='456 New Street',
+                                         rooms='3 bedrooms, 2 bathrooms', size='1234 sq ft', description=description))
+        report = judgment_files(self.store, self.home / 'judgments')
+        text = Path(report['tasks'][0]['task']).read_text()
+        payload = json.loads(text.split('```json\n', 1)[1].split('\n```', 1)[0])
+        content = next(item['listing'] for item in payload if item['id'] == identifier)
+        self.assertEqual(content['address'], '456 New Street')
+        self.assertEqual(content['price'], '2345 USD a month')
+        self.assertEqual(content['rooms'], '3 bedrooms, 2 bathrooms')
+        self.assertEqual(content['size'], '1234 sq ft')
+        self.assertEqual(content['description'], description)
+
+    def test_missing_cached_files_wait_while_available_tasks_continue_and_escaping_paths_fail(self):
+        value = self.prepare_case()
+        value['hypotheses'][0]['kind'] = 'visual'
+        save(self.store, value)
+        cache = self.home / 'photos'
+        for number, identifier in enumerate(self.identifiers[:2]):
+            folder = cache / str(number)
+            folder.mkdir(parents=True)
+            (folder / 'sheet.jpg').write_bytes(b'cached sheet')
+            if number:
+                (folder / 'photo.jpg').write_bytes(b'cached photo')
+            (folder / 'task.json').write_text(json.dumps({'id': identifier,
+                'fingerprint': self.store.listing(identifier)['content_fingerprint'],
+                'files': ['photo.jpg'], 'sheets': ['sheet.jpg']}))
+        report = judgment_files(self.store, self.home / 'judgments', cache)
+        self.assertEqual(report['visual_listing_reads'], 1)
+        self.assertIn(self.identifiers[0], report['visual_waiting_for_cached_photos'])
+        self.assertEqual(set(report['tasks'][0]['expected']), {self.identifiers[1]})
+        manifest_file = cache / '0' / 'task.json'
+        manifest = json.loads(manifest_file.read_text())
+        manifest['files'] = ['../../outside.jpg']
+        manifest_file.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(ValueError, 'inside the supplied cache'):
+            judgment_files(self.store, self.home / 'judgments', cache)
+
     def test_prediction_marks_ties_and_existing_positive_labels(self):
         snapshot = inputs([entry('a', price=1000), entry('b', price=1000)])
         pair = prediction(snapshot, {'kind': 'pair', 'listing': 'a', 'other': 'b'})
@@ -52,16 +115,14 @@ class HypothesisTests(StoreTestCase):
         rerank(self.store, seed=1)
         self.assertIsNone(prepare(self.store))
 
-    def test_pass_storage_compresses_the_task_without_a_duplicate_input_snapshot(self):
+    def test_pass_storage_is_plain_json_without_a_duplicate_input_snapshot(self):
         self.prepare_case()
         with self.store.connect() as connection:
             columns = {row['name'] for row in connection.execute('PRAGMA table_info(hypothesis_passes)')}
             saved = connection.execute('SELECT task FROM hypothesis_passes').fetchone()['task']
         self.assertNotIn('inputs', columns)
-        self.assertIsInstance(saved, bytes)
-        raw = zlib.decompress(saved)
-        self.assertLess(len(saved), len(raw) / 2)
-        self.assertEqual(json.loads(raw), json.loads(json.dumps(self.task)))
+        self.assertIsInstance(saved, str)
+        self.assertEqual(json.loads(saved), json.loads(json.dumps(self.task)))
 
     def test_removing_labels_does_not_advance_the_twenty_label_grace_period(self):
         value = self.prepare_case()

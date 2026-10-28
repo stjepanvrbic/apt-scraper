@@ -8,10 +8,9 @@ import hashlib
 import json
 import math
 import re
-import zlib
 from statistics import fmean, median
 
-from learning import compress, decode, prediction
+from learning import decode, prediction
 from record import CATEGORIES, RATINGS, validate_judgments
 from review import review_outcome, review_task, validated_review
 from scoring import design, fit_model, label, labeled
@@ -52,7 +51,7 @@ def has_new_labels(store):
 
 def prepare(store):
     last = store.last_rerank()
-    if not last or last['review']['state'] not in ('waiting', 'running'):
+    if not last or not last['review'] or last['review']['state'] not in ('waiting', 'running'):
         return None
     inputs = store.ranking_inputs()
     if not inputs['pairs'] and not any(label(listing, inputs['sentiments'].get(listing['id'])) is not None for listing in inputs['listings']):
@@ -73,7 +72,7 @@ def prepare(store):
                                              for listing in inputs['listings'] if label(listing, inputs['sentiments'].get(listing['id'])) is not None},
                                   'pairs': inputs['pairs']}
         connection.execute('INSERT INTO hypothesis_passes (label_event, rerank_id, task) VALUES (?, ?, ?)',
-                           (number, last['id'], compress(json.dumps(task))))
+                           (number, last['id'], json.dumps(task)))
     return task
 
 
@@ -117,7 +116,7 @@ def save(store, value):
         request = connection.execute('SELECT * FROM hypothesis_passes WHERE rerank_id = ? AND saved = 0', (last['id'],)).fetchone()
     if request is None:
         raise ValueError('No hypothesis pass is pending.')
-    task = json.loads(zlib.decompress(request['task']))
+    task = json.loads(request['task'])
     proposals = checked_proposals(value['hypotheses'], task)
     snapshot = store.review_snapshot(last['id'])
     review = validated_review({key: value[key] for key in ('rerank', 'reasons', 'flags', 'findings')} | {'moves': []},
@@ -139,8 +138,7 @@ def pending_judgments(store):
     inputs = store.ranking_inputs()
     with store.connect() as connection:
         content = {row['id']: json.loads(row['data']) for row in connection.execute('SELECT id, data FROM listings')}
-    records = {listing['id']: {**listing, 'description': content[listing['id']].get('description'),
-                               'amenities': content[listing['id']].get('amenities', [])} for listing in inputs['listings']}
+    records = {listing['id']: {**listing, 'listing': content[listing['id']]} for listing in inputs['listings']}
     visual = {identifier for identifier, listing in records.items() if labeled(listing) or listing.get('rank') is not None and listing['rank'] <= 50}
     with store.connect() as connection:
         judged = {(row['hypothesis'], row['listing_id'], row['fingerprint']) for row in connection.execute('SELECT * FROM hypothesis_judgments')}
@@ -236,12 +234,14 @@ def assess(store):
                 if event['kind'] not in ('favorite', 'contact', 'pair', 'note'):
                     continue
                 snapshot = decode(event['inputs'])
-                with_column = prediction(snapshot, event)
+                with_column = prediction(snapshot, event, required_column=f'hypothesis:{hypothesis["phrase"]}')
+                if with_column is None or with_column.get('already_positive'):
+                    continue
                 without = copy.deepcopy(snapshot)
                 for listing in without['listings']:
                     listing.get('hypotheses', {}).pop(hypothesis['phrase'], None)
                 without_column = prediction(without, event)
-                if with_column and without_column and not with_column.get('already_positive'):
+                if without_column:
                     comparisons[with_column['kind']].append([with_column['value'], without_column['value']])
         ranks, pairs = comparisons['rank'], comparisons['pair']
         survives = bool(ranks or pairs) and abs(weight) >= MIN_WEIGHT

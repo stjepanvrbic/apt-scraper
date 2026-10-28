@@ -161,12 +161,11 @@
   "real_twenty_label_survival": "Reported separately from this scripted fixture.",
   "pass_storage": {
     "count": 21,
-    "compressed_mean_bytes": 18287.238095238095,
-    "compressed_interval": [
-      18228.619047619046,
-      18341.666666666668
-    ],
-    "raw_mean_bytes": 182127.52380952382
+    "mean_bytes": 182127.52380952382,
+    "interval": [
+      180816.7142857143,
+      182898.66666666666
+    ]
   },
   "promotion": "automatic hypothesis generation stays outside the installed review job",
   "rerank_benchmark": {
@@ -174,20 +173,20 @@
     "favorites": 50,
     "hypotheses": 6,
     "cpu_seconds": [
-      1.140625,
-      1.140625,
-      1.125
+      1.453125,
+      1.53125,
+      1.484375
     ],
-    "least_cpu_seconds": 1.125,
+    "least_cpu_seconds": 1.453125,
     "observed_range": [
-      1.125,
-      1.140625
+      1.453125,
+      1.53125
     ],
     "bar_met": true,
     "timing_selection": "Least of three complete reranks, including store read/write and leave-one-out."
   },
   "run": {
-    "id": "28a691e39bf08d7a",
+    "id": "228427da4395ba88",
     "date_utc": "2026-10-28",
     "command": "python tests/ranking_hypothesis_experiment.py docs/research/ranking_measurements_phase3.json --benchmark"
   }

@@ -7,7 +7,6 @@ import shlex
 import sys
 import tempfile
 import time
-import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import fmean, median
@@ -82,15 +81,13 @@ def run(directory):
     assessments = assess(store)
     with store.connect() as connection:
         tasks = [row['task'] for row in connection.execute('SELECT task FROM hypothesis_passes')]
-    sizes = [len(task) for task in tasks]
+    sizes = [len(task.encode('utf-8')) for task in tasks]
     report = {'data': 'synthetic fixture; scripted proposals and known judgments, not model output',
               'new_labels': 20, 'requested_passes': requests, 'reranks_with_new_labels': 21, 'remote_model_calls': 0,
               'budget': budget, 'assessments': assessments,
               'real_garden_proposal': 'Reported separately from this scripted fixture.',
               'real_twenty_label_survival': 'Reported separately from this scripted fixture.',
-              'pass_storage': {'count': len(tasks), 'compressed_mean_bytes': fmean(sizes),
-                               'compressed_interval': bootstrap(sizes, fmean),
-                               'raw_mean_bytes': fmean(len(zlib.decompress(task)) for task in tasks)},
+              'pass_storage': {'count': len(tasks), 'mean_bytes': fmean(sizes), 'interval': bootstrap(sizes, fmean)},
               'promotion': 'automatic hypothesis generation stays outside the installed review job'}
     for item in assessments:
         pairs = item['comparisons']['rank']

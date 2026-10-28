@@ -13,7 +13,8 @@ from review import CONNECTING_WORDS, MODEL_WORDS  # noqa: E402
 from rerank import rerank  # noqa: E402
 from store import ListingStore  # noqa: E402
 from store_copy import copy_database  # noqa: E402
-from extraction_retest import cached_files  # noqa: E402
+from extraction_retest import MissingCachedPhotos, cached_files  # noqa: E402
+from features import listing_fields  # noqa: E402
 
 SKILLS = Path(__file__).resolve().parents[2]
 
@@ -59,14 +60,18 @@ def judgment_files(store, directory, cache=None):
                 waiting.append(listing['id'])
                 continue
             manifest_file, manifest = found
-            images = cached_files(cache, manifest_file, manifest['sheets'])
-            full_photos = cached_files(cache, manifest_file, manifest['files'])
-            if not images:
+            try:
+                images = cached_files(cache, manifest_file, manifest['sheets'])
+                full_photos = cached_files(cache, manifest_file, manifest['files'])
+            except MissingCachedPhotos:
+                waiting.append(listing['id'])
+                continue
+            if not images or not full_photos:
                 waiting.append(listing['id'])
                 continue
         output = directory / f'judgments-{index}.json'
         listings = [{'id': item['id'], 'fingerprint': item['fingerprint'], 'unjudged': list(item['unjudged']),
-                     'listing': {key: item.get(key) for key in ('title', 'description', 'amenities')}, 'record': item['record']}
+                     'listing': listing_fields(item['listing']), 'record': item['record']}
                     for item in task['listings']]
         text = Template(template).substitute(count=len(listings), correction='', listings_json=json.dumps(listings, indent=2), judgments_file=output.as_posix())
         if images:

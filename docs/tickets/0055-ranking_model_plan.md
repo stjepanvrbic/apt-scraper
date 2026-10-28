@@ -47,9 +47,9 @@ Phase 3, hypotheses:
 
 Phase 4, local encoder, authorized regardless of Phase 3 outcome:
 
-- [ ] A background job embeds every unique photo once per content with one int8 ONNX image tower (MobileCLIP2-S2 or SigLIP 2 B/16, chosen by the gate), cached by fingerprint and photo URL, centered per room type over the store, in an environment of its own with ONNX Runtime and numpy, pinned by hash.
+- [ ] A background job embeds every unique photo once per content with an image tower chosen for measured quality, cached by fingerprint and photo URL, centered per room type over the store, in its own ONNX Runtime/numpy environment and pinned by hash. Compare SigLIP 2 B/16 and larger variants, MobileCLIP2 S2 and larger variants, and stronger candidates found, at fp32/fp16 as well as int8; quantize only without measurable quality loss. Encoding stays off the rerank path, whose existing 2 s CPU check remains.
 - [ ] Three kinds of named column, nothing else: a text probe per visual hypothesis and per visual stated preference; per-room best-match similarity to the most similar favorite for kitchen, bathroom, living and bedroom, explained as "kitchen looks like your favorite X"; and a room-type check that flags an extraction disagreeing with the encoder on most photos.
-- [ ] Gate, measured before any column enters the model: downloads under 150 MB and memory under 1 GB; 3,000 photos in under 10 minutes at 4 threads; room-type agreement with extraction at least 85% on 1,000 photos; AUC at least 0.85 for five probes against record fields (carpet, exposed brick, balcony, bathtub, open kitchen).
+- [ ] Quality gates, measured before any column enters the model: room-type agreement with extraction at least 85% on 1,000 photos; AUC at least 0.85 for five probes against record fields (carpet, exposed brick, balcony, bathtub, open kitchen). Report user-side download size, peak memory and the 3,000-photo encoding time at 4 threads as information, not gates.
 - [ ] Blind test, criterion written down before the run: at least 30 unseen listings, the owner picks the 10 they would view blind to rank, precision at 10 of the model with the encoder at least 0.5 and above the model without it. Any gate or the blind test failing ends the phase with the encoder out.
 
 Phase 5, implicit signals and drift:
@@ -76,13 +76,16 @@ Phases 0 to 2 change no visible UI but the Compare questions and the "why" line;
 
 ## Deviations
 
+- Owner decision: the 150 MB download target, 1 GB memory limit and 10-minute encoding-time limit are withdrawn. Encoder choice is by room agreement, probe AUCs and the blind test, with float and quantized candidates compared for quality. Sizes, memory and encoding time remain reported measurements. The 2-second gallery rerank bar remains.
+- The text tower is a build-time tool only. It produces hash-pinned vectors for the named probes, room types and known visual hypotheses; those vectors ship with the image tower. Runtime handling of later user-authored probes is an owner decision and is not designed here.
+
 - Owner clarification: optimize when a measurement shows a real problem for the user or the result; arbitrary size, storage and speed numbers are not requirements. The journal compression revert is explicit. The atomic journal and its chronological semantics remain.
 
 - The automatic review job stays as on main because the real hypothesis gates are unmet. The explicit copy-based trial prepares the no-move review and judgment tasks; the existing scheduled review is not silently changed. The gallery controls and named columns operate on hypotheses supplied through that trial.
 - Grouped evidence priors were rejected earlier, so hypothesis columns use the existing sparse solver with a fixed Gaussian standard deviation at most 0.5 and prior mean zero. Survival requires at least 20 new labels, absolute fitted weight at least 0.1, and no worse paired prequential median rank or pair accuracy. The weight floor is a declared shrinkage threshold, not a significance test; the Laplace interval is reported separately.
 - Removals and neutralized notes do not advance the 20/40-label clocks or trigger another proposal pass. The last meaningful event identifies a pass; legacy labels receive one initial pass at event zero. Known-positive actions are excluded from held-out hypothesis ranks. Score ties receive chance credit for the paired hypothesis comparison; the main Compare Wilson report still excludes ties from its binomial denominator.
 - An unscored hypothesis has no inferred direction. The gallery says it is still learning and disables confirmation until an assessment supplies a direction; reject remains available. Confirming a scored hypothesis copies its judgments into the stated preference, without moving the current listing order.
-- Review tasks are stored as compressed BLOBs without a duplicate full-input snapshot. The migration regression constructs the historical schema directly instead of rewinding a current schema and guessing which newer tables to drop.
+- Review tasks are stored as plain JSON text without a duplicate full-input snapshot. The migration regression constructs the historical schema directly instead of rewinding a current schema and guessing which newer tables to drop.
 
 
 - Phase 2: the prior-only selector is an experimental candidate, not the installed policy, because its label-efficiency bar was not established. Its baseline is the variance selector delivered in Phase 0, fixed by the saved feedback artifact rather than changing as PRs merge. The candidate asks up to eight disjoint prior questions, uses one quarter of the variance for columns with stated prior means, then returns to the posterior selector.
@@ -94,7 +97,7 @@ Phases 0 to 2 change no visible UI but the Compare questions and the "why" line;
 - Evidence optimization uses up to 20 monotonic fixed-point steps with backtracking, not a claimed global optimum. Tags and hypotheses use per-column scales directly, with a 0.1 standard-deviation floor; a separate multiplicative group scale would be unidentifiable without another constraint. Composite components have a tighter default scale of 0.25.
 - Half-life selection uses log loss on the last ten journaled Compare answers and their original pre-action snapshots, choosing among no decay, 90, 30 and 7 days. Before ten usable historical snapshots it keeps no decay; the weak-negative weight stays 0.05. Synthetic answers arrive one per day with stationary tastes. Real action dates are captured where known; old favorite dates are not invented. No real recency benefit is claimed.
 
-- Owner decision, 2026-10-27: attempt Phase 4 regardless of the hypothesis result. Downloads are allowed only for that isolated encoder experiment, within its size gate. Real-photo gates without a cached dataset and the blind test remain owner-run, unchecked items. Phase 5 is not authorized.
+- Owner decision, 2026-10-27: attempt Phase 4 regardless of the hypothesis result. Downloads are allowed for the isolated encoder experiment; the owner later withdrew its size and memory limits. Real-photo gates without a cached dataset and the blind test remain owner-run, unchecked items. Phase 5 is not authorized.
 
 - Phase 0: exact prequential replay needs action-time records and candidate sets. Existing feedback has neither timestamps nor historical values. A new transactional `learning_events` journal stores pre-action inputs; old history is explicitly unavailable rather than reconstructed from future records.
 - The documented earlier experiment roots are absent. The authorized workspace copy contains 63 listings, 31 current feature records and 28 eligible records, but no user labels and none of the five original garden favorites. It is not the 129-listing experiment. Actual user-label gates remain unmet; simulated users are reported separately.
@@ -146,7 +149,7 @@ Real-store evidence: [inventory and replay](../research/ranking_real_store_phase
 | 0 | Merged PR #50 as `432fabd` after CodeRabbit approval | Measurement infrastructure; 1.00 s rerank; real labels 0; retest runtime prerequisite open |
 | 1 | Merged PR #51 as `7002c7b` after CodeRabbit approval | Prior candidate not promoted |
 | 2 | Merged PR #52 as `bf03fbb` after CodeRabbit approval | Impressions/reasons; cold-start candidate not promoted |
-| 3 | Review branch `feat/ranking_phase3_hypotheses`; all local checks green | Real labels 0; automatic pass not promoted |
+| 3 | PR #53 rebased onto merged #54; all local checks green | Real labels 0; automatic pass not promoted |
 | 4 | Authorized, not started | Encoder experiment and owner-run blind test |
 | 5 | Not authorized | Owner decision and longitudinal data required |
 
@@ -192,6 +195,8 @@ Review follow-up: if the baseline reaches 0.75 but the candidate does not, the s
 
 ### Plain JSON journal
 
+Merged as PR #54, `1d48c16`, after CodeRabbit approval and complete green checks.
+
 The journal writes JSON text directly and replay reads JSON without a compression branch. The compression migration is removed; its schema-version slot is reserved so existing version-16 databases retain their numbering. One new migration rewrites BLOB snapshots to UTF-8 JSON text, leaving event IDs, ordering and already-plain rows intact. A corrupt compressed row aborts the whole migration. Tests cover mixed rows, Unicode, repeated opening and rollback. No owner database is opened or modified; real measurements use the authorized copy.
 
 On the authorized 63-listing copy, 20 samples measure a plain snapshot at 173,826 bytes [173,825, 173,826], read time 3.0865 ms [2.7927, 3.3330], and journal insertion 3.3865 ms [3.2300, 3.5432]. With 6,300 synthetic impressions only in the disposable backup, the 63-row relevant-visit snapshot is 187,303 bytes [187,302, 187,303]; insertion is 3.8300 ms [3.6713, 4.2248]. These sizes and times are information, not limits. Actual replay remains empty: zero journal events and held-out observations, with null intervals. See [plain-JSON measurements](../research/ranking_snapshot_plain_json.json). The 43 targeted tests pass. Complete Git Bash Python suite: 698 tests and 317 subtests passed (340.91 s); full headless gallery suite: 44 passed (2.3 min); gallery lint, build and Ruff pass. Zero skips.
@@ -200,18 +205,20 @@ On the authorized 63-listing copy, 20 samples measure a plain snapshot at 173,82
 
 The candidate prepares at most three novel named proposals per pass, at most six live, validates evidence against the supplied records, and rejects retired phrases and move output. Textual judgments cover every listing in batches of 25. Visual judgments cover labeled listings and the top 50, use cached sheets only, and instruct the reader to open at most six full-resolution photos per listing. Missing cached photos remain pending.
 
-`python tests/ranking_hypothesis_experiment.py docs/research/ranking_measurements_phase3.json --benchmark` produced run `28a691e39bf08d7a`, dated 2026-10-28 UTC. This is a scripted synthetic lifecycle with known judgments, not a model discovering the cue:
+`python tests/ranking_hypothesis_experiment.py docs/research/ranking_measurements_phase3.json --benchmark` produced run `228427da4395ba88`, dated 2026-10-28 UTC. This is a scripted synthetic lifecycle with known judgments, not a model discovering the cue:
 
 - After 20 new labels, the planted original-wood-trim column survives: weight 0.329081, Laplace 95% interval [-0.635005, 1.293168]. Its median prequential rank is 35.5 [23.5, 44.0], versus 42.0 [28.0, 50.5] without it. Mean paired rank improvement is 6.0 [2.85, 10.8], using 2,000 bootstrap resamples of the 20 held-out actions.
 - The constant textual cue and unscored visual cue retire after 20 labels. A separate regression proves that 40 new Compare answers without a survivor stop later proposals; favorite removals cannot manufacture those 40 labels.
 - There are 21 requested passes for 21 reranks with new labels, and zero remote model calls. This verifies request deduplication and the budget, not the quality or cost of a live model response. The judgment budget is three text batches and 50 visual listing reads, at most six full-resolution opens each.
-- The shared 300-listing, 50-favorite, one-Compare-answer, six-hypothesis fixture reranks in 1.125 CPU seconds, least of three, with observed range [1.125, 1.140625], below the 2-second bar. The complete store read/write and leave-one-out are timed, and the strict test uses the same fixture.
-- Across the 21 task rows, compressed mean payload is 18,287.24 bytes [18,228.62, 18,341.67], versus 182,127.52 raw bytes. The interval is bootstrap over the stored synthetic passes.
+- The shared 300-listing, 50-favorite, one-Compare-answer, six-hypothesis fixture reranks in 1.453125 CPU seconds, least of three, with observed range [1.453125, 1.531250], below the 2-second bar. The complete store read/write and leave-one-out are timed, and the strict test uses the same fixture.
+- Across the 21 task rows, plain-JSON mean payload is 182,127.52 bytes [180,816.71, 182,898.67]. The interval is bootstrap over the stored synthetic passes.
 - On a fresh disposable backup of the authorized real copy, `prepare`, `assess`, `status`, chronological replay and leave-one-out all ran. The source hash is unchanged. There are 63 listings and zero labels: zero proposal requests, zero hypotheses, zero remote calls, empty held-out samples and null intervals. The required real 20-label survivor does not exist; that bar remains unmet. None of the five historical garden favorites is present, so the two-rerank garden-discovery and mean-rank bars also remain unmet. See [real-store hypothesis evidence](../research/ranking_real_store_phase3.json).
 - The real 40-label stop condition has not fired because there are zero labels. Automatic hypothesis generation stays out on the unmet real-data bar; the owner-authorized encoder experiment follows independently.
 
 For an explicit trial, use `hypothesis_trial.py init <copied-store.sqlite3> <new-trial-directory>`, then `prepare <trial-directory>/listings.sqlite3 <tasks-directory>`. Run its prepared review task in the same isolated Sonnet runtime required by the extraction retest, apply it with `apply-review ... --file <review-output.json>`, prepare `judgments ... --cache <cached-extraction-directory>`, apply their outputs with `apply-judgments`, and run `assess` after judgments and subsequent labels. The current real copy cannot produce a task because it has no labels; the isolated Hermes dependency prerequisite remains open. These commands never require the owner's live profile as HERMES_HOME.
 
-Final verification: full Git Bash Python suite 716 tests and 317 subtests passed (315.92 s); complete headless Playwright 45 passed (2.1 min); gallery lint, build and Ruff pass. Zero skips. Desktop and mobile screenshots were inspected, including an unknown direction with confirmation disabled. The 300-listing/50-favorite/six-hypothesis CPU test retains its strict two-second limit.
+Final verification: full Git Bash Python suite 721 tests and 317 subtests passed (401.52 s); complete headless Playwright 45 passed (2.5 min); gallery lint, build and Ruff pass. Zero skips. Desktop and mobile screenshots were inspected, including an unknown direction with confirmation disabled. The 300-listing/50-favorite/six-hypothesis CPU test retains its strict two-second limit.
 
 The final review follow-up for PR #52 passed 697 Python tests and 317 subtests (263.78 s), 44 headless browser tests (2.0 min), gallery lint, build and Ruff, with zero skips. Its recorded numerical outcomes are unchanged.
+
+Hypothesis review corrections: a legacy rerank without a review produces no task; survival comparisons require the hypothesis column to exist in the original pre-action fit; missing cached files leave that listing pending while unsafe paths still fail; judgment tasks reuse the listing-field formatter with address, price, rooms, size and the complete description. Hypothesis tasks are plain JSON as well. The proposed per-event prediction cache is not applied: predictions now also depend on which hypothesis column must exist, so caching an absent-column result by event alone would suppress other valid comparisons. An underlying-fit cache would be a separate optimization requiring a measured problem.
