@@ -4,7 +4,7 @@ import math
 from dataclasses import replace
 from statistics import fmean, pstdev
 
-from scoring import COMPOSITES, Column, Model, design, display, fit, label, objective, observations, prior, sparse_row
+from scoring import COMPOSITES, Column, Model, design, display, fit, in_fit, label, objective, observations, prior, sparse_row
 SCALE_FLOOR = 0.1
 AGE_FLOOR = 0.1
 HALF_LIVES = (math.inf, 90, 30, 7)
@@ -139,6 +139,10 @@ def fit_candidate(inputs, *, half_life=math.inf, evidence_steps=20):
 def choose_half_life(history):
     """Compare settings only on already-observed outcomes and their original pre-action snapshots."""
     from measurement import utilities
+    if len(history) < 10:
+        return math.inf
+    history = [event for event in history if {event['listing'], event['other']} <= {
+        listing['id'] for listing in event['inputs']['listings'] if in_fit(listing)}]
     if len(history) < 10:
         return math.inf
     losses = {}

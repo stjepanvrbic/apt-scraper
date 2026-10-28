@@ -427,5 +427,11 @@
     0.73,
     0.63,
     0.57
-  ]
+  ],
+  "run": {
+    "id": "f580db55f8362e73",
+    "date_utc": "2026-10-27",
+    "command": "python tests/ranking_candidate_experiment.py docs/research/ranking_measurements_phase0.json docs/research/ranking_measurements_phase1.json",
+    "timing_selection": "Least CPU time of three complete reranks on 300 listings and 50 favorites."
+  }
 }

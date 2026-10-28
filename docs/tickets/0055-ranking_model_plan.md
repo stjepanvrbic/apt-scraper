@@ -155,3 +155,7 @@ The targeted measurement and prior suite passes: 32 tests, zero skips. It covers
 
 
 Review correction for Phase 1: the tuner no longer reconstructs past states from current inputs. Replay supplies the actual earlier journal snapshots, preserving past dismissals, feature records, readings and preferences, and excluding later labels. The frozen pair-only simulator constructs its history from its original corpus and answer prefixes. A regression test fails under the old reconstruction and passes with the historical snapshots. Undated legacy favorites retain full weight; legacy contact requests use their existing requested-at timestamp. Equal composite components are no longer falsely described as above the rest.
+
+The refreshed synthetic prior report is run `f580db55f8362e73`; the real-feature simulation is run `e072d6f741d8ac0f`, both dated 2026-10-27 UTC. Each report records its command and the least-of-three CPU timing rule. All 400 frozen trajectories have scorable historical pairs, so excluding unscorable journal events does not change these measured accuracies. A regression now covers nine scorable answers plus a missing-record answer (default retained), and ten scorable answers followed by a missing-record answer (only the ten usable snapshots compared).
+
+Final verification after these review fixes: full Git Bash Python suite 689 tests and 317 subtests passed (289.32 s), zero skips; Ruff passes. The production and gallery files are unchanged from the passing 40-test headless run, gallery lint and build.

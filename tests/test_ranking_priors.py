@@ -12,9 +12,31 @@ from ranking_priors import (AGE_FLOOR, aged, choose_half_life, composite_design,
                             fit_candidate, prior_variances, tuned_candidate)  # noqa: E402
 from scoring import design, dot, observations  # noqa: E402
 from test_rerank import StoreTestCase, fill  # noqa: E402
+from ranking_candidate_experiment import provenance  # noqa: E402
 
 
 class GroupedPriorTests(unittest.TestCase):
+    def test_report_provenance_identifies_the_recorded_numbers(self):
+        report = {'accuracy': 0.75, 'rerank_cpu_seconds': 1.2}
+        metadata = provenance(report, 'python experiment.py baseline.json result.json', '2026-10-27')
+        self.assertEqual(metadata['id'], provenance(dict(reversed(list(report.items()))), 'same data')['id'])
+        self.assertNotEqual(metadata['id'], provenance({**report, 'accuracy': 0.76}, 'different data')['id'])
+        self.assertEqual(metadata['date_utc'], '2026-10-27')
+        self.assertIn('three complete reranks', metadata['timing_selection'])
+
+    def test_unscorable_historical_pairs_do_not_count_toward_ten(self):
+        snapshot = inputs(neighborhood(20))
+        history = [{'kind': 'pair', 'listing': f'listing:{index:03}', 'other': f'listing:{index + 10:03}', 'inputs': snapshot}
+                   for index in range(10)]
+        missing = copy.deepcopy(history[-1])
+        missing['inputs']['listings'][9]['record'] = None
+        self.assertEqual(choose_half_life([*history[:9], missing]), math.inf)
+        expected = choose_half_life(history)
+        with mock.patch('ranking_priors.fit_candidate', wraps=fit_candidate) as fitted:
+            self.assertEqual(choose_half_life([*history, missing]), expected)
+        self.assertEqual(fitted.call_count, 40)
+        self.assertTrue(all(call.args[0]['listings'][9]['record'] is not None for call in fitted.call_args_list))
+
     def test_tuning_uses_original_snapshots_instead_of_later_labels_or_records(self):
         earlier = inputs(neighborhood(20))
         earlier['listings'][5].update(dismissed=True, rankable=False)

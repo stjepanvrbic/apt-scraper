@@ -3,9 +3,11 @@ import argparse
 import gzip
 import hashlib
 import json
+import shlex
 import sys
 import tempfile
 from concurrent.futures import ProcessPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from statistics import fmean
 
@@ -19,6 +21,12 @@ from store import ListingStore
 from scoring import rank_listings
 from review import review_inputs
 from implicit_signals import diagnostic
+
+
+def provenance(report, command, date_utc=None):
+    identifier = hashlib.sha256(json.dumps(report, sort_keys=True, allow_nan=False).encode()).hexdigest()[:16]
+    return {'id': identifier, 'date_utc': date_utc or datetime.now(timezone.utc).date().isoformat(),
+            'command': command, 'timing_selection': 'Least CPU time of three complete reranks on 300 listings and 50 favorites.'}
 
 
 def evaluate(arguments):
@@ -78,6 +86,7 @@ def main():
               'baseline_runs': baseline, 'candidate_runs': candidate}
     if args.store:
         report['real_store'] = {'baseline': store_report(args.store), 'candidate': store_report(args.store, fitter=tuned_candidate)}
+    report['run'] = provenance(report, shlex.join(['python', *sys.argv]))
     args.output.write_text(json.dumps(report, indent=2) + '\n')
 
 
