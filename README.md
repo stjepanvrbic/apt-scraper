@@ -2,11 +2,11 @@
 
 # apt-scraper
 
-An apartment-hunting agent built on [Hermes Agent](https://hermes-agent.nousresearch.com). It runs on your Claude Pro or Max subscription and can operate desktop apps through computer use.
+An apartment-hunting agent built on [Hermes Agent](https://hermes-agent.nousresearch.com). It runs on your Claude Pro or Max subscription by default, or on any provider Hermes supports, and can operate desktop apps through computer use.
 
 ## Install
 
-You need Windows 10 1809 or later, or macOS 13 or later on Apple Silicon, and a Claude Pro or Max subscription. Paste one line into a terminal.
+You need Windows 10 1809 or later, or macOS 13 or later on Apple Silicon, and a Claude Pro or Max subscription or an account with another provider Hermes supports. Paste one line into a terminal.
 
 Windows, in PowerShell:
 
@@ -22,15 +22,17 @@ curl -fsSL https://raw.githubusercontent.com/stjepanvrbic/apt-scraper/main/boots
 
 The line installs Git if it is missing, with winget on Windows. It then downloads apt-scraper to `%LOCALAPPDATA%\apt-scraper\repo` on Windows or `~/Library/Application Support/apt-scraper/repo` on macOS and runs the installer from there. On a Mac without the Xcode command line tools, which include Git, the line opens their installer: press Install in the dialog, and the line continues once they are installed. The line works only while this repository is public on GitHub.
 
+The installer first asks whether to use your Claude Pro or Max subscription. Press Enter for yes, the recommended choice. Answer `n` to run the agent on any provider Hermes supports: the installer then skips Claude Code and the subscription plugin and opens Hermes's own provider and model menu, where you pick a provider, log in or paste its API key, and pick a model. Only Claude models have been measured for reading and ranking listings; other providers work but are not measured yet. The question comes on every run, so answer `n` again when you update to stay on your provider. An install without a terminal to ask on uses the Claude subscription.
+
 The installer:
 
-1. installs or updates Claude Code, and opens the Claude login if you are logged out,
+1. installs or updates Claude Code, and opens the Claude login if you are logged out, when you use the Claude subscription,
 2. installs Hermes Agent with its computer-use driver, or updates an older Hermes,
 3. installs `profile/` as the Hermes profile `apt-scraper`, with Hermes's Google Workspace skill,
-4. installs the Claude subscription provider plugin into that profile,
+4. installs the Claude subscription provider plugin into that profile, or opens Hermes's provider and model menu if you answered `n`,
 5. prepares the computer-use driver, and on macOS asks for Accessibility and Screen Recording access,
 6. installs the Hermes gateway as a service that starts when you log in. It runs the search and your conversations with the agent. Windows may ask for administrator approval,
-7. sends one test message through your subscription,
+7. sends one test message through your subscription or the provider you picked,
 8. makes the Hermes web dashboard start when you log in, and adds an apt-scraper shortcut: in the Start menu on Windows, in Applications on macOS,
 9. starts the dashboard and opens its chat in your browser. The first start builds the dashboard and takes a few minutes.
 
@@ -98,11 +100,11 @@ Once the questions are answered, the search starts. After that, a new question i
 
 ## Listing features
 
-Within an hour of finding a listing, the agent reads all its photos and its text once and stores what it saw: the room each photo shows, ratings such as natural light and kitchen finish, facts from the text such as in-unit laundry or pets, short tags such as "exposed brick", and whether the listing meets each like and dislike you stated, for the ranking. A listing is read again only when it changes. Each listing is read by a subagent of its own on Claude Sonnet, so the photos never fill your conversation with the agent. When you state a new like or dislike, the agent checks the listings already read against it from what it stored, without the photos. This runs as the Hermes scheduled job "Listing features" inside the gateway, every 10 minutes, and makes no model call when nothing waits. When a listing cannot be read after three tries, the agent tells you. See [the ranking guide](docs/ranking.md).
+Within an hour of finding a listing, the agent reads all its photos and its text once and stores what it saw: the room each photo shows, ratings such as natural light and kitchen finish, facts from the text such as in-unit laundry or pets, short tags such as "exposed brick", and whether the listing meets each like and dislike you stated, for the ranking. A listing is read again only when it changes. Each listing is read by a subagent of its own, on Claude Sonnet with the Claude subscription or on the model you picked in Hermes's menu otherwise, so the photos never fill your conversation with the agent. When you state a new like or dislike, the agent checks the listings already read against it from what it stored, without the photos. This runs as the Hermes scheduled job "Listing features" inside the gateway, every 10 minutes, and makes no model call when nothing waits. When a listing cannot be read after three tries, the agent tells you. See [the ranking guide](docs/ranking.md).
 
 ## Ranking
 
-The order of your listings changes only when you ask the agent to rerank. A rerank takes about a second on your computer and uses no Claude allowance. It learns from your favorites, contact requests, dismissals, notes and stated likes and dislikes, and your favorites can outweigh what you said: if you said you dislike carpet but keep favoriting carpeted listings, carpet stops counting against them. Each listing gets a one-line reason naming what moved it most and the favorite it most resembles. Up to two of the top 20 are there to learn your taste and are marked so. After each rerank the agent tells you how well the ranking places each favorite when it learns from the others only. Within a few minutes, Claude then reviews the top 50 once, in the Hermes scheduled job "Ranking review", which is the only part of a rerank that uses your Claude allowance: it rewrites their reasons, flags listings that rank against what you said you like or dislike, points out what looks wrong in the ranking, and may move listings. Its moves are kept only when they do not make your favorites rank worse in that check, and are undone otherwise. The agent reads each note you write and each like or dislike you state once, within the hour, in the "Listing features" job. See [the ranking guide](docs/ranking.md).
+The order of your listings changes only when you ask the agent to rerank. A rerank takes about a second on your computer and makes no model call. It learns from your favorites, contact requests, dismissals, notes and stated likes and dislikes, and your favorites can outweigh what you said: if you said you dislike carpet but keep favoriting carpeted listings, carpet stops counting against them. Each listing gets a one-line reason naming what moved it most and the favorite it most resembles. Up to two of the top 20 are there to learn your taste and are marked so. After each rerank the agent tells you how well the ranking places each favorite when it learns from the others only. Within a few minutes, the agent's model then reviews the top 50 once, in the Hermes scheduled job "Ranking review", which is the only part of a rerank that calls a model: it rewrites their reasons, flags listings that rank against what you said you like or dislike, points out what looks wrong in the ranking, and may move listings. Its moves are kept only when they do not make your favorites rank worse in that check, and are undone otherwise. The agent reads each note you write and each like or dislike you state once, within the hour, in the "Listing features" job. See [the ranking guide](docs/ranking.md).
 
 ## Contacting listings
 
@@ -112,7 +114,7 @@ This runs as the Hermes scheduled job "Listing correspondence" inside the gatewa
 
 ## Usage and billing
 
-Every message draws on your Claude subscription allowance, the same pool `claude -p` uses. Turn off extra usage in your Claude account settings if you don't want overage charges. The provider plugin is marked experimental by its maintainers.
+On the Claude subscription, every message draws on your Claude subscription allowance, the same pool `claude -p` uses. Turn off extra usage in your Claude account settings if you don't want overage charges. The provider plugin is marked experimental by its maintainers. On a provider you picked in Hermes's menu, every message is billed by that provider, against your plan or per token, as your account with it bills.
 
 ## Connect your accounts
 

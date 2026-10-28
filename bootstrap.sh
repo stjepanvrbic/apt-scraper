@@ -16,7 +16,7 @@ step() { printf '\033[36m==> %s\033[0m\n' "$1"; }
 # bash runs a piped script while it reads it, so everything happens in main, called on the last line:
 # a cut-off download runs nothing.
 main() {
-    local git_error waited=0
+    local git_error terminal waited=0
     if ! git_error=$(git --version 2>&1); then
         if ! xcode-select --install; then
             printf 'Git does not run: %s\n' "$git_error" >&2
@@ -42,9 +42,13 @@ main() {
         git clone "$REPOSITORY_URL" "$REPOSITORY"
     fi
 
-    # Standard input is this script's pipe, and the installer asks for the Claude login and passwords.
-    if (exec </dev/tty) 2>/dev/null; then
-        bash "$REPOSITORY/install.sh" ${1+"$@"} </dev/tty
+    # Standard input is this script's pipe, and the installer asks which account the agent uses, for the Claude
+    # login or in Hermes's provider menu, and for passwords, so it reads the terminal this runs in, by its own
+    # device such as /dev/ttys003. Claude Code's runtime, Bun, waits for
+    # input through kqueue, and macOS's kqueue refuses /dev/tty, the alias for that terminal, with EINVAL.
+    terminal=/dev/$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ' || true)
+    if [ -c "$terminal" ] && (exec <"$terminal") 2>/dev/null; then
+        bash "$REPOSITORY/install.sh" ${1+"$@"} <"$terminal"
     else
         bash "$REPOSITORY/install.sh" ${1+"$@"}
     fi

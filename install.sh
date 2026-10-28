@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
-# Installs Claude Code, Hermes Agent with its computer-use driver, the Claude
-# subscription provider plugin and this repository's Hermes profile on macOS
-# and Linux, then opens the profile's chat in the Hermes web dashboard.
+# Installs Hermes Agent with its computer-use driver and this repository's
+# Hermes profile on macOS and Linux, with Claude Code and the Claude
+# subscription provider plugin for an agent on the user's Claude subscription,
+# then opens the profile's chat in the Hermes web dashboard.
 # Safe to re-run: every step updates what is already there.
 set -euo pipefail
 
 PROFILE_NAME=apt-scraper
 PLUGIN_NAME=claude-subscription-directsdk
+# The model settings of the distribution's config.yaml, which run the agent on the Claude subscription.
+CLAUDE_PROVIDER=claude-subscription-directsdk-experimental
+CLAUDE_MODEL=opus
+CLAUDE_SUBAGENT_MODEL=sonnet
 MINIMUM_CLAUDE_VERSION=2.1.284
 MINIMUM_HERMES_VERSION=0.22.5
 PROFILE_SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/profile"
@@ -31,13 +36,24 @@ run_remote_installer() {
     rm -rf "$directory"
 }
 
-step 'Claude Code'
-command -v claude >/dev/null || run_remote_installer https://claude.ai/install.sh
-if version_below "$(claude --version)" "$MINIMUM_CLAUDE_VERSION"; then claude update; fi
-auth_status=$(claude auth status || true)
-if ! [[ $auth_status =~ \"loggedIn\":\ *true ]]; then
-    step 'Log in to Claude with your Pro or Max subscription'
-    claude auth login
+# The agent runs on the user's Claude subscription through Claude Code and the subscription provider plugin.
+# A user who answers no gets neither, and picks a provider and model in Hermes's own menu once the profile is
+# installed. Without a terminal to ask on, the install takes the Claude subscription.
+use_claude=true
+if [ -t 0 ]; then
+    read -r -p 'Use your Claude Pro or Max subscription? [Y/n] ' answer || true
+    if [[ $answer =~ ^[[:space:]]*[Nn] ]]; then use_claude=false; fi
+fi
+
+if $use_claude; then
+    step 'Claude Code'
+    command -v claude >/dev/null || run_remote_installer https://claude.ai/install.sh
+    if version_below "$(claude --version)" "$MINIMUM_CLAUDE_VERSION"; then claude update; fi
+    auth_status=$(claude auth status || true)
+    if ! [[ $auth_status =~ \"loggedIn\":\ *true ]]; then
+        step 'Log in to Claude with your Pro or Max subscription'
+        claude auth login
+    fi
 fi
 
 step 'Hermes Agent and computer-use driver'
@@ -77,6 +93,31 @@ rm -f "$saved_config"
 step 'Google Workspace skill'
 hermes -p "$PROFILE_NAME" skills install google-workspace --yes
 
+# Hermes's menu writes the provider and model into the profile's config.yaml and the login into the profile's
+# .env or auth.json, all of which the host gateway reads for each new session of the profile. It exits 0
+# whatever happens, so a profile still on the Claude provider afterwards got no provider. A profile an earlier
+# install switched to another provider goes back to the Claude subscription when the user answers yes.
+if $use_claude; then
+    step 'Claude subscription provider plugin'
+    hermes -p "$PROFILE_NAME" plugins install "$PLUGIN_NAME" --force --enable
+    if [ "$(hermes -p "$PROFILE_NAME" config get model.provider)" != "$CLAUDE_PROVIDER" ]; then
+        hermes -p "$PROFILE_NAME" config set model.provider "$CLAUDE_PROVIDER"
+        hermes -p "$PROFILE_NAME" config set model.default "$CLAUDE_MODEL"
+        for key in model.base_url model.api_mode delegation.model; do
+            if [ -n "$(hermes -p "$PROFILE_NAME" config get "$key")" ]; then
+                hermes -p "$PROFILE_NAME" config unset "$key"
+            fi
+        done
+    fi
+else
+    step 'Provider and model in Hermes'
+    hermes -p "$PROFILE_NAME" model
+    if [ "$(hermes -p "$PROFILE_NAME" config get model.provider)" = "$CLAUDE_PROVIDER" ]; then
+        echo "No provider was picked in Hermes's menu. Run the install again and pick one, or answer yes to use the Claude subscription." >&2
+        exit 1
+    fi
+fi
+
 # The account setup and the contact forms use Hermes's built-in browser tools, which Hermes replaces
 # with browser_exec while browser.backend is unset. A kept config.yaml gains the setting only when it
 # names no backend of its own.
@@ -114,20 +155,22 @@ step 'Listing correspondence and listing search jobs'
 hermes -p "$PROFILE_NAME" cron resume apt-scraper-contact
 hermes -p "$PROFILE_NAME" cron resume apt-scraper-search
 
-# Each listing is read once by a subagent of its own, pinned to Sonnet through delegation.model. A kept
-# config.yaml gains the pin only when it names no subagent model of its own.
+# Each listing is read once by a subagent of its own. On the Claude subscription it is pinned to Sonnet
+# through delegation.model, which a kept config.yaml gains only when it names no subagent model of its own.
+# With another provider an empty delegation.model gives the subagent the model picked in Hermes's menu, and
+# Sonnet is a Claude model, so the distribution's pin goes.
 step 'Listing features job'
-if [ -z "$(hermes -p "$PROFILE_NAME" config get delegation.model)" ]; then
-    hermes -p "$PROFILE_NAME" config set delegation.model sonnet
+subagent_model=$(hermes -p "$PROFILE_NAME" config get delegation.model)
+if $use_claude && [ -z "$subagent_model" ]; then
+    hermes -p "$PROFILE_NAME" config set delegation.model "$CLAUDE_SUBAGENT_MODEL"
+elif ! $use_claude && [ "$subagent_model" = "$CLAUDE_SUBAGENT_MODEL" ]; then
+    hermes -p "$PROFILE_NAME" config unset delegation.model
 fi
 hermes -p "$PROFILE_NAME" cron resume apt-scraper-features
 
 # The ranking review job checks every minute whether a rerank's review pass waits, and wakes the model only then.
 step 'Ranking review job'
 hermes -p "$PROFILE_NAME" cron resume apt-scraper-review
-
-step 'Claude subscription provider plugin'
-hermes -p "$PROFILE_NAME" plugins install "$PLUGIN_NAME" --force --enable
 
 step 'Computer-use driver'
 hermes -p "$PROFILE_NAME" computer-use install --upgrade
@@ -144,7 +187,7 @@ step 'Hermes gateway service'
 hermes -p default gateway install --if-missing --start-now --start-on-login
 hermes -p default gateway start
 
-step 'Test message through the Claude subscription'
+step 'Test message through the model provider'
 reply=$(hermes -p "$PROFILE_NAME" chat -q 'Reply with exactly: ready' --oneshot -Q) || {
     echo "Test message failed (exit code $?)" >&2
     exit 1
