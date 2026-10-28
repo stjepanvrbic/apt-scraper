@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from code_features import FEATURES, configured_transit_feed, store_all_code_features, store_code_features
 from learning import encode, label_clock
+from photo_catalog import MATCH_ROOMS, vocabulary as photo_vocabulary
 from schema import FINGERPRINT, LISTING_ID, MIGRATIONS, content_fingerprint, migrate
 from queries import RANKABLE, RANKING_EXCLUSION, answered_pairs, browse, paired, snapshot, user_noted, validate_page
 from record import SEED_TAGS, known_spelling, validate_extraction, validate_judgments
@@ -31,6 +32,7 @@ PREFERENCES = ('likes', 'dislikes')
 PLACE_FIELDS = ('name', 'address')
 IMPORTANCE = ('low', 'medium', 'high')
 READ_ATTEMPTS = 3
+ENCODER_MANIFEST = Path(__file__).resolve().parents[2] / 'ranking' / 'encoder' / 'model.json'
 COMPARE_SURFACES = ('gateway', 'gallery', 'conversation')
 
 
@@ -279,6 +281,13 @@ def validate_agent(agent):
         require_text(value, name, limit=1000)
         if name == 'contact_form':
             require_url(value)
+
+
+def encoder_manifest(path=None):
+    """The shipped photo encoder's manifest, or None when the profile has none: its identity, files, preprocessing and
+    the quality it measured before shipping."""
+    path = Path(path or ENCODER_MANIFEST)
+    return json.loads(path.read_text(encoding='utf-8')) if path.is_file() else None
 
 
 def extraction_read(listing_id, fingerprint):
@@ -542,13 +551,16 @@ class ListingStore:
                     for row in connection.execute('''SELECT c.*, l.first_seen FROM code_features c
                         JOIN listings l ON l.id = c.listing_id AND l.fingerprint = c.fingerprint ORDER BY c.listing_id''')}
 
-    def ranking_inputs(self, *, include_signals=False, connection=None):
+    def ranking_inputs(self, *, include_signals=False, connection=None, photos=None):
         """Everything a rerank reads, from one snapshot of the store: each listing with its current feature record or
         None, its judgments of stated preferences, its code-derived features, the criteria areas whose search found it
         or None, whether extraction gave up on it, whether it is ranked (available, inside the criteria and not
         dismissed), its rank from the latest rerank when its content has not changed since, and the user's actions on it; the settings; the readings of the stated preferences by (kind,
         phrase) and of the user's notes by note id; each listing's latest note sentiment; the pairwise answers as
-        (chosen, other); and the tag list. Completed visits are included only for the rerank's diagnostic check."""
+        (chosen, other); and the tag list. Completed visits are included only for the rerank's diagnostic check.
+        With photos true, or None while the encoder is on (encoder_state), it adds the photo encoder's features of the
+        listings whose current content has them: each one's probe matches, its best-match similarity by room to each
+        favorite, and the probe of each live hypothesis a probe scores."""
         with self.connect() if connection is None else nullcontext(connection) as connection:
             if not connection.in_transaction:
                 connection.execute('BEGIN')
@@ -605,10 +617,109 @@ class ListingStore:
                     'user_notes': identifier in noted, 'paired': identifier in compared,
                 })
             clock = label_clock(connection, listings, pairs)
-        return {'listings': listings, 'settings': settings, 'preference_readings': preference_readings, **clock,
-                'note_readings': {note: reading for note, (_, reading) in note_readings.items()},
-                'sentiments': {listing_id: reading['sentiment'] for listing_id, reading in note_readings.values()}, 'pairs': pairs,
-                'tags': tags, 'implicit_visits': visits}
+            encoder = self.encoder_state(connection)
+            photo_inputs = None
+            if encoder['model'] and (encoder['enabled'] if photos is None else photos):
+                photo_inputs = self.photo_inputs(connection, encoder['model'], feedback)
+        inputs = {'listings': listings, 'settings': settings, 'preference_readings': preference_readings, **clock,
+                  'note_readings': {note: reading for note, (_, reading) in note_readings.items()},
+                  'sentiments': {listing_id: reading['sentiment'] for listing_id, reading in note_readings.values()}, 'pairs': pairs,
+                  'tags': tags, 'implicit_visits': visits}
+        return inputs | {'photos': photo_inputs} if photo_inputs else inputs
+
+    @staticmethod
+    def photo_inputs(connection, model, feedback):
+        current = {row['listing_id']: json.loads(row['probes']) for row in connection.execute(
+            'SELECT p.* FROM photo_features p JOIN listings l ON l.id = p.listing_id AND l.fingerprint = p.fingerprint WHERE p.model = ?', (model,))}
+        favorites = sorted(identifier for identifier, row in feedback.items() if row['favorite'] and not row['dismissed'] and identifier in current)
+        similarity = {room: {} for room in MATCH_ROOMS}
+        if favorites:
+            for row in connection.execute(f'''SELECT room, other_id, listing_id, value FROM photo_similarity
+                    WHERE model = ? AND other_id IN ({", ".join("?" * len(favorites))})''', (model, *favorites)):
+                if row['listing_id'] in current and row['room'] in similarity:
+                    similarity[row['room']].setdefault(row['listing_id'], {})[row['other_id']] = row['value']
+        hypotheses = {row['phrase']: row['probe'] for row in connection.execute(
+            "SELECT phrase, probe FROM hypotheses WHERE state = 'active' AND probe IS NOT NULL ORDER BY phrase")}
+        return {'model': model, 'probes': current, 'similarity': similarity, 'hypotheses': hypotheses}
+
+    def encoder_state(self, connection=None):
+        """The photo encoder's gate: its model, whether its shipped quality measurements passed (room types and probes),
+        the latest finished blind test of that model, and whether the encoder is on, which needs both passed."""
+        if connection is None:
+            with self.connect() as connection:
+                return self.encoder_state(connection)
+        manifest = encoder_manifest()
+        if manifest is None:
+            return {'model': None, 'quality_passed': False, 'room_passed': False, 'blind_test': None, 'enabled': False}
+        row = connection.execute('''SELECT result FROM encoder_blind_tests WHERE model = ? AND result IS NOT NULL
+            ORDER BY id DESC LIMIT 1''', (manifest['identity'],)).fetchone()
+        blind = json.loads(row['result']) if row else None
+        quality = manifest['quality']
+        return {'model': manifest['identity'], 'quality_passed': quality['passed'], 'room_passed': quality['room_passed'],
+                'blind_test': blind, 'enabled': bool(quality['passed'] and blind and blind['passed'])}
+
+    def photo_targets(self):
+        """The listings the photo encoder works for, those the ranking ranks or learns from, labeled first and then the
+        longest known: each one's current fingerprint, its photo URLs and its record's room type by photo URL."""
+        with self.connect() as connection:
+            rows = connection.execute(f'''SELECT l.id, l.fingerprint, l.data, l.first_seen, {RANKABLE} AS rankable,
+                    f.favorite, f.dismissed, r.extraction FROM listings l LEFT JOIN feedback f ON f.listing_id = l.id
+                    LEFT JOIN feature_records r ON r.listing_id = l.id AND r.fingerprint = l.fingerprint ORDER BY l.id''').fetchall()
+            contacts = {row['listing_id'] for row in connection.execute('SELECT listing_id FROM contacts')}
+            noted, compared = user_noted(connection), paired(answered_pairs(connection))
+        targets = []
+        for row in rows:
+            labeled = bool(row['favorite'] or row['dismissed'] or row['id'] in contacts or row['id'] in noted or row['id'] in compared)
+            if not (row['rankable'] or labeled):
+                continue
+            extraction = json.loads(row['extraction']) if row['extraction'] else None
+            targets.append({'id': row['id'], 'fingerprint': row['fingerprint'], 'labeled': labeled, 'first_seen': row['first_seen'],
+                            'photos': json.loads(row['data'])['photos'],
+                            'rooms': {photo['url']: photo['room'] for photo in extraction['photos']} if extraction else None})
+        return sorted(targets, key=lambda target: (not target['labeled'], target['first_seen'], target['id']))
+
+    def save_photo_features(self, model, features, similarities):
+        """Replaces the photo encoder's results with those of one derivation: features by listing id, each with the
+        fingerprint it was computed for, probe matches, room types and reread mark, and similarities as (room, listing,
+        other listing, value). A listing whose content changed meanwhile is left out, with its similarities."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self.connect(write=True) as connection:
+            current = {row['id']: row['fingerprint'] for row in connection.execute('SELECT id, fingerprint FROM listings')}
+            kept = {identifier for identifier, value in features.items() if current.get(identifier) == value['fingerprint']}
+            connection.execute('DELETE FROM photo_features')
+            connection.execute('DELETE FROM photo_similarity')
+            connection.executemany('INSERT INTO photo_features VALUES (?, ?, ?, ?, ?, ?, ?)', [
+                (identifier, value['fingerprint'], model, json.dumps(value['probes']), json.dumps(value['rooms']), int(value['reread']), now)
+                for identifier, value in sorted(features.items()) if identifier in kept])
+            connection.executemany('INSERT INTO photo_similarity VALUES (?, ?, ?, ?, ?)', [
+                (model, room, other, identifier, value) for room, identifier, other, value in similarities
+                if identifier in kept and other in kept])
+        return len(kept)
+
+    def photo_rereads(self):
+        """The listings whose extraction disagrees with the encoder's room types on most photos and has not been read a
+        second time for this content. Empty unless the encoder's room types passed their quality check."""
+        with self.connect() as connection:
+            encoder = self.encoder_state(connection)
+            if not encoder['room_passed']:
+                return set()
+            return {row['listing_id'] for row in connection.execute('''SELECT p.listing_id FROM photo_features p
+                JOIN listings l ON l.id = p.listing_id AND l.fingerprint = p.fingerprint
+                LEFT JOIN photo_rereads d ON d.listing_id = p.listing_id AND d.fingerprint = p.fingerprint
+                WHERE p.model = ? AND p.reread = 1 AND d.listing_id IS NULL''', (encoder['model'],))}
+
+    def begin_blind_test(self, model, criterion, listings):
+        """Records a blind test's criterion and listings before any pick, and returns its id."""
+        with self.connect(write=True) as connection:
+            return connection.execute('INSERT INTO encoder_blind_tests (model, created_at, criterion, listings) VALUES (?, ?, ?, ?)',
+                                      (model, datetime.now(timezone.utc).isoformat(), criterion, json.dumps(listings))).lastrowid
+
+    def finish_blind_test(self, identifier, picks, result):
+        """Stores the owner's picks and the result of a begun blind test, once."""
+        with self.connect(write=True) as connection:
+            if not connection.execute('UPDATE encoder_blind_tests SET picks = ?, result = ? WHERE id = ? AND result IS NULL',
+                                      (json.dumps(picks), json.dumps(result), identifier)).rowcount:
+                raise ValueError(f'Blind test {identifier} does not exist or already has its picks.')
 
     def record_signals(self, events):
         """Stores an atomic, retryable batch without changing the gallery's content revision."""
@@ -763,8 +874,9 @@ class ListingStore:
             with self.connect() as connection:
                 return self.reading_vocabulary(connection)
         settings = {row['name']: json.loads(row['value']) for row in connection.execute("SELECT * FROM settings WHERE name IN ('criteria', 'places')")}
-        return reading_vocabulary(sorted(self.known_tags(connection)), settings.get('criteria', {}).get('location', []),
-                                  [place['name'] for place in settings.get('places', [])])
+        vocabulary = reading_vocabulary(sorted(self.known_tags(connection)), settings.get('criteria', {}).get('location', []),
+                                        [place['name'] for place in settings.get('places', [])])
+        return vocabulary | photo_vocabulary() if self.encoder_state(connection)['enabled'] else vocabulary
 
     def unread_notes(self):
         """The user's notes without a reading, oldest first."""
@@ -774,10 +886,13 @@ class ListingStore:
                 WHERE n.role = 'user' AND r.note_id IS NULL ORDER BY n.id''')]
 
     def unread_preferences(self):
-        """The stated likes and dislikes without a reading of their current wording, as (kind, phrase)."""
+        """The stated likes and dislikes without a reading of their current wording, as (kind, phrase), and while the
+        photo encoder is on, those read before its probes were in the vocabulary."""
         with self.connect() as connection:
             settings = {row['name']: json.loads(row['value']) for row in connection.execute('SELECT * FROM settings')}
-            read = {(row['kind'], row['phrase']) for row in connection.execute('SELECT kind, phrase FROM preference_readings')}
+            encoder = self.encoder_state(connection)
+            read = {(row['kind'], row['phrase']) for row in connection.execute('SELECT kind, phrase, photo_model FROM preference_readings')
+                    if not encoder['enabled'] or row['photo_model'] == encoder['model']}
         return [item for item in stated_phrases(settings) if item not in read]
 
     def preference_readings(self):
@@ -794,6 +909,8 @@ class ListingStore:
         each feature {feature, direction}. Features must be in the reading vocabulary."""
         with self.connect(write=True) as connection:
             vocabulary = self.reading_vocabulary(connection)
+            encoder = self.encoder_state(connection)
+            photo_model = encoder['model'] if encoder['enabled'] else None
             settings = {row['name']: json.loads(row['value']) for row in connection.execute('SELECT * FROM settings')}
             stated = set(stated_phrases(settings))
             now = datetime.now(timezone.utc).isoformat()
@@ -802,7 +919,7 @@ class ListingStore:
                 if (kind, phrase) not in stated:
                     raise ValueError(f'"{phrase}" is not a stated {kind}.')
                 try:
-                    rows.append((kind, phrase, json.dumps(validate_preference_reading(features, vocabulary), ensure_ascii=False), now))
+                    rows.append((kind, phrase, json.dumps(validate_preference_reading(features, vocabulary), ensure_ascii=False), now, photo_model))
                 except ValueError as error:
                     raise ValueError(f'The reading of "{phrase}": {error}') from None
             readings = []
@@ -814,8 +931,8 @@ class ListingStore:
                     readings.append((note_id, json.dumps(validate_note_reading(reading, vocabulary), ensure_ascii=False), now))
                 except ValueError as error:
                     raise ValueError(f'The reading of note {note_id}: {error}') from None
-            connection.executemany('''INSERT INTO preference_readings VALUES (?, ?, ?, ?) ON CONFLICT(kind, phrase)
-                DO UPDATE SET features = excluded.features, read_at = excluded.read_at''', rows)
+            connection.executemany('''INSERT INTO preference_readings VALUES (?, ?, ?, ?, ?) ON CONFLICT(kind, phrase)
+                DO UPDATE SET features = excluded.features, read_at = excluded.read_at, photo_model = excluded.photo_model''', rows)
             for note_id, reading, read_at in readings:
                 previous = connection.execute('SELECT reading FROM note_readings WHERE note_id = ?', (note_id,)).fetchone()
                 current = json.loads(reading)
@@ -958,6 +1075,8 @@ class ListingStore:
                 preferences = CASE WHEN feature_records.fingerprint = excluded.fingerprint
                               THEN json_patch(feature_records.preferences, excluded.preferences) ELSE excluded.preferences END''',
                                (listing_id, fingerprint, json.dumps(extraction, ensure_ascii=False), now, json.dumps(preferences, ensure_ascii=False)))
+            connection.execute('''INSERT OR IGNORE INTO photo_rereads SELECT listing_id, fingerprint FROM photo_features
+                WHERE listing_id = ? AND fingerprint = ? AND reread = 1''', (listing_id, fingerprint))
             return {'new_tags': new_tags}
 
     def judge_preferences(self, entries):

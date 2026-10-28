@@ -195,7 +195,8 @@ class Features:
     def outstanding(self):
         """The listings without a record of their current content, and the extracted listings with stated preferences not
         judged yet, each split into those still given to the agent and those given up after READ_ATTEMPTS attempts. Listings the
-        user labeled come first, then the longest known."""
+        user labeled come first, then the longest known. A listing whose record's room types the photo encoder
+        disagrees with on most photos is extracted once more, and keeps its record if that read is given up."""
         snapshot = self.store.state()
         records, attempts = self.store.feature_records(), self.store.read_attempts()
         readings = self.store.preference_readings()
@@ -203,7 +204,8 @@ class Features:
         later = judged_preferences(snapshot['settings'], readings)
         listings = sorted((listing for listing in snapshot['listings'] if needs_record(listing)),
                           key=lambda listing: (not labeled(listing), listing['first_seen'], listing['id']))
-        extract = [listing for listing in listings if listing['id'] not in records]
+        rereads = self.store.photo_rereads()
+        extract = [listing for listing in listings if listing['id'] not in records or listing['id'] in rereads]
         judge = [(listing, [phrase for phrase in later if phrase not in records[listing['id']]['preferences']])
                  for listing in listings if listing['id'] in records]
         judge = [(listing, missing) for listing, missing in judge if missing]
@@ -216,7 +218,8 @@ class Features:
             'unread_given_up': [item for item in unread if attempts.get(preference_read(*item), 0) >= READ_ATTEMPTS],
             'phrases': phrases, 'records': records,
             'extract': [listing for listing in extract if attempts.get(extraction_read(listing['id'], listing['content_fingerprint']), 0) < READ_ATTEMPTS],
-            'extract_given_up': [listing for listing in extract if attempts.get(extraction_read(listing['id'], listing['content_fingerprint']), 0) >= READ_ATTEMPTS],
+            'extract_given_up': [listing for listing in extract if attempts.get(extraction_read(listing['id'], listing['content_fingerprint']), 0) >= READ_ATTEMPTS
+                                 and listing['id'] not in records],
             'judge': [(listing, [phrase for phrase in missing if attempts.get(judgment_read(listing, phrase), 0) < READ_ATTEMPTS])
                       for listing, missing in judge if any(attempts.get(judgment_read(listing, phrase), 0) < READ_ATTEMPTS for phrase in missing)],
             'judge_given_up': [(listing, [phrase for phrase in missing if attempts.get(judgment_read(listing, phrase), 0) >= READ_ATTEMPTS])

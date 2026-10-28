@@ -7,6 +7,11 @@ Commands:
   ranking.py status                  the latest rerank's summary with its review, and the shown listings not ranked since
   ranking.py explain ID              a listing's rank, reason and full explanation
   ranking.py questions [--count N]   pairs with the largest posterior feature-difference variance
+  ranking.py blind-test [--count N] [--page FILE]
+                                     the photo encoder's blind test, run by the user: records the criterion, shows at
+                                     least 30 listings without a label in random order on a page with their photos
+                                     and facts and no rank, takes the 10 the user would view, and reports precision at
+                                     10 of the model with and without the encoder. The encoder is on once it passes.
   ranking.py run                     one pass of the scheduled job apt-scraper-review: saves the review the agent
                                      wrote into the job's inbox, writes the task of a waiting review for the agent and
                                      ends with a line that tells Hermes whether to wake it. Fails only when it cannot
@@ -33,6 +38,8 @@ from rerank import pairwise_questions, pending_review, rerank, save_review  # no
 from review import CONNECTING_WORDS, MODEL_WORDS  # noqa: E402
 from store import ListingStore, store_path  # noqa: E402
 
+from blind_test import MINIMUM_LISTINGS, BlindTestUnavailable, blind_test  # noqa: E402
+
 TEMPLATE = Path(__file__).resolve().parents[1] / 'review.md'
 
 
@@ -42,7 +49,17 @@ def status(store):
     shown = [listing for listing in store.ranking_inputs()['listings'] if listing['rankable'] and listing['rank'] is None]
     return {'last_rerank': store.last_rerank(),
             'not_ranked': {'new_or_changed': sum(listing['record'] is not None or listing['given_up'] for listing in shown),
-                           'waiting_for_features': sum(listing['record'] is None and not listing['given_up'] for listing in shown)}}
+                           'waiting_for_features': sum(listing['record'] is None and not listing['given_up'] for listing in shown)},
+            'photo_encoder': encoder_status(store)}
+
+
+def encoder_status(store):
+    """Whether the photo encoder is on, why not, and its job's last run."""
+    state = store.encoder_state()
+    report = {key: state[key] for key in ('model', 'quality_passed', 'enabled', 'blind_test')}
+    job = store.path.parent.parent / 'encoder' / 'status.json'
+    report['job'] = json.loads(job.read_text(encoding='utf-8')) if job.is_file() else None
+    return report
 
 
 def explain(store, listing_id):
@@ -150,9 +167,23 @@ def main(argv):
     asking = commands.add_parser('questions')
     asking.add_argument('--count', type=int, default=8)
     commands.add_parser('run')
+    blind = commands.add_parser('blind-test')
+    blind.add_argument('--count', type=int, default=MINIMUM_LISTINGS, help=f'listings shown, at least {MINIMUM_LISTINGS}')
+    blind.add_argument('--page', type=Path, help='where to write the page of listings; by default beside the listing store')
+    blind.add_argument('--picks', help='the 10 numbers, instead of typing them when asked')
+    blind.add_argument('--seed', type=int, help='draws the listings; without it, a seed is drawn and recorded')
     arguments = parser.parse_args(argv)
     if arguments.command == 'run':
         return run()
+    if arguments.command == 'blind-test':
+        store = ListingStore(store_path())
+        try:
+            blind_test(store, arguments.page or store.path.parent / 'blind-test.html', count=arguments.count, seed=arguments.seed,
+                       picks=arguments.picks)
+            return 0
+        except (BlindTestUnavailable, ValueError) as error:
+            print(error, file=sys.stderr)
+            return 1
     try:
         store = ListingStore(store_path())
         if arguments.command == 'rerank':

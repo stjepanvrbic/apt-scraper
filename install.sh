@@ -172,6 +172,17 @@ hermes -p "$PROFILE_NAME" cron resume apt-scraper-features
 step 'Ranking review job'
 hermes -p "$PROFILE_NAME" cron resume apt-scraper-review
 
+# The photo encoder embeds each listing photo once, in the background, for the ranking's photo columns. It runs
+# onnxruntime and numpy in an environment of its own, built from hash-pinned wheels, and downloads its image tower,
+# pinned by hash. Where it cannot be installed, such as on an Intel Mac, for which onnxruntime publishes no wheel,
+# the ranking works without it and a later install tries again.
+step 'Photo encoder'
+if HERMES_HOME="$profile_home" "$python" "$profile_home/scripts/encoder-run.py" install; then
+    hermes -p "$PROFILE_NAME" cron resume apt-scraper-encoder
+else
+    echo 'The photo encoder could not be installed, so the ranking works without photo columns. Run the install again to retry.'
+fi
+
 step 'Computer-use driver'
 hermes -p "$PROFILE_NAME" computer-use install --upgrade
 if [ "$(uname -s)" = Darwin ]; then

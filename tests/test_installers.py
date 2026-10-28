@@ -1651,6 +1651,8 @@ PROFILE_OUTSIDE_THE_PROFILE = {
     # Deleted when closed.
     ('skills/gallery/scripts/geodata.py', 'with tempfile.TemporaryFile() as file:'): None,
     ('skills/ranking/scripts/measurement.py', "with tempfile.TemporaryDirectory(prefix='ranking-measure-') as directory:"): None,
+    # Beside the downloaded model file, which it replaces once verified, or removed in the `finally` that follows.
+    ('skills/ranking/encoder/assets.py', "with tempfile.NamedTemporaryFile(dir=target.parent, suffix='.part', delete=False) as output:"): None,
     ('skills/gallery/scripts/launch.py', "return Path.home() / '.secrets' / 'apt-scraper' / 'gallery'"):
         {'uninstall.ps1': r'$Secrets = "$env:USERPROFILE\.secrets\apt-scraper"',
          'uninstall.sh': 'SECRETS="$HOME/.secrets/apt-scraper"'},

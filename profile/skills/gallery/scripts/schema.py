@@ -245,10 +245,27 @@ def ranking_hypotheses(connection):
         task TEXT NOT NULL, saved INTEGER NOT NULL DEFAULT 0)''')
 
 
+def photo_encoder(connection):
+    """The photo encoder's results, per listing content: the best photo's match with each probe, the encoder's room type
+    of each photo and whether extraction's room types disagree with it on most photos; the best-match similarity of
+    two listings' photos of one room; the second reads that disagreement asked for; the blind tests; the encoder
+    model whose probes a preference reading could name; and the probe that scores a visual hypothesis."""
+    connection.execute('''CREATE TABLE photo_features (listing_id TEXT PRIMARY KEY REFERENCES listings(id),
+        fingerprint TEXT NOT NULL, model TEXT NOT NULL, probes TEXT NOT NULL, rooms TEXT NOT NULL,
+        reread INTEGER NOT NULL, computed_at TEXT NOT NULL)''')
+    connection.execute('''CREATE TABLE photo_similarity (model TEXT NOT NULL, room TEXT NOT NULL, other_id TEXT NOT NULL,
+        listing_id TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY (model, room, other_id, listing_id))''')
+    connection.execute('CREATE TABLE photo_rereads (listing_id TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY (listing_id, fingerprint))')
+    connection.execute('''CREATE TABLE encoder_blind_tests (id INTEGER PRIMARY KEY, model TEXT NOT NULL, created_at TEXT NOT NULL,
+        criterion TEXT NOT NULL, listings TEXT NOT NULL, picks TEXT, result TEXT)''')
+    connection.execute('ALTER TABLE preference_readings ADD COLUMN photo_model TEXT')
+    connection.execute('ALTER TABLE hypotheses ADD COLUMN probe TEXT')
+
+
 # Persisted schema versions must not shift when a migration is removed.
 MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals,
               notes_session_per_database, structured_reasons, reviews_with_inputs, compare_invitation, learning_events, lambda connection: None,
-              card_impressions, plain_learning_events, ranking_hypotheses)
+              card_impressions, plain_learning_events, ranking_hypotheses, photo_encoder)
 
 
 def migrate(connection):
