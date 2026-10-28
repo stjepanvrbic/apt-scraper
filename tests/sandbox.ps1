@@ -8,7 +8,8 @@
 # gigabytes of memory until the machine restarts. The script refuses to start while another sandbox runs.
 # -KeepOpen leaves the sandbox running after the checks, to look around with `wsb connect --id <ID>`; stop it
 # yourself with `wsb stop --id <ID>`.
-# Windows Sandbox is an optional feature of Windows 10 and 11 Pro, Enterprise and Education. To enable it, in an
+# Needs Windows 11 24H2 or later, Pro, Enterprise or Education: the `wsb` command came with 24H2, and only it gives
+# a sandbox an ID to stop it by. Windows Sandbox is an optional feature there. To enable it, in an
 # administrator PowerShell:
 #   Enable-WindowsOptionalFeature -Online -FeatureName Containers-DisposableClientVM -All
 # then restart Windows.
@@ -40,9 +41,9 @@ function Get-RunningSandboxes {
 }
 
 if (-not (Get-Command wsb -ErrorAction SilentlyContinue)) {
-    Write-Host 'Windows Sandbox is not enabled, or its wsb command is missing. In an administrator PowerShell, run' -ForegroundColor Red
+    Write-Host 'The wsb command is missing. It needs Windows 11 24H2 or later with Windows Sandbox enabled:' -ForegroundColor Red
     Write-Host '  Enable-WindowsOptionalFeature -Online -FeatureName Containers-DisposableClientVM -All'
-    Write-Host 'then restart Windows and run this again.'
+    Write-Host 'in an administrator PowerShell, then restart Windows and run this again.'
     exit 1
 }
 $running = Get-RunningSandboxes
@@ -113,11 +114,6 @@ if ($LASTEXITCODE -ne 0 -or -not $started.Trim().StartsWith('{')) { throw "wsb s
 $id = ($started | ConvertFrom-Json).Id
 if (-not $id) { throw "wsb start returned no sandbox ID: $started" }
 Write-Host "    sandbox $id"
-# A sandbox started this way has no logged-on user, so the guest script runs through `wsb exec` as System, in a
-# process of its own that this script does not wait on: the exit-code file says when the run is over.
-$guest = "powershell -NoProfile -ExecutionPolicy Bypass -File $desktop\apt-scraper\tests\sandbox-inside.ps1"
-$null = Start-Process -NoNewWindow -FilePath (Get-Command wsb).Source `
-    -ArgumentList 'exec', '--id', $id, '--run-as', 'System', '-c', ('"' + $guest + '"')
 
 $script:shown = 0
 function Show-NewLines {
@@ -130,10 +126,20 @@ function Show-NewLines {
 }
 $code = 1
 $timedOut = $false
+# From here on the sandbox has an ID, so everything runs under the finally that stops it.
 try {
+    # A sandbox started this way has no logged-on user, so the guest script runs through `wsb exec` as System,
+    # in a process of its own: `wsb exec` returns when the guest script ends, and the exit-code file says how.
+    $guest = "powershell -NoProfile -ExecutionPolicy Bypass -File $desktop\apt-scraper\tests\sandbox-inside.ps1"
+    $exec = Start-Process -PassThru -NoNewWindow -FilePath (Get-Command wsb).Source `
+        -ArgumentList 'exec', '--id', $id, '--run-as', 'System', '-c', ('"' + $guest + '"')
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
     while (-not (Test-Path $exitFile)) {
         if ((Get-Date) -gt $deadline) { $timedOut = $true; break }
+        if ($exec.HasExited -and $exec.ExitCode -ne 0) {
+            Show-NewLines
+            throw "wsb exec ended with exit code $($exec.ExitCode) before the guest script wrote its result; the guest never ran. Log: $log"
+        }
         Start-Sleep -Seconds 5
         Show-NewLines
     }
