@@ -34,6 +34,11 @@ try {
     Expand-Archive -Path (Join-Path $tools 'python.zip') -DestinationPath (Join-Path $tools 'python') -Force
     Remove-Item (Join-Path $tools 'python.zip')
     $python = Join-Path $tools 'python\tools'
+    # A fresh Windows has no Visual C++ runtime, which onnxruntime's extension needs; a user's PC gets it with
+    # Visual Studio or the redistributable. The msvc-runtime wheel puts the DLLs beside the base python.exe, where a
+    # virtual environment's launcher, which runs that base interpreter, finds them.
+    & "$python\python.exe" -m pip install --disable-pip-version-check --quiet msvc-runtime==14.51.36231
+    if ($LASTEXITCODE -ne 0) { throw "Installing the Visual C++ runtime failed with exit code $LASTEXITCODE" }
 
     Write-Log 'Unpacking Git for Windows'
     # PortableGit is a self-extracting 7-Zip archive: -o names the folder, -y answers its one question.

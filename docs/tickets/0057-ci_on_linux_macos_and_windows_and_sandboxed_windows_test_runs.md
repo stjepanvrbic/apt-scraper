@@ -36,6 +36,6 @@ docs/spec.md, Installation and setup: the installer acceptance on a fresh Window
 
 ## Deviations
 
-- The first sandbox run on a bare Windows found that onnxruntime's extension does not load without the Visual C++ runtime DLLs (`DLL load failed while importing onnxruntime_pybind11_state`). The test environment gets them from the `msvc-runtime` wheel. The same gap exists in the product: the photo encoder's environment, built from Hermes's Python on a user's PC, would fail the same way on a Windows without the runtime, and `encoder-run.py` would record it in `status.json` and rank without photos. That is a product finding for a ticket of its own, not changed here.
+- The first sandbox run on a bare Windows found that onnxruntime's extension does not load without the Visual C++ runtime DLLs (`DLL load failed while importing onnxruntime_pybind11_state`). The sandbox installs them beside its base Python with the `msvc-runtime` wheel, as a user's PC has them from Visual Studio or the redistributable; a wheel in the test virtual environment did not help, because a virtual environment's `python.exe` on Windows is a launcher that runs the base interpreter, whose directory is the one searched for a DLL. The same gap exists in the product: the photo encoder's environment, built from Hermes's Python on a user's PC, would fail the same way on a Windows without the runtime, and `encoder-run.py` would record it in `status.json` and rank without photos. That is a product finding for a ticket of its own, not changed here.
 
 ## Result

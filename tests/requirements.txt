@@ -9,6 +9,3 @@ onnxruntime==1.31.1
 # Packages of Hermes's own environment that the profile's scripts import: psutil and websockets.
 psutil==7.1.3
 websockets==15.0.1
-# onnxruntime's extension needs the Visual C++ runtime DLLs, which a fresh Windows, such as the sandbox, lacks.
-# This wheel puts them next to the environment's python.exe.
-msvc-runtime==14.51.36231; sys_platform == "win32"
