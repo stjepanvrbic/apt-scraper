@@ -1,0 +1,6 @@
+from contextlib import AbstractAsyncContextManager
+
+class GatewayClient:
+    async def rpc(self, method: str, *, _timeout: float | None = None, **params: object) -> dict[str, object]: ...
+
+def connect_gateway(endpoint: str | None = None, subject: str | None = None) -> AbstractAsyncContextManager[GatewayClient]: ...

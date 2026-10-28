@@ -1,0 +1,3 @@
+from googleapiclient.discovery import Resource
+
+def build_service(api: str, version: str) -> Resource: ...

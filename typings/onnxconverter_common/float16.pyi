@@ -1,0 +1,3 @@
+from onnx import ModelProto
+
+def convert_float_to_float16(model: ModelProto, *, keep_io_types: bool = False) -> ModelProto: ...

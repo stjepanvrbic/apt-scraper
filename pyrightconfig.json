@@ -1,0 +1,17 @@
+{
+  "typeCheckingMode": "all",
+  "pythonVersion": "3.14",
+  "include": ["tests", "profile", "typings"],
+  "extraPaths": [
+    "tests",
+    "profile/skills/gallery/scripts",
+    "profile/skills/search/scripts",
+    "profile/skills/ranking/scripts",
+    "profile/skills/ranking/encoder",
+    "profile/skills/listing-features/scripts",
+    "profile/skills/contact/scripts",
+    "profile/skills/account-connections/scripts",
+    "profile/skills/interview/scripts"
+  ],
+  "reportUninitializedInstanceVariable": false
+}
