@@ -11,11 +11,11 @@ from statistics import median
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/ranking/scripts'))
 
 from measurement import bootstrap, read_copy
-from learning import compress, encode
+from learning import encode
 
 
 def sample_cost(store, listing, samples):
-    reads, writes, sizes, raw_sizes, impressions = [], [], [], [], []
+    reads, writes, sizes, impressions = [], [], [], []
     for _ in range(samples):
         with store.connect() as connection:
             connection.execute('BEGIN IMMEDIATE')
@@ -23,15 +23,14 @@ def sample_cost(store, listing, samples):
             inputs = store.ranking_inputs(connection=connection)
             inputs['impressions'] = store.favorite_impressions(connection, listing, datetime.now(timezone.utc).isoformat())
             reads.append((time.perf_counter() - started) * 1000)
-            raw_sizes.append(len(encode(inputs).encode('utf-8')))
             impressions.append(len(inputs['impressions']))
             started = time.perf_counter()
             store.record_learning_event(connection, 'favorite', listing)
             writes.append((time.perf_counter() - started) * 1000)
-            sizes.append(connection.execute('SELECT length(inputs) FROM learning_events ORDER BY id DESC LIMIT 1').fetchone()[0])
+            sizes.append(connection.execute('SELECT length(CAST(inputs AS BLOB)) FROM learning_events ORDER BY id DESC LIMIT 1').fetchone()[0])
             connection.rollback()
-    return {'samples': samples, 'raw_bytes': median(raw_sizes), 'compressed_bytes': median(sizes),
-            'compressed_bytes_interval': bootstrap(sizes), 'impression_rows': max(impressions),
+    return {'samples': samples, 'snapshot_bytes': median(sizes),
+            'snapshot_bytes_interval': bootstrap(sizes), 'impression_rows': max(impressions),
             'read_ms': median(reads), 'read_interval': bootstrap(reads),
             'journal_write_ms': median(writes), 'journal_write_interval': bootstrap(writes)}
 
@@ -56,7 +55,6 @@ def measure(source, *, visits=100, samples=20):
         legacy = encode({**inputs, 'impressions': unbounded})
         return {'listings': len(listings), 'original_store': original, 'stress': stressed, 'synthetic_impressions_added': len(rows),
                 'all_history_snapshot_raw_bytes': len(legacy.encode('utf-8')),
-                'all_history_snapshot_compressed_bytes': len(compress(legacy)),
                 'method': 'Wall time inside an IMMEDIATE transaction; inserts rolled back; 95% bootstrap over samples. Stress impressions are synthetic and exist only in the disposable backup.'}
     return read_copy(source, run)
 

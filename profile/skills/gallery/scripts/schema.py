@@ -1,6 +1,5 @@
 import hashlib
 import json
-from learning import compress
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -205,14 +204,15 @@ def compare_invitation(connection):
 
 def learning_events(connection):
     connection.execute('''CREATE TABLE learning_events (id INTEGER PRIMARY KEY, occurred_at TEXT NOT NULL,
-        kind TEXT NOT NULL, listing TEXT NOT NULL, other TEXT, inputs BLOB NOT NULL)''')
+        kind TEXT NOT NULL, listing TEXT NOT NULL, other TEXT, inputs TEXT NOT NULL)''')
 
 
-def compress_learning_events(connection):
-    identifiers = [row[0] for row in connection.execute("SELECT id FROM learning_events WHERE typeof(inputs) = 'text'")]
+def plain_learning_events(connection):
+    import zlib
+    identifiers = [row[0] for row in connection.execute("SELECT id FROM learning_events WHERE typeof(inputs) = 'blob'")]
     for identifier in identifiers:
-        text = connection.execute('SELECT inputs FROM learning_events WHERE id = ?', (identifier,)).fetchone()[0]
-        connection.execute('UPDATE learning_events SET inputs = ? WHERE id = ?', (compress(text), identifier))
+        packed = connection.execute('SELECT inputs FROM learning_events WHERE id = ?', (identifier,)).fetchone()[0]
+        connection.execute('UPDATE learning_events SET inputs = ? WHERE id = ?', (zlib.decompress(packed).decode('utf-8'), identifier))
 
 
 def card_impressions(connection):
@@ -232,8 +232,10 @@ def card_impressions(connection):
     connection.execute("CREATE INDEX impressions_visit ON implicit_signals(visit_id) WHERE kind = 'impression'")
 
 
+# Persisted schema versions must not shift when a migration is removed.
 MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals,
-              notes_session_per_database, structured_reasons, reviews_with_inputs, compare_invitation, learning_events, compress_learning_events, card_impressions)
+              notes_session_per_database, structured_reasons, reviews_with_inputs, compare_invitation, learning_events, lambda connection: None,
+              card_impressions, plain_learning_events)
 
 
 def migrate(connection):

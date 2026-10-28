@@ -1,7 +1,6 @@
 """Serializable pre-action ranking snapshots for chronological evaluation."""
 
 import json
-import zlib
 
 from datetime import datetime, timezone
 
@@ -13,15 +12,10 @@ def encode(inputs):
 
 
 def decode(text):
-    if isinstance(text, bytes):
-        text = zlib.decompress(text).decode('utf-8')
     inputs = json.loads(text)
     inputs['preference_readings'] = {(kind, phrase): reading for kind, phrase, reading in inputs['preference_readings']}
     return inputs
 
-
-def compress(text):
-    return zlib.compress(text.encode('utf-8'))
 
 def label_clock(connection, listings, pairs):
     def day(timestamp):
