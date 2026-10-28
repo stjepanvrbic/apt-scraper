@@ -46,6 +46,18 @@
       "deliver": "local",
       "failure_deliver": "origin",
       "enabled_toolsets": ["file", "no_mcp"]
+    },
+    {
+      "id": "apt-scraper-encoder",
+      "name": "Photo encoder",
+      "prompt": "Above is the report of the photo encoder job, which embeds listing photos for the ranking in code. It never needs you. Do not contact anyone and do not change any settings. End with the report's first line.",
+      "skills": ["ranking"],
+      "script": "encoder-run.py",
+      "schedule": "every 10m",
+      "schedule_display": "every 10m",
+      "deliver": "local",
+      "failure_deliver": "origin",
+      "enabled_toolsets": ["file", "no_mcp"]
     }
   ]
 }

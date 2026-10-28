@@ -28,7 +28,8 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 - **Exploration listing**: a listing placed in the top 20 to learn the user's taste, chosen from what the scoring model is unsure of.
 - **Review pass**: the model's review of a rerank's result.
 - **Pairwise question**: two listings shown together with the question "Which of these two?".
-- **Implicit signal**: a gallery interaction that is not an action on a listing: opening it, how long it stays open, and which photos are viewed.
+- **Implicit signal**: a gallery interaction that is not an action on a listing: opening it, how long it stays open, which photos are viewed, and which listing cards were on screen for at least a second.
+- **Photo encoder**: a local image model that reads each listing photo once and turns the photos into named features of the scoring model.
 
 ## Behavior
 
@@ -78,6 +79,7 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 - Pairwise questions pair real listings whose order the scoring model is least sure of. After the interview, once the first listings have feature records, the agent asks the user to answer 5 to 8 of them.
 - After each rerank, the review pass reads the top 50 and the state of the whole ranking. It rewrites their reasons from their feature records, flags ranks that conflict with a stated preference, may move listings, giving a reason for each move, and reports anything in the ranking state that looks wrong. The leave-one-out check runs before and after the review. When the review's moves make the favorites rank worse, all of them are reverted.
 - Implicit signals are recorded in the listing store. The scoring model does not use them, and each rerank reports whether they would raise the favorites' held-out ranks.
+- The photo encoder runs on the user's machine, in the background, never during a rerank. Its features count only once it has passed its measured quality checks, room types and named photo probes, and the user's blind test: of 10 listings the user picks blind from at least 30 they have not labeled, at least 5 must be among the 10 the scoring model with the encoder ranks highest, and more than with the model without it. Until then the ranking uses no photo embedding. Once on, a listing's reason may name what its photos look like and the favorite a room looks like, such as "kitchen looks like your favorite 2650 N Kedzie Ave", and a record whose room types the encoder disagrees with on most photos is extracted once more.
 - A dismissed listing leaves Rankings and Favorites.
 
 ### Gallery
@@ -85,9 +87,9 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 - The gallery has the tabs Rankings, Favorites, Compare, Contacted, Viewings and Notes, in that order.
 - Each listing shows its photos, price, size, rooms, address, description, amenities, date first seen, status and links to every source.
 - Rankings is a grid led by each listing's main photo, and a listing opens to its full photo set and details.
-- Rankings has the Score and rerank button. After a rerank it shows each favorite's held-out rank, the review pass's moves with their reasons, and a reverted review with its moves.
+- Rankings has the Score and rerank button. After a rerank it shows each favorite's held-out rank, how many labels the scoring model learns from, the review pass's moves with their reasons, and a reverted review with its moves. It shows each live hypothesis as the model's guess, which the user confirms as a stated preference or rejects.
 - Compare shows one pairwise question at a time, each listing with its main photo, price, size, rooms and address. The user picks one or skips the question, and either listing opens to its details.
-- On any listing the user can favorite or unfavorite it, dismiss it, add a note, and send a contact request.
+- On any listing the user can favorite or unfavorite it, dismiss it, add a note, and send a contact request. Favorite and dismiss offer an optional one-line reason, saved as a note.
 - Contacted shows each contacted listing with its correspondence. Viewings shows each booked viewing with its time.
 - Notes is where the user discusses preferences with the agent in general.
 
@@ -138,3 +140,4 @@ A Hermes Agent profile, its installer and a local gallery app that find, rank an
 - The review pass may move listings, but its moves stand only when the leave-one-out check after the review is no worse than before it, because language-model rankers show position and popularity bias.
 - Up to two of the top 20 are exploration listings, drawn only from outside the top 18, because a model that sees labels only on the listings it already ranks high cannot learn where it is wrong.
 - Pairwise questions have their own tab, because a choice between two real listings is a label the scoring model uses at once, also before the user has any favorites.
+- A photo encoder enters the scoring model only through named features that a reason can cite, and only after measured gates and a blind test fixed before it runs, because the 2026 embedding spike's photo kernel did not help as built (`0025`) and an encoder's errors are invisible without them (`0055`).

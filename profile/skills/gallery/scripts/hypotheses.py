@@ -11,6 +11,7 @@ import re
 from statistics import fmean, median
 
 from learning import decode, prediction
+from photo_catalog import PROBE_PROMPTS
 from record import CATEGORIES, RATINGS, validate_judgments
 from review import review_outcome, review_task, validated_review
 from scoring import design, fit_model, label, labeled
@@ -67,7 +68,8 @@ def prepare(store):
         task.update(records=[listing for listing in inputs['listings'] if labeled(listing) or listing.get('rank') is not None and listing['rank'] <= 50],
                     columns=[column.name for column in design(inputs).columns], max_hypotheses=allowed,
                     live=[item['phrase'] for item in existing if item['state'] == 'active'],
-                    retired=[item['phrase'] for item in existing if item['state'] != 'active'])
+                    retired=[item['phrase'] for item in existing if item['state'] != 'active'],
+                    probes=sorted(PROBE_PROMPTS) if inputs.get('photos') else [])
         task['label_evidence'] = {'actions': {listing['id']: label(listing, inputs['sentiments'].get(listing['id']))
                                              for listing in inputs['listings'] if label(listing, inputs['sentiments'].get(listing['id'])) is not None},
                                   'pairs': inputs['pairs']}
@@ -84,8 +86,10 @@ def checked_proposals(proposals, task):
     records = {item['id']: item for item in task['records']}
     result, seen = [], set(task['live'] + task['retired'])
     for value in proposals:
-        if not isinstance(value, dict) or set(value) != {'phrase', 'kind', 'evidence'}:
-            raise ValueError('Each hypothesis needs phrase, kind and evidence.')
+        if not isinstance(value, dict) or set(value) - {'probe'} != {'phrase', 'kind', 'evidence'}:
+            raise ValueError('Each hypothesis needs phrase, kind and evidence, and may name a probe.')
+        if 'probe' in value and (value['kind'] != 'visual' or value['probe'] not in task.get('probes', [])):
+            raise ValueError('Only a visual hypothesis names a probe, and only one of the probes the task lists.')
         phrase = ' '.join(value['phrase'].lower().split()) if isinstance(value['phrase'], str) else ''
         if not re.fullmatch(r"[a-z][a-z0-9 '&/-]{1,78}[a-z0-9]", phrase) or phrase in seen or phrase in known:
             raise ValueError('A hypothesis must be a new phrase not already represented or retired.')
@@ -127,8 +131,8 @@ def save(store, value):
             raise ValueError('At most six hypotheses may be live.')
         number = event_number(connection)
         for proposal in proposals:
-            connection.execute("INSERT INTO hypotheses (id, phrase, kind, state, evidence, start_event) VALUES (?, ?, ?, 'active', ?, ?)",
-                               (proposal['id'], proposal['phrase'], proposal['kind'], json.dumps(proposal['evidence']), number))
+            connection.execute("INSERT INTO hypotheses (id, phrase, kind, state, evidence, start_event, probe) VALUES (?, ?, ?, 'active', ?, ?, ?)",
+                               (proposal['id'], proposal['phrase'], proposal['kind'], json.dumps(proposal['evidence']), number, proposal.get('probe')))
         store.save_review(last['id'], ranks, reasons, result, connection=connection)
         connection.execute('UPDATE hypothesis_passes SET saved = 1 WHERE label_event = ?', (request['label_event'],))
     return {**result, 'hypotheses': len(proposals)}
@@ -147,7 +151,7 @@ def pending_judgments(store):
     for kind in ('textual', 'visual'):
         selected = []
         for identifier, listing in records.items():
-            missing = {item['phrase']: item['id'] for item in hypotheses if item['kind'] == kind
+            missing = {item['phrase']: item['id'] for item in hypotheses if item['kind'] == kind and not item['probe']
                        and (kind == 'textual' or identifier in visual)
                        and (item['id'], identifier, listing['fingerprint']) not in judged}
             if missing:

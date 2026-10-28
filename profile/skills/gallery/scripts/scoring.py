@@ -26,7 +26,7 @@ Everything here is a pure function of its inputs, which ListingStore.ranking_inp
 
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from functools import cached_property
 from math import sumprod as dot
 from operator import mul
@@ -80,6 +80,7 @@ FLAG_WORDS = {
     'utilities_included': 'utilities included', 'elevator': 'elevator', 'furnished': 'furnished',
 }
 CATEGORY_WORDS = {'floor': '{} floor', 'style': '{} style', 'outdoor_space': 'outdoor space: {}', 'building_type': '{} building'}
+ROOM_WORDS = {'kitchen': 'kitchen', 'bathroom': 'bathroom', 'living': 'living room', 'bedroom': 'bedroom'}
 
 
 def sigmoid(value):
@@ -181,30 +182,54 @@ class Design:
     coordinates: dict
     kernels: dict
     nearness_sums: tuple
+    photo_matches: dict = dataclass_field(default_factory=dict)
 
     def index(self, name):
         return next((position for position, column in enumerate(self.columns) if column.name == name), None)
 
     @cached_property
     def rows_without(self):
-        """The likelihood's listing rows with the favorites' nearness computed without each favorite, by favorite."""
-        column = self.index('near_favorites')
-        if column is None:
+        """The likelihood's listing rows with the columns that depend on the favorites, the nearness and the photo
+        matches, computed without each favorite, by favorite."""
+        nearness = self.index('near_favorites')
+        matches = [(self.index(name), best) for name, best in self.photo_matches.items() if self.index(name) is not None]
+        if nearness is None and not matches:
             return {favorite: self.likelihood_rows for favorite in self.favorites}
-        center, scale = self.columns[column].mean, self.columns[column].scale
         rows_without = {}
         for favorite in self.favorites:
+            changes = {}
+            if nearness is not None:
+                center, scale = self.columns[nearness].mean, self.columns[nearness].scale
+                for index, value in enumerate(self.kernels.get(favorite, ())):
+                    if self.ids[index] == favorite or self.ids[index] not in self.coordinates:
+                        continue
+                    total, count = self.nearness_sums[index]
+                    changes.setdefault(index, {})[nearness + 1] = ((total - value) / (count - 1) - center) / scale if count > 1 else 0.0
+            for column, best in matches:
+                center, scale = self.columns[column].mean, self.columns[column].scale
+                for index, pairs in enumerate(best):
+                    if self.ids[index] != favorite and pairs and pairs[0][1] == favorite:
+                        changes.setdefault(index, {})[column + 1] = (pairs[1][0] - center) / scale if len(pairs) > 1 else 0.0
             rows = list(self.likelihood_rows)
-            for index, value in enumerate(self.kernels.get(favorite, ())):
-                identifier = self.ids[index]
-                if identifier == favorite or identifier not in self.coordinates:
-                    continue
-                total, count = self.nearness_sums[index]
+            for index, values in changes.items():
                 head = list(rows[index].head)
-                head[column + 1] = ((total - value) / (count - 1) - center) / scale if count > 1 else 0.0
+                for position, value in values.items():
+                    head[position] = value
                 rows[index] = Row(head, rows[index].positions, rows[index].values)
             rows_without[favorite] = rows
         return rows_without
+
+    @cached_property
+    def rematched(self):
+        """For each favorite, the listings whose best photo match in some room is that favorite, so that leaving it out
+        gives them another value."""
+        result = {favorite: set() for favorite in self.favorites}
+        for name, best in self.photo_matches.items():
+            if self.index(name) is not None:
+                for index, pairs in enumerate(best):
+                    if pairs and pairs[0][1] in result:
+                        result[pairs[0][1]].add(self.ids[index])
+        return result
 
 
 @dataclass(frozen=True)
@@ -320,6 +345,33 @@ def nearness_kernels(ids, coordinates, favorites):
             for favorite in favorites if favorite in coordinates}
 
 
+def photo_values(inputs, ids, favorites, means):
+    """The photo encoder's columns, when ranking_inputs supplies its features: for each probe a reading or a note
+    names, and for each hypothesis a probe scores, the match of the listing's best photo; and for each room, the best
+    match of the listing's photos of that room with those of the most similar favorite other than itself. Returns each
+    listing's values by column name and, for each room column, each listing's two best favorites as (value, id)."""
+    photos = inputs.get('photos')
+    if not photos:
+        return [{} for _ in ids], {}
+    named = sorted({name.removeprefix('photo:') for name in means if name.startswith('photo:')})
+    matches = {}
+    for room, values in sorted(photos['similarity'].items()):
+        matches[f'looks_like:{room}'] = tuple(
+            tuple(sorted(((value, favorite) for favorite, value in values.get(identifier, {}).items()
+                          if favorite in favorites and favorite != identifier), key=lambda item: (-item[0], item[1]))[:2])
+            for identifier in ids)
+    result = []
+    for index, identifier in enumerate(ids):
+        values = {}
+        scores = photos['probes'].get(identifier)
+        if scores:
+            values.update({f'photo:{probe}': scores[probe] for probe in named if probe in scores})
+            values.update({f'hypothesis:{phrase}': scores[probe] for phrase, probe in photos['hypotheses'].items() if probe in scores})
+        values.update({name: best[index][0][0] for name, best in matches.items() if best[index]})
+        result.append(values)
+    return result, matches
+
+
 def raw_values(listing, phrases, areas, density):
     """The listing's stated value of each column it has, by column name, before centering. Ratings are shrunk toward
     the mean by their confidence later, so they are kept as (value, confidence)."""
@@ -420,9 +472,11 @@ def design(inputs):
     kernels = nearness_kernels(ids, coordinates, favorites)
     nearness_sums = tuple((sum(values[index] for favorite, values in kernels.items() if favorite != identifier),
                            sum(favorite != identifier for favorite in kernels)) for index, identifier in enumerate(ids))
-    raw = [raw_values(listings[identifier], phrases, areas, total / count if count and identifier in coordinates else None)
-           for identifier, (total, count) in zip(ids, nearness_sums)]
     means = prior_means(inputs, phrases)
+    photo, photo_matches = photo_values(inputs, ids, favorites, means)
+    raw = [raw_values(listings[identifier], phrases, areas, total / count if count and identifier in coordinates else None) | values
+           for identifier, (total, count), values in zip(ids, nearness_sums, photo)]
+    probed = {f'hypothesis:{phrase}' for phrase in (inputs.get('photos') or {}).get('hypotheses', {})}
     tag_counts = {}
     for values in raw:
         for name in values:
@@ -444,15 +498,16 @@ def design(inputs):
                     value, confidence = values[name]
                     values[name] = average + confidence * (value - average)
     columns, matrix = [], []
-    for name in sorted(names, key=lambda name: (sparse_column(name), name)):
+    for name in sorted(names, key=lambda name: (sparse_column(name) and name not in probed, name)):
         known = [values[name] for values in raw if name in values]
-        numeric = name.startswith(('rating:', 'place:')) or name in (*CODE_NUMBERS, 'near_favorites', 'station_distance')
+        numeric = (name.startswith(('rating:', 'place:', 'photo:', 'looks_like:')) or name in probed
+                   or name in (*CODE_NUMBERS, 'near_favorites', 'station_distance'))
         spread = pstdev(known)
         if spread == 0:
             continue
         average = fmean(known)
         scale = 2 * spread if numeric else 1.0
-        columns.append(Column(name, numeric, sparse_column(name), average, scale))
+        columns.append(Column(name, numeric, sparse_column(name) and name not in probed, average, scale))
         matrix.append([(values[name] - average) / scale if name in values else 0.0 for values in raw])
     rows = tuple(list(row) for row in zip(*matrix)) if matrix else tuple([] for _ in ids)
     dense_count = sum(not column.sparse for column in columns)
@@ -460,7 +515,7 @@ def design(inputs):
                                                                    in enumerate(zip(columns[dense_count:], row[dense_count:]))})
                             for row in rows)
     return Design(ids, listings, tuple(columns), dense_count, rows, likelihood_rows, tuple(raw),
-                  tuple(means.get(column.name, 0.0) for column in columns), favorites, coordinates, kernels, nearness_sums)
+                  tuple(means.get(column.name, 0.0) for column in columns), favorites, coordinates, kernels, nearness_sums, photo_matches)
 
 
 def sparse_row(head, sparse):
@@ -663,16 +718,27 @@ def held_out_fit(model_design, full, data, unlabeled_weight, mean, precision, fa
     favorite's row until the row's own score settles. Another step would overshoot instead, because the full fit is
     confident of a favorite's score, so the row's curvature there is near zero. With converge, steps with that Hessian
     and the weak negative's curvature where its score settled follow until the change is below HELD_OUT_TOLERANCE,
-    and Newton iterations finish if that takes longer than HELD_OUT_ITERATIONS."""
+    and Newton iterations finish if that takes longer than HELD_OUT_ITERATIONS.
+
+    A labeled listing whose best photo match in a room is the favorite gets another value without it. Its row's old
+    curvature leaves that Hessian and the new row's joins it in the same low-rank update of the converged check, since
+    a labeled row weighs enough to slow its steps otherwise. Weak negatives that change stay with the steps."""
     dense_count = model_design.dense_count
     rows = model_design.rows_without[favorite]
     removed = [index for index, (listing, pair) in enumerate(zip(data.listings, data.pairs)) if listing == favorite or (pair and favorite in pair)]
     vectors = [expand(data.rows[index], len(mean)) for index in removed]
     curvature = [full.curvature[index] for index in removed]
+    rematched = model_design.rematched.get(favorite, ()) if converge else ()
+    if rematched:
+        at = {identifier: index for index, identifier in enumerate(model_design.ids)}
+        for index, listing in enumerate(data.listings):
+            if listing in rematched and index not in removed and data.weights[index] >= 1:
+                vectors += [expand(data.rows[index], len(mean)), expand(rows[at[listing]], len(mean))]
+                curvature += [full.curvature[index], -full.curvature[index]]
     solved = [full.factor.solve(vector) for vector in vectors]
     solved_columns = list(zip(*solved))
-    inverse = invert([[(1.0 if row == column else 0.0) - curvature[row] * dot(vectors[row], solved[column]) for column in range(len(removed))]
-                      for row in range(len(removed))])
+    inverse = invert([[(1.0 if row == column else 0.0) - curvature[row] * dot(vectors[row], solved[column]) for column in range(len(vectors))]
+                      for row in range(len(vectors))])
 
     def solve(vector):
         step = full.factor.solve(vector)
@@ -877,8 +943,17 @@ def display(model_design, index, name):
         return f'in {key}' if raw[name] else f'outside {key}'
     if kind == 'preference':
         return f'has "{key}"' if raw[name] else f'rules out "{key}"'
+    column = model_design.columns[model_design.index(name)] if kind in ('hypothesis', 'photo', 'looks_like') else None
+    if kind == 'hypothesis' and column.numeric:
+        return f'photos {"look like" if raw[name] >= column.mean else "unlike"} "{key}" (model\'s guess)'
     if kind == 'hypothesis':
         return f'{"has" if raw[name] else "rules out"} "{key}" (model\'s guess)'
+    if kind == 'photo':
+        return f'photos {"look like" if raw[name] >= column.mean else "unlike"} "{key}"'
+    if kind == 'looks_like':
+        if raw[name] < column.mean:
+            return f'{ROOM_WORDS[key]} unlike your favorites'
+        return f'{ROOM_WORDS[key]} looks like your favorite {title(model_design.listings[model_design.photo_matches[name][index][0][1]])}'
     if name == 'near_favorites':
         here = model_design.coordinates[model_design.ids[index]]
         distances = [distance_km(here, model_design.coordinates[favorite]) for favorite in model_design.favorites

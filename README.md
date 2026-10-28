@@ -30,7 +30,7 @@ The installer:
 2. installs Hermes Agent with its computer-use driver, or updates an older Hermes,
 3. installs `profile/` as the Hermes profile `apt-scraper`, with Hermes's Google Workspace skill,
 4. installs the Claude subscription provider plugin into that profile, or opens Hermes's provider and model menu if you answered `n`,
-5. prepares the computer-use driver, and on macOS asks for Accessibility and Screen Recording access,
+5. prepares the computer-use driver, and on macOS asks for Accessibility and Screen Recording access. It also sets up the photo encoder, which reads listing photos locally for the ranking, but only when the shipped encoder has passed its quality measurements: the current one has not, so nothing is downloaded for it ([the ranking guide](docs/ranking.md#the-photo-encoder) says more),
 6. installs the Hermes gateway as a service that starts when you log in. It runs the search and your conversations with the agent. Windows may ask for administrator approval,
 7. sends one test message through your subscription or the provider you picked,
 8. makes the Hermes web dashboard start when you log in, and adds an apt-scraper shortcut: in the Start menu on Windows, in Applications on macOS,

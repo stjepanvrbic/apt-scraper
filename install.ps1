@@ -207,6 +207,25 @@ Invoke-OnConsole $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-fe
 Write-Step 'Ranking review job'
 Invoke-OnConsole $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-review')
 
+# The photo encoder embeds each listing photo once, in the background, for the ranking's photo columns. It runs
+# onnxruntime and numpy in an environment of its own, built from hash-pinned wheels, and downloads its image tower,
+# pinned by hash. Where it cannot be installed, the ranking works without it and a later install tries again.
+Write-Step 'Photo encoder'
+$env:HERMES_HOME = $profileHome
+$encoderInstalled = $false
+try {
+    Invoke-OnConsole $python @("$profileHome\scripts\encoder-run.py", 'install')
+    $encoderInstalled = $true
+} catch {
+    Write-Host "$_"
+    Write-Host 'The photo encoder could not be installed, so the ranking works without photo columns. Run the install again to retry.'
+} finally {
+    $env:HERMES_HOME = $savedHome
+}
+if ($encoderInstalled) {
+    Invoke-OnConsole $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-encoder')
+}
+
 Write-Step 'Computer-use driver'
 Invoke-OnConsole $hermes @('-p', $ProfileName, 'computer-use', 'install', '--upgrade')
 Invoke-OnConsole $hermes @('-p', $ProfileName, 'computer-use', 'status')
