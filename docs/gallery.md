@@ -143,16 +143,17 @@ Viewings are agreed, moved, canceled and booked only through the contact skill's
 
 The frontend source is in `gallery/`. It uses React, TypeScript, Mantine, TanStack Query, Tabler icons and Yet Another React Lightbox. Vite builds the assets into the gallery skill's `web/` directory. Commit the generated assets with source changes so an installed profile can open the app without a frontend toolchain. Source and output line endings are pinned to LF. Assets have stable names. The build normalizes HTML and bundled license line endings to LF. Hermes profile installation replaces the complete gallery skill directory, removing obsolete files.
 
+The whole check suite runs through `tests/run.sh` on macOS and Linux and `tests/run.ps1` on Windows, in a fresh virtual environment; on a developer's Windows PC, `tests/sandbox.ps1` runs it in a Windows Sandbox. The gallery's own steps, from `gallery/`:
+
 ```powershell
-python -m unittest discover -s tests -v
-ruff check profile/skills/gallery/scripts tests
-cd gallery
 npm ci
 npx playwright install chromium
 npm run lint
 npm run build
 npm test
 ```
+
+The committed assets in `profile/skills/gallery/web` must be the build of the committed source; the check suite fails when they differ.
 
 The Python tests use real SQLite files and HTTP servers. Launcher tests start through a virtual environment, exit the caller, and check that the server remains reachable. On Windows they verify the server has no console. On POSIX they verify a separate session. Automated adapter tests execute `run_turn` against a controlled external Hermes interface. Live verification uses the installed gateway. Browser checks run headless with screenshots. The opener is stubbed in its command test. Hermes test launches use `open --no-browser`. Browser tests use isolated stores and the production build, including real server restarts, keyboard navigation, failed saves, missing photos, source navigation and accessibility checks at desktop and mobile sizes.
 

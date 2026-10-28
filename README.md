@@ -84,6 +84,20 @@ macOS:
 
 Run it again after pulling changes.
 
+The checks run in a fresh virtual environment through one script per platform, which installs `tests/requirements.txt` and runs Ruff, the Python suite, then the gallery's lint, build and Playwright suite. macOS or Linux:
+
+```bash
+tests/run.sh
+```
+
+Windows, in a Windows Sandbox that starts with nothing but Windows, so the result depends on nothing installed on the PC:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tests\sandbox.ps1
+```
+
+GitHub Actions runs the same scripts on a fresh Linux, macOS and Windows machine for every push and pull request.
+
 ## Run
 
 You talk to the agent in the chat of the Hermes web dashboard, which the installer opens in your browser. Say hello to start. The dashboard runs in the background, without a window, and starts again when you log in. To open its chat again, choose apt-scraper in the Start menu on Windows, or open apt-scraper in Applications on macOS. If the dashboard is not running, the shortcut starts it first.

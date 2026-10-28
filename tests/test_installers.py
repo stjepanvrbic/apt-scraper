@@ -21,6 +21,18 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 # Windows starts the first bash.exe it finds in System32, which is WSL's, before searching PATH.
 BASH = shutil.which('bash')
+WINDOWS = sys.platform == 'win32'
+# Windows PowerShell 5.1 runs the PowerShell installer, bootstrap and uninstaller, and exists only on Windows.
+# tests/skips.py lets a macOS or Linux run skip tests for this reason and nothing else.
+WINDOWS_ONLY = 'Windows PowerShell 5.1 runs only on Windows'
+windows_only = unittest.skipUnless(WINDOWS, WINDOWS_ONLY)
+# The platforms whose scripts run here: both on Windows, where Git Bash runs the shell scripts, macOS's elsewhere.
+PLATFORMS = ('windows', 'macos') if WINDOWS else ('macos',)
+INSTALLERS = ('install.ps1', 'install.sh') if WINDOWS else ('install.sh',)
+# The bash that run_in_a_terminal starts: an MSYS path for Git Bash's perl on Windows.
+TERMINAL_BASH = '/usr/bin/bash' if WINDOWS else BASH
+# Where the shell scripts find the system's tools without Git Bash: macOS and Linux keep them here.
+SYSTEM_PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
 CHAT_URL = 'http://127.0.0.1:{port}/chat?profile=apt-scraper'
 FRESH = ['Routing to the machine dashboard.', 'HERMES_DASHBOARD_READY port=9119']
 RUNNING = ['Hermes dashboard already running on this host: PID 1, port 9200.',
@@ -130,7 +142,7 @@ KQUEUE_ERROR = textwrap.dedent("""\
 # opened from to the file in FAKE_CLAUDE_CALLS. `update` and `auth login` read standard input through kqueue, so
 # they fail as Claude Code does when it is /dev/tty, and `auth login` needs a terminal to read the keys from.
 FAKE_CLAUDE = textwrap.dedent(f"""\
-    input=$(readlink /proc/$$/fd/0)
+    input=$(readlink /proc/$$/fd/0 2>/dev/null || tty)
     printf '%s|%s\\n' "$*" "$input" >> "$FAKE_CLAUDE_CALLS"
     case "$*" in
         --version) echo '2.1.243 (Claude Code)' ;;
@@ -368,6 +380,8 @@ def run_in_a_terminal(folder: Path, command: list[str], environment: dict[str, s
     """Runs command, a list of MSYS paths and arguments, in a new terminal with `typed` typed on its keyboard,
     through TERMINAL. Its standard input is the terminal, or a pipe that carries `piped`. Returns the result, with
     what the command printed to the terminal as stdout, and the terminal's device."""
+    if not WINDOWS:
+        return run_in_a_posix_terminal(command, environment, typed, piped)
     (folder / 'terminal.pl').write_text(TERMINAL, newline='\n')
     device, keys = folder / 'terminal-device', folder / 'typed'
     keys.write_text(typed, newline='')
@@ -375,6 +389,39 @@ def run_in_a_terminal(folder: Path, command: list[str], environment: dict[str, s
                              device.as_posix(), keys.as_posix(), 'terminal' if piped is None else 'pipe', *command],
                             input=piped, env=environment, capture_output=True, text=True, timeout=120)
     return result, device.read_text()
+
+
+def run_in_a_posix_terminal(command: list[str], environment: dict[str, str], typed: str,
+                            piped: str | None) -> tuple[subprocess.CompletedProcess, str]:
+    """run_in_a_terminal on macOS and Linux, where Python opens the pseudo-terminal itself."""
+    import fcntl
+    import pty
+    import termios
+    master, slave = pty.openpty()
+    device = os.ttyname(slave)
+
+    def on_the_terminal():
+        # In the new session: the terminal becomes the controlling one, and the standard streams go to it.
+        terminal = os.open(device, os.O_RDWR)
+        fcntl.ioctl(terminal, termios.TIOCSCTTY, 0)
+        for descriptor in (1, 2) if piped is not None else (0, 1, 2):
+            os.dup2(terminal, descriptor)
+        os.close(terminal)
+
+    process = subprocess.Popen(command, env=environment, stdin=subprocess.PIPE if piped is not None else None,
+                               start_new_session=True, preexec_fn=on_the_terminal, close_fds=True)
+    os.close(slave)
+    if piped is not None:
+        process.stdin.write(piped.encode())
+        process.stdin.close()
+    os.write(master, typed.encode())
+    output = b''
+    with contextlib.suppress(OSError):  # EIO once the session's last process closes the terminal
+        while chunk := os.read(master, 4096):
+            output += chunk
+    os.close(master)
+    returncode = process.wait(120)
+    return subprocess.CompletedProcess(command, returncode, output.decode(errors='replace'), ''), device
 
 
 def port_answers(port: int) -> bool:
@@ -454,6 +501,7 @@ class InstallerTests(unittest.TestCase):
         self.assertIn('does not exist', result.stderr)
         self.assertEqual((opened, recorded), ('', ''))
 
+    @windows_only
     def test_the_powershell_installer_records_and_opens_the_dashboard_it_starts_or_finds_on_a_moved_port(self):
         for lines, port in ((FRESH, 9119), (RUNNING, 9200)):
             result, opened, recorded = self.run_powershell_step(lines, 0)
@@ -461,6 +509,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(opened, CHAT_URL.format(port=port))
             self.assertEqual(recorded, f'http://127.0.0.1:{port}')
 
+    @windows_only
     def test_the_powershell_installer_stops_with_the_output_of_a_dashboard_that_did_not_start(self):
         result, opened, recorded = self.run_powershell_step(FAILED, 1)
         self.assertNotEqual(result.returncode, 0)
@@ -549,14 +598,14 @@ class ProfileStepTests(unittest.TestCase):
         (self.profile / 'config.yaml').write_text(USER_CONFIG)
 
     def test_the_installers_create_a_missing_profile_and_install_the_distribution_config(self):
-        for installer in ('install.ps1', 'install.sh'):
+        for installer in INSTALLERS:
             with self.subTest(installer):
                 shutil.rmtree(self.root, ignore_errors=True)
                 result = self.run_step(installer)
                 self.assert_installed(result, [CREATE, self.install()], DISTRIBUTION_CONFIG)
 
     def test_the_installers_install_the_profile_under_a_name_that_was_deleted(self):
-        for installer in ('install.ps1', 'install.sh'):
+        for installer in INSTALLERS:
             with self.subTest(installer):
                 shutil.rmtree(self.root, ignore_errors=True)
                 self.installed_by_the_user()
@@ -565,7 +614,7 @@ class ProfileStepTests(unittest.TestCase):
                 self.assert_installed(result, [CREATE, self.install()], DISTRIBUTION_CONFIG)
 
     def test_the_installers_replace_what_a_failed_install_left_under_a_deleted_name(self):
-        for installer in ('install.ps1', 'install.sh'):
+        for installer in INSTALLERS:
             with self.subTest(installer):
                 shutil.rmtree(self.root, ignore_errors=True)
                 self.mark_deleted()
@@ -580,7 +629,7 @@ class ProfileStepTests(unittest.TestCase):
                 self.assertFalse((self.profile / 'leftover').exists())
 
     def test_the_installers_keep_the_config_of_a_profile_they_installed_before(self):
-        for installer in ('install.ps1', 'install.sh'):
+        for installer in INSTALLERS:
             with self.subTest(installer):
                 shutil.rmtree(self.root, ignore_errors=True)
                 self.installed_by_the_user()
@@ -588,7 +637,7 @@ class ProfileStepTests(unittest.TestCase):
                 self.assert_installed(result, [self.install()], USER_CONFIG)
 
     def test_the_installers_keep_the_config_of_a_profile_they_installed_before_when_the_install_fails(self):
-        for installer in ('install.ps1', 'install.sh'):
+        for installer in INSTALLERS:
             with self.subTest(installer):
                 shutil.rmtree(self.root, ignore_errors=True)
                 self.installed_by_the_user()
@@ -598,7 +647,7 @@ class ProfileStepTests(unittest.TestCase):
                 self.assertEqual((self.profile / 'config.yaml').read_text(), USER_CONFIG)
 
     def test_the_installers_install_the_distribution_config_over_a_leftover_without_distribution_yaml(self):
-        for installer in ('install.ps1', 'install.sh'):
+        for installer in INSTALLERS:
             with self.subTest(installer):
                 shutil.rmtree(self.root, ignore_errors=True)
                 self.profile.mkdir(parents=True)
@@ -663,7 +712,7 @@ class BrowserSettingsTests(unittest.TestCase):
         return [call[2:] for call in map(json.loads, calls.read_text().splitlines()) if call[2:4] == ['config', 'set']]
 
     def test_the_installers_turn_off_real_profile_browsing_that_an_earlier_setup_left_on(self):
-        for installer in ('install.ps1', 'install.sh'):
+        for installer in INSTALLERS:
             with self.subTest(installer):
                 left_on = {'browser.use_real_profile': 'true', 'browser.headed': 'true'}
                 self.assertEqual(self.run_browser_step(installer, left_on),
@@ -730,6 +779,7 @@ class QuestionTests(unittest.TestCase):
         Path(f'{self.entry}.elevated').touch()
         return self.run_gateway_step(**step)
 
+    @windows_only
     def test_the_powershell_installer_adds_the_login_entry_through_the_uac_prompt_without_a_question_first(self):
         result = self.run_on_a_fresh_machine()
         output = result.stdout + result.stderr
@@ -742,6 +792,7 @@ class QuestionTests(unittest.TestCase):
         self.assertFalse(Path(f'{self.entry}.elevated').exists())
         self.assertTrue(Path(f'{self.entry}.running').exists())
 
+    @windows_only
     def test_the_powershell_installer_skips_the_uac_prompt_on_a_machine_that_has_the_login_entry(self):
         self.entry.touch()
         result = self.run_gateway_step()
@@ -750,6 +801,7 @@ class QuestionTests(unittest.TestCase):
         self.assertNotIn('administrator approval', output)
         self.assertEqual(self.calls_made(), [GATEWAY_STATUS, GATEWAY_START, STARTED, GATEWAY_ENSURE])
 
+    @windows_only
     def test_the_powershell_installer_reports_a_declined_uac_prompt_for_the_login_entry(self):
         result = self.run_gateway_step(
             replacements={ELEVATED_INSTALL: ELEVATED_INSTALL.replace('Start-Process -FilePath $hermes', 'Deny-Elevation')},
@@ -761,6 +813,7 @@ class QuestionTests(unittest.TestCase):
         self.assertIn('adding it needs administrator approval, which was not given', flat)
         self.assertIn('The operation was canceled by the user', flat)
 
+    @windows_only
     def test_the_powershell_installer_reports_a_failed_administrator_install(self):
         result = self.run_on_a_fresh_machine(elevated='3')
         output = result.stdout + result.stderr
@@ -784,11 +837,13 @@ class QuestionTests(unittest.TestCase):
         # launchd installs in this process and never elevates, so the shell installer keeps --start-now.
         self.assertEqual(self.calls_made(), [GATEWAY_INSTALL_SHELL, {'answer': 'n'}, GATEWAY_START, STARTED])
 
+    @windows_only
     def test_the_powershell_installer_never_asks_hermes_to_start_the_gateway_from_its_install(self):
         text = (ROOT / 'install.ps1').read_text(encoding='utf-8')
         self.assertEqual(text.count("'--start-now'"), 0)
         self.assertEqual(text.count(ELEVATED_INSTALL), 1)
 
+    @windows_only
     def test_the_powershell_installer_stops_a_gateway_running_as_administrator_through_one_uac_prompt(self):
         """Approved: the step's elevated `gateway stop` runs, here without the elevation, which no test may ask
         for. Once that stop has exited and no gateway runs, the gateway is started again as the user."""
@@ -807,6 +862,7 @@ class QuestionTests(unittest.TestCase):
         self.assertNotIn('administrator prompt', flat)
         self.assertIn('Windows asks for administrator approval to stop it.', flat)
 
+    @windows_only
     def test_the_powershell_installer_reports_a_declined_uac_prompt_and_what_keeps_it_from_continuing(self):
         result = self.run_on_a_machine_with_an_administrator_gateway(
             replacements={ELEVATED_STOP: ELEVATED_STOP.replace('Start-Process -FilePath $hermes', 'Deny-Elevation')},
@@ -822,6 +878,7 @@ class QuestionTests(unittest.TestCase):
         self.assertIn('The install cannot continue while it runs', flat)
         self.assertIn('The operation was canceled by the user', flat)
 
+    @windows_only
     def test_the_powershell_installer_asks_for_administrator_approval_only_through_windows_prompts(self):
         """Both elevated commands are the user's approval: the prompt itself, with no question in the terminal."""
         text = (ROOT / 'install.ps1').read_text(encoding='utf-8')
@@ -829,6 +886,7 @@ class QuestionTests(unittest.TestCase):
         self.assertEqual(text.count(ELEVATED_INSTALL), 1)
         self.assertEqual(text.count(ELEVATED_STOP), 1)
 
+    @windows_only
     def test_the_powershell_installer_shows_the_output_of_a_failed_command_whose_output_it_reads(self):
         printer = self.folder / 'printer.py'
         printer.write_text("import sys\nprint('Gateway inaccessible: gateway_elevated')\n"
@@ -843,6 +901,7 @@ class QuestionTests(unittest.TestCase):
         self.assertIn('Gateway inaccessible: gateway_elevated', result.stderr)
         self.assertIn('on stderr', result.stderr)
 
+    @windows_only
     def test_the_powershell_installer_reads_only_stdout_from_a_command_that_succeeds_and_shows_its_stderr(self):
         printer = self.folder / 'printer.py'
         printer.write_text("import sys\nprint('{\"PATH\": \"x\"}')\nprint('a warning', file=sys.stderr)\n")
@@ -856,6 +915,7 @@ class QuestionTests(unittest.TestCase):
         self.assertIn('read: x', result.stdout)
         self.assertIn('a warning', result.stdout)
 
+    @windows_only
     def test_the_powershell_installer_runs_on_the_console_every_command_whose_output_it_does_not_read(self):
         """Windows PowerShell hands the console only to a native command that is a statement of its own, so every
         Invoke-OnConsole is one, and only the commands whose output the installer reads run through Get-NativeOutput."""
@@ -1012,6 +1072,7 @@ class DashboardAtLoginTests(unittest.TestCase):
         self.assertEqual(result.stderr, '')
         return result
 
+    @windows_only
     def test_the_windows_login_entry_starts_the_dashboard_on_the_recorded_port_and_opens_nothing(self):
         login, _ = self.windows_shortcuts()
         result = self.run_windows_shortcut(login)
@@ -1020,6 +1081,7 @@ class DashboardAtLoginTests(unittest.TestCase):
         self.assertEqual(self.calls_made(), [self.command])
         self.assertFalse(self.opened.exists())
 
+    @windows_only
     def test_the_windows_shortcut_starts_a_stopped_dashboard_and_opens_its_chat(self):
         _, shortcut = self.windows_shortcuts()
         result = self.run_windows_shortcut(shortcut)
@@ -1027,6 +1089,7 @@ class DashboardAtLoginTests(unittest.TestCase):
         self.assertEqual(self.calls_made(), [self.command])
         self.assertEqual(self.opened.read_text(), self.chat_url)
 
+    @windows_only
     def test_the_windows_shortcut_opens_the_chat_of_hermes_at_the_recorded_address_without_starting_another(self):
         _, shortcut = self.windows_shortcuts()
         with serving(self.port, answering(200, HERMES_HEALTH)):
@@ -1035,6 +1098,7 @@ class DashboardAtLoginTests(unittest.TestCase):
         self.assertEqual(self.calls_made(), [])
         self.assertEqual(self.opened.read_text(), self.chat_url)
 
+    @windows_only
     def test_the_windows_shortcut_starts_hermes_past_a_foreign_listener_and_reports_that_it_did_not_answer(self):
         for kind, handler in FOREIGN.items():
             with self.subTest(kind), serving(self.port, handler):
@@ -1046,6 +1110,7 @@ class DashboardAtLoginTests(unittest.TestCase):
                 self.assertEqual(self.calls_made(), [self.command])
                 self.assertFalse(self.opened.exists())
 
+    @windows_only
     def test_the_windows_shortcut_reports_a_dashboard_that_does_not_start(self):
         _, shortcut = self.windows_shortcuts(serves=False)
         result = self.run_windows_shortcut(shortcut, start_seconds=2)
@@ -1187,7 +1252,8 @@ class BootstrapTests(unittest.TestCase):
                                # The dialog installs the tools after a while, in the background, as Apple's does.
                                f'(sleep {install_after_seconds}; touch "{self.tools_installed.as_posix()}") &\n'
                                if install_after_seconds is not None else ''),
-            'ps': FAKE_PS,
+            # MSYS's ps has no -o; macOS's and Linux's name the terminal as bootstrap.sh expects.
+            **({'ps': FAKE_PS} if WINDOWS else {}),
         }
         for name, body in fakes.items():
             (self.tools / name).write_text(f'#!/bin/sh\n{body}', newline='\n')
@@ -1214,7 +1280,7 @@ class BootstrapTests(unittest.TestCase):
         (self.template / 'install.sh').write_text(installer[:installer.index("step 'Hermes Agent")], newline='\n')
         # bootstrap.sh piped into bash in a terminal, as the one line runs it. Enter answers the installer's first
         # question, whether to use the Claude subscription, with its default.
-        result, terminal = run_in_a_terminal(self.folder, ['/usr/bin/bash', '-s'],
+        result, terminal = run_in_a_terminal(self.folder, [TERMINAL_BASH, '-s'],
                                              {**self.shell_environment, 'FAKE_CLAUDE_CALLS': claude_calls.as_posix()},
                                              typed='\n', piped=(ROOT / 'bootstrap.sh').read_text(encoding='utf-8'))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -1313,6 +1379,7 @@ class BootstrapTests(unittest.TestCase):
     def windows_repository(self) -> Path:
         return self.folder / 'LocalAppData' / 'apt-scraper' / 'repo'
 
+    @windows_only
     def test_the_powershell_bootstrap_clones_and_runs_the_installer_then_updates_and_runs_it_again(self):
         self.powershell_tools()
         repository = str(self.windows_repository)
@@ -1323,12 +1390,14 @@ class BootstrapTests(unittest.TestCase):
                                                  ['-C', repository, 'pull', '--ff-only']])
         self.assertEqual(self.installer_runs_made(), [f'{repository}|'] * 2)
 
+    @windows_only
     def test_the_powershell_bootstrap_passes_its_arguments_to_the_installer(self):
         self.powershell_tools()
         result = self.run_powershell_bootstrap("& ([scriptblock]::Create($text)) -Example 'two words'")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.installer_runs_made(), [f'{self.windows_repository}|-Example two words'])
 
+    @windows_only
     def test_the_powershell_bootstrap_installs_git_with_winget_when_it_is_missing_and_reads_the_new_path(self):
         self.powershell_tools(git=False)
         result = self.run_powershell_bootstrap('$text | Invoke-Expression')
@@ -1346,6 +1415,7 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(installer_path[:len(self.session_path)], self.session_path)
         self.assertLessEqual({entry for entry in re.split(r'[;\n]', registry) if entry.strip()}, set(installer_path))
 
+    @windows_only
     def test_the_powershell_bootstrap_throws_the_installer_failure_and_leaves_the_session_as_it_was(self):
         self.powershell_tools(installer_exit=3)
         result = self.run_powershell_bootstrap(
@@ -1357,6 +1427,7 @@ class BootstrapTests(unittest.TestCase):
         self.assertIn('session: Continue False False', result.stdout)
         self.assertEqual(len(self.installer_runs_made()), 1)
 
+    @windows_only
     def test_the_powershell_bootstrap_shows_a_question_the_installer_asks_on_the_console_and_reads_the_answer(self):
         self.powershell_tools()
         answers = self.folder / 'answers'
@@ -1487,14 +1558,14 @@ class AccountTests(unittest.TestCase):
                 result = subprocess.run([BASH, script.as_posix()], env=environment, stdin=subprocess.DEVNULL,
                                         capture_output=True, text=True, timeout=120)
             else:
-                result, _ = run_in_a_terminal(self.folder, ['/usr/bin/bash', script.as_posix()], environment, typed)
+                result, _ = run_in_a_terminal(self.folder, [TERMINAL_BASH, script.as_posix()], environment, typed)
         return result, result.stdout + result.stderr
 
     def settings_left(self) -> dict[str, str]:
         return json.loads(self.settings.read_text())
 
     def test_the_installers_run_the_agent_on_the_claude_subscription_when_the_user_presses_enter(self):
-        for platform in ('windows', 'macos'):
+        for platform in PLATFORMS:
             with self.subTest(platform):
                 result, output = self.run_installer(platform, '\n', CLAUDE_SETTINGS)
                 self.assertEqual(result.returncode, 0, output)
@@ -1506,7 +1577,7 @@ class AccountTests(unittest.TestCase):
                 self.forget_run()
 
     def test_the_installers_hand_the_provider_to_hermess_menu_and_install_nothing_of_claude_when_the_user_answers_no(self):
-        for platform in ('windows', 'macos'):
+        for platform in PLATFORMS:
             with self.subTest(platform):
                 result, output = self.run_installer(platform, 'n\n', CLAUDE_SETTINGS, PICKED)
                 self.assertEqual(result.returncode, 0, output)
@@ -1518,7 +1589,7 @@ class AccountTests(unittest.TestCase):
                 self.forget_run()
 
     def test_the_installers_stop_before_the_test_message_when_no_provider_is_picked_in_hermess_menu(self):
-        for platform in ('windows', 'macos'):
+        for platform in PLATFORMS:
             with self.subTest(platform):
                 result, output = self.run_installer(platform, 'n\n', CLAUDE_SETTINGS)
                 self.assertNotEqual(result.returncode, 0, output)
@@ -1528,7 +1599,7 @@ class AccountTests(unittest.TestCase):
                 self.forget_run()
 
     def test_the_installers_without_a_terminal_to_ask_on_run_the_agent_on_the_claude_subscription(self):
-        for platform in ('windows', 'macos'):
+        for platform in PLATFORMS:
             with self.subTest(platform):
                 result, output = self.run_installer(platform, None, CLAUDE_SETTINGS)
                 self.assertEqual(result.returncode, 0, output)
@@ -1537,7 +1608,7 @@ class AccountTests(unittest.TestCase):
                 self.forget_run()
 
     def test_the_installers_switch_a_profile_on_another_provider_back_to_the_claude_subscription_on_yes(self):
-        for platform in ('windows', 'macos'):
+        for platform in PLATFORMS:
             with self.subTest(platform):
                 result, output = self.run_installer(platform, 'y\n', {**PICKED, 'delegation.model': 'the-picked-mini'})
                 self.assertEqual(result.returncode, 0, output)
@@ -1566,7 +1637,7 @@ class AccountTests(unittest.TestCase):
         """Forgets the calls and the tools of one platform's run, so the next starts clean."""
         for log in (self.hermes_calls, self.claude_calls):
             log.unlink(missing_ok=True)
-        for platform in ('windows', 'macos'):
+        for platform in PLATFORMS:
             shutil.rmtree(self.folder / platform, ignore_errors=True)
 
 
@@ -1747,7 +1818,7 @@ class UninstallTests(unittest.TestCase):
                     'USERPROFILE': str(places['user']),
                     'PATH': os.pathsep.join([str(self.tools), str(Path(os.environ['SystemRoot']) / 'System32')])}
         return {**environment, 'HOME': places['user'].as_posix(), 'TMPDIR': places['temp'].as_posix(),
-                'PATH': os.pathsep.join([str(self.tools), str(Path(BASH).parent)])}
+                'PATH': os.pathsep.join([str(self.tools), str(Path(BASH).parent) if WINDOWS else SYSTEM_PATH])}
 
     def keep(self, platform: str) -> list[str]:
         """Puts what Hermes and Claude Code keep of their own on the machine, which no uninstall touches, and
@@ -1826,7 +1897,7 @@ class UninstallTests(unittest.TestCase):
         self.assertNotIn('Type ', result.stdout + result.stderr)
 
     def test_the_uninstallers_remove_everything_apt_scraper_put_on_the_machine_through_hermes(self):
-        for platform in ('windows', 'macos'):
+        for platform in PLATFORMS:
             with self.subTest(platform):
                 kept = self.keep(platform)
                 self.install(platform)
@@ -1846,7 +1917,7 @@ class UninstallTests(unittest.TestCase):
                     self.assertEqual(other_calls, [])
 
     def test_the_uninstallers_skip_what_is_missing_so_they_run_twice(self):
-        for platform in ('windows', 'macos'):
+        for platform in PLATFORMS:
             with self.subTest(platform):
                 kept = self.keep(platform)
                 self.install(platform)
@@ -1859,7 +1930,7 @@ class UninstallTests(unittest.TestCase):
 
     def test_the_uninstallers_remove_the_profile_and_the_rest_without_hermes(self):
         self.without_hermes()
-        for platform in ('windows', 'macos'):
+        for platform in PLATFORMS:
             with self.subTest(platform):
                 kept = self.keep(platform)
                 if platform == 'macos':
@@ -1872,7 +1943,7 @@ class UninstallTests(unittest.TestCase):
                 self.other_calls_made()
 
     def test_the_uninstallers_remove_what_is_left_of_a_profile_hermes_deleted_and_its_mark(self):
-        for platform in ('windows', 'macos'):
+        for platform in PLATFORMS:
             with self.subTest(platform):
                 kept = self.keep(platform)
                 (self.profile(platform) / 'workspace').mkdir(parents=True)
@@ -1887,7 +1958,7 @@ class UninstallTests(unittest.TestCase):
                  ('windows', {}, [PROFILE_DELETE, GATEWAY_STATUS_DEFAULT, GATEWAY_UNINSTALL, HERMES_UNINSTALL]),
                  ('windows', {'FAKE_GATEWAY_STATUS': TASK_REGISTERED},
                   [PROFILE_DELETE, GATEWAY_STATUS_DEFAULT, [*GATEWAY_UNINSTALL, '--as-administrator'], HERMES_UNINSTALL]))
-        for platform, environment, calls in cases:
+        for platform, environment, calls in [case for case in cases if case[0] in PLATFORMS]:
             with self.subTest(platform, **environment):
                 kept = self.keep(platform)
                 self.install(platform)
@@ -1901,6 +1972,7 @@ class UninstallTests(unittest.TestCase):
                 self.assertIn(CLAUDE_UNINSTALL, result.stdout)
                 self.assertNotIn('or run this line again', result.stdout)
 
+    @windows_only
     def test_the_powershell_uninstaller_stops_before_hermes_when_the_uac_prompt_for_the_gateway_is_declined(self):
         kept = self.keep('windows')
         self.install('windows')
@@ -1913,6 +1985,7 @@ class UninstallTests(unittest.TestCase):
         self.assertEqual(self.files(), kept)
         self.assertEqual(self.calls_made(), [PROFILE_DELETE, GATEWAY_STATUS_DEFAULT])
 
+    @windows_only
     def test_the_powershell_uninstaller_leaves_the_session_it_runs_in_as_it_was(self):
         self.keep('windows')
         self.install('windows')
@@ -1930,6 +2003,7 @@ class UninstallTests(unittest.TestCase):
         self.addCleanup(lambda: (process.kill(), process.wait()))
         return process
 
+    @windows_only
     def test_the_powershell_uninstaller_stops_only_what_apt_scraper_starts(self):
         self.keep('windows')
         self.install('windows')
@@ -2132,7 +2206,7 @@ class UninstallTests(unittest.TestCase):
         return result
 
     def test_the_uninstallers_remove_everything_the_bootstraps_the_installers_and_the_gallery_create(self):
-        for platform in ('windows', 'macos'):
+        for platform in PLATFORMS:
             with self.subTest(platform):
                 kept = self.keep(platform)
                 result = self.install_through_the_installer(platform)
