@@ -57,6 +57,7 @@ Invoke-Checked 'npm run lint'
 Invoke-Checked 'npm run build'
 # The committed assets must be the build of the committed source: no changed file, and no new one.
 $assetChanges = git -C $root status --porcelain -- profile/skills/gallery/web
+if ($LASTEXITCODE -ne 0) { throw "git status failed with exit code $LASTEXITCODE" }
 if ($assetChanges) {
     $assetChanges | ForEach-Object { Write-Host $_ }
     throw 'The gallery build differs from the committed assets in profile/skills/gallery/web. Build and commit them.'

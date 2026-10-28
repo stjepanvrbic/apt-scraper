@@ -420,13 +420,14 @@ def run_in_a_posix_terminal(command: list[str], environment: dict[str, str], typ
     deadline = time.monotonic() + 120
     try:
         with contextlib.suppress(OSError):  # EIO once the session's last process closes the terminal
-            while select.select([master], [], [], max(0, deadline - time.monotonic()))[0]:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not select.select([master], [], [], remaining)[0]:
+                    process.kill()
+                    raise subprocess.TimeoutExpired(command, 120, output)
                 if not (chunk := os.read(master, 4096)):
                     break
                 output += chunk
-            else:
-                process.kill()
-                raise subprocess.TimeoutExpired(command, 120, output)
     finally:
         os.close(master)
     returncode = process.wait(120)
