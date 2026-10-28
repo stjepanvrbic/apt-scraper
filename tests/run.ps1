@@ -3,13 +3,23 @@
 # installer tests run the PowerShell scripts in.
 # Needs Python 3.14, Git for Windows (its bash and perl run the macOS installer tests) and Node 24. CI runs it on
 # a fresh machine; on a developer's PC, tests/sandbox.ps1 runs it in Windows Sandbox.
-#   tests\run.ps1 [-Work <directory>] [-Python <interpreter command>]    -Python defaults to the python on PATH
+#   tests\run.ps1 [-Work <directory>] [-Python <interpreter command>] [-Bare]
+# -Python defaults to the python on PATH. Outside CI and the sandbox the script stops and points at
+# tests\sandbox.ps1: a run on a developer's PC depends on what the PC has installed, and every PowerShell the
+# tests start opens a console window of its own when the run has no console. -Bare runs it anyway.
 param(
     [string]$Work = (Join-Path $env:TEMP 'apt-scraper-tests'),
-    [string]$Python = ''
+    [string]$Python = '',
+    [switch]$Bare
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+if (-not ($Bare -or $env:CI -or $env:USERNAME -eq 'WDAGUtilityAccount')) {
+    Write-Host 'This PC is neither CI nor a Windows Sandbox. Run the checks in a sandbox:' -ForegroundColor Red
+    Write-Host '  powershell -ExecutionPolicy Bypass -File tests\sandbox.ps1'
+    Write-Host 'or pass -Bare to run them here anyway.'
+    exit 2
+}
 
 function Write-Step([string]$Message) { Write-Host ''; Write-Host "==> $Message" -ForegroundColor Cyan }
 function Invoke-Checked([string]$Command) {
@@ -45,9 +55,10 @@ Set-Location (Join-Path $root 'gallery')
 Invoke-Checked 'npm ci --no-audit --no-fund'
 Invoke-Checked 'npm run lint'
 Invoke-Checked 'npm run build'
-# The committed assets must be the build of the committed source.
-git -C $root diff --exit-code --stat -- profile/skills/gallery/web
-if ($LASTEXITCODE -ne 0) {
+# The committed assets must be the build of the committed source: no changed file, and no new one.
+$assetChanges = git -C $root status --porcelain -- profile/skills/gallery/web
+if ($assetChanges) {
+    $assetChanges | ForEach-Object { Write-Host $_ }
     throw 'The gallery build differs from the committed assets in profile/skills/gallery/web. Build and commit them.'
 }
 

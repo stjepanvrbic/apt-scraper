@@ -39,8 +39,9 @@ cd "$ROOT/gallery"
 npm ci --no-audit --no-fund
 npm run lint
 npm run build
-# The committed assets must be the build of the committed source.
-if ! git -C "$ROOT" diff --exit-code --stat -- profile/skills/gallery/web; then
+# The committed assets must be the build of the committed source: no changed file, and no new one.
+if [ -n "$(git -C "$ROOT" status --porcelain -- profile/skills/gallery/web)" ]; then
+    git -C "$ROOT" status --short -- profile/skills/gallery/web >&2
     echo 'The gallery build differs from the committed assets in profile/skills/gallery/web. Build and commit them.' >&2
     exit 1
 fi

@@ -69,7 +69,9 @@ class InboxTests(unittest.TestCase):
         self.write('record-b.json', '{"id": "x"}')
         saved, rejected = apply(self.inbox, {'record': lambda value: {'saved': {value['id']: 1}}})
         self.assertEqual(saved, {'record-b.json': {'saved': {'x': 1}}})
-        self.assertEqual(rejected, {'record-a.json': "TypeError: unhashable type: 'list'"})
+        self.assertEqual(list(rejected), ['record-a.json'])
+        # Python 3.14 says "cannot use 'list' as a dict key (unhashable type: 'list')", earlier ones only the tail.
+        self.assertRegex(rejected['record-a.json'], r"^TypeError: .*unhashable type: 'list'")
         rejected = apply(self.inbox, {'record': mock.Mock(side_effect=sqlite3.ProgrammingError('type not supported'))})[1]
         self.assertEqual(rejected, {'record-a.json': 'ProgrammingError: type not supported'})
 

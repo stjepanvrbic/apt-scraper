@@ -510,6 +510,11 @@ def debugger_answers(port: int) -> bool:
 def free_port(preferred: int) -> int:
     for port in (preferred, 0):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            # After the browser closed, its port keeps closed connections for a while, which macOS and Linux
+            # refuse to bind over without SO_REUSEADDR. There the flag never shares a port a listener holds;
+            # Windows would, so the probe stays strict there.
+            if os.name != "nt":
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 probe.bind(("127.0.0.1", port))
             except OSError:

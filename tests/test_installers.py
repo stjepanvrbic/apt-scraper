@@ -4,6 +4,7 @@ import json
 import os
 import plistlib
 import re
+import select
 import shlex
 import shutil
 import socket
@@ -416,10 +417,18 @@ def run_in_a_posix_terminal(command: list[str], environment: dict[str, str], typ
         process.stdin.close()
     os.write(master, typed.encode())
     output = b''
-    with contextlib.suppress(OSError):  # EIO once the session's last process closes the terminal
-        while chunk := os.read(master, 4096):
-            output += chunk
-    os.close(master)
+    deadline = time.monotonic() + 120
+    try:
+        with contextlib.suppress(OSError):  # EIO once the session's last process closes the terminal
+            while select.select([master], [], [], max(0, deadline - time.monotonic()))[0]:
+                if not (chunk := os.read(master, 4096)):
+                    break
+                output += chunk
+            else:
+                process.kill()
+                raise subprocess.TimeoutExpired(command, 120, output)
+    finally:
+        os.close(master)
     returncode = process.wait(120)
     return subprocess.CompletedProcess(command, returncode, output.decode(errors='replace'), ''), device
 
@@ -971,8 +980,9 @@ class QuestionTests(unittest.TestCase):
 
 
 class ExclusiveServer(http.server.HTTPServer):
-    """Refuses a port another listener holds, as Hermes's dashboard does. Windows lets SO_REUSEADDR share it."""
-    allow_reuse_address = False
+    """Refuses a port another listener holds, as Hermes's dashboard does. Windows lets SO_REUSEADDR share a live
+    port, so it stays off there; macOS and Linux need it to take a port back from its closed connections."""
+    allow_reuse_address = os.name != 'nt'
 
 
 @contextlib.contextmanager
