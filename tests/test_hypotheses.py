@@ -4,12 +4,12 @@ import hashlib
 import sqlite3
 import sys
 from pathlib import Path
-from contextlib import closing
+from contextlib import closing, contextmanager
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/ranking/scripts'))
 
-from test_rerank import StoreTestCase, fill, least_cpu_seconds  # noqa: E402
+from test_rerank import SETTINGS, StoreTestCase, fill, least_cpu_seconds  # noqa: E402
 from rerank import rerank  # noqa: E402
 from hypotheses import prepare, save, save_judgments, pending_judgments, decide, active, assess  # noqa: E402
 from scoring import fit_model  # noqa: E402
@@ -21,6 +21,43 @@ from learning import prediction  # noqa: E402
 
 
 class HypothesisTests(StoreTestCase):
+    def test_a_concurrent_owner_decision_wins_over_an_assessment(self):
+        for decision, expected in [('reject', 'retired'), ('confirm', 'confirmed'), ('new label', 'active')]:
+            with self.subTest(decision=decision):
+                self.store = type(self.store)(self.home / f'{decision}.sqlite3')
+                self.store.update_settings(**SETTINGS)
+                save(self.store, self.prepare_case())
+                identifier = active(self.store)[0]['id']
+                save_judgments(self.store, [
+                    {'hypothesis': identifier, 'id': listing_id,
+                     'fingerprint': self.store.listing(listing_id)['content_fingerprint'],
+                     'verdict': 'has' if index % 2 == 0 else 'rules out', 'evidence': 'Fixture.'}
+                    for index, listing_id in enumerate(self.identifiers)])
+                assess(self.store)
+                original = self.store.connect
+                decided = False
+
+                @contextmanager
+                def interleaved(write=False):
+                    nonlocal decided
+                    if write and not decided:
+                        decided = True
+                        if decision == 'new label':
+                            self.store.feedback(self.identifiers[1], favorite=True)
+                        else:
+                            decide(self.store, identifier, decision)
+                    with original(write=write) as connection:
+                        yield connection
+
+                with mock.patch.object(self.store, 'connect', interleaved):
+                    result = assess(self.store)[0]
+                with self.store.connect() as connection:
+                    actual = connection.execute('SELECT state FROM hypotheses WHERE id = ?', (identifier,)).fetchone()[0]
+                self.assertEqual(actual, expected)
+                self.assertEqual(result['state'], expected)
+                self.assertFalse(result['applied'])
+                self.assertFalse(result['survives'])
+
     def test_a_legacy_rerank_without_a_review_cannot_prepare_a_pass(self):
         fill(self.store, 8, 1)
         rerank(self.store, seed=1)

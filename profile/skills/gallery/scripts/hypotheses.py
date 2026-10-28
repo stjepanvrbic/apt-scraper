@@ -212,6 +212,7 @@ def decide(store, identifier, decision):
 
 
 def assess(store):
+    revision = store.revision()
     inputs = store.ranking_inputs()
     model = fit_model(inputs)
     weights = dict(zip((column.name for column in model.design.columns), model.fit.weights[1:]))
@@ -254,7 +255,14 @@ def assess(store):
         result['pair_scoring'] = 'Chance credit for tied scores; paired prequential accuracy, not a binomial Wilson estimate.'
         results.append(result)
     with store.connect(write=True) as connection:
+        unchanged = connection.execute('SELECT revision FROM changes WHERE id = 1').fetchone()[0] == revision
         for result in results:
-            connection.execute('UPDATE hypotheses SET state = ?, weight = ?, assessment = ? WHERE id = ?',
-                               (result['state'], result['weight'], json.dumps(result), result['id']))
+            result['applied'] = True
+            updated = unchanged and connection.execute(
+                "UPDATE hypotheses SET state = ?, weight = ?, assessment = ? WHERE id = ? AND state = 'active'",
+                (result['state'], result['weight'], json.dumps(result), result['id'])).rowcount
+            if not updated:
+                state = connection.execute('SELECT state FROM hypotheses WHERE id = ?', (result['id'],)).fetchone()[0]
+                result.update(state=state, survives=False, applied=False,
+                              not_applied_reason='The store changed before this assessment was saved.')
     return results
