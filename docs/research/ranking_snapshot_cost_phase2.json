@@ -1,0 +1,47 @@
+{
+  "listings": 63,
+  "original_store": {
+    "samples": 20,
+    "raw_bytes": 173826.0,
+    "compressed_bytes": 30617.0,
+    "compressed_bytes_interval": [
+      30616.0,
+      30617.0
+    ],
+    "impression_rows": 0,
+    "read_ms": 2.3590000346302986,
+    "read_interval": [
+      2.3444999824278057,
+      2.425750019028783
+    ],
+    "journal_write_ms": 4.553549981210381,
+    "journal_write_interval": [
+      4.514899977948517,
+      4.597200022544712
+    ]
+  },
+  "stress": {
+    "samples": 20,
+    "raw_bytes": 187303.0,
+    "compressed_bytes": 33794.0,
+    "compressed_bytes_interval": [
+      33793.0,
+      33794.0
+    ],
+    "impression_rows": 63,
+    "read_ms": 2.571800025179982,
+    "read_interval": [
+      2.529500052332878,
+      2.7121499879285693
+    ],
+    "journal_write_ms": 4.799799993634224,
+    "journal_write_interval": [
+      4.731499997433275,
+      4.925800079945475
+    ]
+  },
+  "synthetic_impressions_added": 6300,
+  "all_history_snapshot_raw_bytes": 1521094,
+  "all_history_snapshot_compressed_bytes": 78490,
+  "method": "Wall time inside an IMMEDIATE transaction; inserts rolled back; 95% bootstrap over samples. Stress impressions are synthetic and exist only in the disposable backup."
+}

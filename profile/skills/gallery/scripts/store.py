@@ -610,9 +610,9 @@ class ListingStore:
         fields = {'event_id', 'visit_id', 'listing_id', 'fingerprint', 'kind', 'occurred_at'}
         rows = []
         for event in events:
-            if not isinstance(event, dict) or event.get('kind') not in ('open', 'dwell', 'photo', 'close'):
-                raise ValueError('Signal kind must be open, dwell, photo or close.')
-            extra = {'duration_ms'} if event['kind'] == 'dwell' else {'photo_url'} if event['kind'] == 'photo' else set()
+            if not isinstance(event, dict) or event.get('kind') not in ('open', 'dwell', 'photo', 'close', 'impression'):
+                raise ValueError('Signal kind must be open, dwell, photo, close or impression.')
+            extra = {'duration_ms'} if event['kind'] == 'dwell' else {'photo_url'} if event['kind'] == 'photo' else {'rank'} if event['kind'] == 'impression' else set()
             if set(event) != fields | extra:
                 raise ValueError('Signal fields do not match its kind.')
             for name in fields:
@@ -627,6 +627,9 @@ class ListingStore:
                 raise ValueError('Signal occurred_at must include a timezone.')
             duration = event.get('duration_ms')
             photo = event.get('photo_url')
+            rank = event.get('rank')
+            if rank is not None and (type(rank) is not int or rank < 1):
+                raise ValueError('Signal rank must be a positive integer or null.')
             if event['kind'] == 'dwell' and (type(duration) is not int or not 0 <= duration <= 86400000):
                 raise ValueError('Signal duration_ms must be an integer from 0 to 86400000.')
             if event['kind'] == 'photo':
@@ -634,7 +637,7 @@ class ListingStore:
                 if not re.fullmatch(r'/media/[A-Za-z0-9._-]+', photo):
                     require_url(photo)
             rows.append((event['event_id'], event['visit_id'], event['listing_id'], event['fingerprint'],
-                         event['kind'], event['occurred_at'], duration, photo))
+                         event['kind'], event['occurred_at'], duration, photo, rank))
         with self.connect() as connection:
             connection.execute('BEGIN IMMEDIATE')
             recorded = 0
@@ -645,7 +648,7 @@ class ListingStore:
                     if tuple(previous) != row:
                         raise ValueError('Signal event_id already records a different event.')
                     continue
-                connection.execute('INSERT INTO implicit_signals VALUES (?, ?, ?, ?, ?, ?, ?, ?)', row)
+                connection.execute('INSERT INTO implicit_signals VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', row)
                 recorded += 1
             return recorded
 
@@ -1124,9 +1127,27 @@ class ListingStore:
             connection.execute("UPDATE contacts SET status = 'pending', error = NULL WHERE listing_id = ? AND status = 'failed'", (listing_id,))
 
     def record_learning_event(self, connection, kind, listing, other=None):
+        occurred_at = datetime.now(timezone.utc).isoformat()
+        inputs = self.ranking_inputs(connection=connection)
+        if kind == 'favorite':
+            inputs['impressions'] = self.favorite_impressions(connection, listing, occurred_at)
         connection.execute('INSERT INTO learning_events (occurred_at, kind, listing, other, inputs) VALUES (?, ?, ?, ?, ?)',
-                           (datetime.now(timezone.utc).isoformat(), kind, listing, other,
-                            compress(encode(self.ranking_inputs(connection=connection)))))
+                           (occurred_at, kind, listing, other, compress(encode(inputs))))
+
+    def favorite_impressions(self, connection, listing, occurred_at):
+        visit = connection.execute('''SELECT s.visit_id FROM implicit_signals s JOIN listings l
+            ON l.id = s.listing_id AND l.fingerprint = s.fingerprint
+            WHERE s.kind = 'impression' AND s.listing_id = ? AND s.shown_rank IS NOT NULL
+            AND julianday(s.occurred_at) <= julianday(?)
+            ORDER BY julianday(s.occurred_at) DESC, s.rowid DESC LIMIT 1''', (listing, occurred_at)).fetchone()
+        if visit is None:
+            return []
+        return [dict(row) for row in connection.execute('''SELECT listing_id, fingerprint, visit_id, shown_rank, occurred_at
+            FROM (SELECT s.*, row_number() OVER (PARTITION BY s.listing_id ORDER BY julianday(s.occurred_at) DESC, s.rowid DESC) AS latest
+                FROM implicit_signals s JOIN listings l ON l.id = s.listing_id AND l.fingerprint = s.fingerprint
+                WHERE s.kind = 'impression' AND s.visit_id = ? AND s.shown_rank IS NOT NULL
+                AND julianday(s.occurred_at) <= julianday(?))
+            WHERE latest = 1 ORDER BY listing_id''', (visit['visit_id'], occurred_at))]
 
     def correspond(self, listing_id, direction, channel, text, *, external_message_id, external_thread_id=None):
         text = require_text(text, 'Message')

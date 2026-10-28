@@ -3,6 +3,8 @@ import { ActionIcon, AspectRatio, Badge, Box, Button, Card, Divider, Group, Imag
 import { IconHeart, IconPhoto } from '@tabler/icons-react';
 import { period, price, title, viewingTime, type ListingSummary } from './model';
 import { Exploration, ListingReason } from './RankingExplanation';
+import { FeedbackReason } from './FeedbackReason';
+import { useCardImpression } from './useCardImpression';
 
 export type Save = (path: string, body: Record<string, unknown>) => Promise<boolean>;
 export const listingPath = (listing: ListingSummary, action: string) => `/api/listings/${encodeURIComponent(listing.id)}/${action}`;
@@ -16,13 +18,14 @@ export function Photo({ listing }: { listing: ListingSummary }) {
   </AspectRatio>;
 }
 
-type CardProps = { listing: ListingSummary; open: () => void; busy: boolean; headingOrder?: 2 | 3 } & (
+type CardProps = { listing: ListingSummary; open: () => void; busy: boolean; headingOrder?: 2 | 3; impressions?: boolean; reason?: { close: () => void } } & (
   { variant?: 'browse'; save: Save } | { variant: 'compare'; choose: () => void; choosing: boolean }
 );
 
 export function ListingCard(props: CardProps) {
   const { listing, open, busy, headingOrder = 2 } = props;
-  return <Card component="article" padding={0} radius={20} className="listing-card">
+  const impression = useCardImpression(listing, !!props.impressions);
+  return <Card component="article" ref={impression} padding={0} radius={20} className="listing-card">
     <Box pos="relative">
     <UnstyledButton onClick={open} aria-label={`View ${title(listing)}`} className="photo-button">
       <Photo listing={listing} />
@@ -35,6 +38,7 @@ export function ListingCard(props: CardProps) {
       </ActionIcon></>}
     </Box>
     <Stack gap={8} p="md" style={{ flex: 1 }}>
+      {props.variant !== 'compare' && props.reason && listing.favorite && <FeedbackReason id={listing.id} kind="favorite" save={props.save} close={props.reason.close} />}
       <Group justify="space-between"><Text fw={700} size="lg">{price(listing)} <Text component="span" fw={400} c="dimmed" size="sm">{period(listing, '/')}</Text></Text>
         {listing.id.startsWith('sample:') && <Text size="xs" c="dimmed">Sample</Text>}
       </Group>

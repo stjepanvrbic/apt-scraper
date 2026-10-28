@@ -8,7 +8,7 @@ function signals(database: string): Signal[] {
   return JSON.parse(execFileSync('python', ['-c', `import sys,sqlite3,json
 connection=sqlite3.connect(sys.argv[1])
 connection.row_factory=sqlite3.Row
-print(json.dumps([dict(row) for row in connection.execute('SELECT * FROM implicit_signals ORDER BY rowid')]))`, database], { encoding: 'utf8' }));
+print(json.dumps([dict(row) for row in connection.execute("SELECT * FROM implicit_signals WHERE kind != 'impression' ORDER BY rowid")]))`, database], { encoding: 'utf8' }));
 }
 
 async function visibility(page: Page, state: 'hidden' | 'visible') {
@@ -25,7 +25,8 @@ test('details batch opens, visible dwell and actual photo views without changing
     if (request.url().endsWith('/api/signals')) {
       expect(new URL(request.url()).origin).toBe(new URL(gallery.url).origin);
       expect(request.headers().authorization).toMatch(/^Bearer .+/);
-      batches.push(request.postDataJSON().events);
+      const visits = request.postDataJSON().events.filter((event: { kind: string }) => event.kind !== 'impression');
+      if (visits.length) batches.push(visits);
     }
   });
   await page.goto(gallery.url);
@@ -66,6 +67,9 @@ test('lost batch replies retry without duplicates or a visible save error', asyn
   let attempts = 0;
   const failed = page.waitForEvent('console', message => message.text().includes('the batch will be retried'));
   await page.route('**/api/signals', async route => {
+    if (route.request().postDataJSON().events.every((event: { kind: string }) => event.kind === 'impression')) {
+      await route.continue(); return;
+    }
     attempts++;
     if (attempts === 1) { await route.fetch(); await route.abort(); }
     else await route.continue();

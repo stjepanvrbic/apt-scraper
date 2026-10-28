@@ -33,10 +33,10 @@ Phase 1, priors and recency:
 
 Phase 2, labels worth more:
 
-- [ ] The 5 to 8 cold-start questions are chosen by the same selector on the prior covariance, so they differ most on the features the stated preferences do not pin down.
-- [ ] The gallery logs card impressions (a card visible for at least one second) next to the other implicit signals, and the harness forms skip-above pairs from them as a diagnostic.
-- [ ] Favorite and dismiss offer a one-line "why", read by the note reading into the prior.
-- [ ] Measured: in simulation, labels needed to reach 0.75 pairwise accuracy fall by at least 25% against the selector on `main`; on the owner's store, once 40 Compare answers exist, prequential pairwise accuracy at least 0.65 with the lower 90% bound above 0.5. If the selector does not cut the label count in simulation, the selector on `main` stays and Result says why.
+- [x] The 5 to 8 cold-start questions are chosen by the same selector on the prior covariance, so they differ most on the features the stated preferences do not pin down.
+- [x] The gallery logs card impressions (a card visible for at least one second) next to the other implicit signals, and the harness forms skip-above pairs from them as a diagnostic.
+- [x] Favorite and dismiss offer a one-line "why", read by the note reading into the prior.
+- [x] Measured: in simulation, labels needed to reach 0.75 pairwise accuracy fall by at least 25% against the selector on `main`; on the owner's store, once 40 Compare answers exist, prequential pairwise accuracy at least 0.65 with the lower 90% bound above 0.5. If the selector does not cut the label count in simulation, the selector on `main` stays and Result says why.
 
 Phase 3, hypotheses:
 
@@ -75,6 +75,10 @@ The scoring core stays on the standard library through phase 3. Phase 4 brings n
 Phases 0 to 2 change no visible UI but the Compare questions and the "why" line; the "why" line, the hypothesis prompts in Rankings and "learning from N labels" have their frontend done by a separate design-focused agent, as the umbrella says.
 
 ## Deviations
+
+- Phase 2: the prior-only selector is an experimental candidate, not the installed policy, because its label-efficiency bar was not established. Its baseline is the variance selector delivered in Phase 0, fixed by the saved feedback artifact rather than changing as PRs merge. The candidate asks up to eight disjoint prior questions, uses one quarter of the variance for columns with stated prior means, then returns to the posterior selector.
+- A card impression requires at least half the card in the viewport for one continuous second, with a visible document and no open details drawer. It records content fingerprint, seen rank and page visit, once per mounted content/rank; failed replies retry with the same event id while the card remains mounted. Skip-above pairs use only prior impressions from the selected card's visit and exclude stale content, future events and explicitly labeled alternatives. They remain diagnostics at weight 0.1, never fit rows. Favorite snapshots retain only the latest impression per listing in the selected visit; other action snapshots omit impressions. Raw events remain intact. Timestamp comparisons handle timezone offsets and exclude future events, and partial indexes bound visit lookup work.
+- The small frontend changes reuse the current Mantine components in this implementation. No separate design worker was launched from the delegated implementation task. Reasons are optional inline fields, saved through the existing user-note route; existing note reading handles them without another model path.
 
 
 - Phase 1: the candidate stays in `tests/ranking_priors.py`; the installed `fit_model` and its priors are unchanged because both the simulation and CPU gates failed. Composite display and action-date capture are shared with the experiment, but the installed design creates no composite columns.
@@ -131,8 +135,8 @@ Real-store evidence: [inventory and replay](../research/ranking_real_store_phase
 | Phase | Delivery | Measured outcome |
 | --- | --- | --- |
 | 0 | Merged PR #50 as `432fabd` after CodeRabbit approval | Measurement infrastructure; 1.00 s rerank; real labels 0; retest runtime prerequisite open |
-| 1 | PR #51 rebased onto merged #50; prior candidate rejected | Prior candidate not promoted |
-| 2 | PR #52, awaits rebase and corrected measurements | Impressions/reasons; cold-start candidate not promoted |
+| 1 | Merged PR #51 as `7002c7b` after CodeRabbit approval | Prior candidate not promoted |
+| 2 | PR #52 rebased onto merged #51; all local checks green | Impressions/reasons; cold-start candidate not promoted |
 | 3 | Local candidate, not published | Hypothesis lifecycle and controls under verification |
 | 4 | Authorized, not started | Encoder experiment and owner-run blind test |
 | 5 | Not authorized | Owner decision and longitudinal data required |
@@ -151,7 +155,7 @@ Re-review verification: 676 Python tests and 317 subtests passed, zero skipped (
 - Real-store replay and leave-one-out executed for both models on the authorized copy: zero user labels, no held-out ranks, and null medians and intervals. The real rank-improvement bar remains unmet. See [the baseline and candidate replay report](../research/ranking_real_store_phase1.json).
 - Stop condition fired: the simulation shows no gain. Priors, composites and decay stay out of the installed fit, as on `main`. The experiment remains reproducible for a real-data reassessment. The independent random rating fixture does not model the correlations in real apartment finishes, so this rejects promotion on available evidence, not every possible grouped prior.
 
-The targeted measurement and prior suite passes: 32 tests, zero skips. It covers original historical states, known and unknown action dates, evidence improvement and floors, composites, ties, and immutable simulated histories. After the rebase: full Git Bash Python suite 687 tests and 317 subtests passed (283.20 s); full headless Playwright 40 passed (1.7 min); gallery lint, build and Ruff pass. Zero skips. CodeRabbit re-review is pending.
+The targeted measurement and prior suite passes: 32 tests, zero skips. It covers original historical states, known and unknown action dates, evidence improvement and floors, composites, ties, and immutable simulated histories. After the rebase: full Git Bash Python suite 687 tests and 317 subtests passed (283.20 s); full headless Playwright 40 passed (1.7 min); gallery lint, build and Ruff pass. Zero skips. CodeRabbit approved final head `a4ea149` before the squash merge.
 
 
 Review correction for Phase 1: the tuner no longer reconstructs past states from current inputs. Replay supplies the actual earlier journal snapshots, preserving past dismissals, feature records, readings and preferences, and excluding later labels. The frozen pair-only simulator constructs its history from its original corpus and answer prefixes. A regression test fails under the old reconstruction and passes with the historical snapshots. Undated legacy favorites retain full weight; legacy contact requests use their existing requested-at timestamp. Equal composite components are no longer falsely described as above the rest.
@@ -159,3 +163,20 @@ Review correction for Phase 1: the tuner no longer reconstructs past states from
 The refreshed synthetic prior report is run `f580db55f8362e73`; the real-feature simulation is run `e072d6f741d8ac0f`, both dated 2026-10-27 UTC. Each report records its command and the least-of-three CPU timing rule. All 400 frozen trajectories have scorable historical pairs, so excluding unscorable journal events does not change these measured accuracies. A regression now covers nine scorable answers plus a missing-record answer (default retained), and ten scorable answers followed by a missing-record answer (only the ten usable snapshots compared).
 
 Final verification after these review fixes: full Git Bash Python suite 689 tests and 317 subtests passed (289.32 s), zero skips; Ruff passes. The production and gallery files are unchanged from the passing 40-test headless run, gallery lint and build.
+
+### Phase 2: impressions and reasons, cold-start candidate not promoted
+
+`python tests/ranking_selector_experiment.py docs/research/ranking_measurements_phase0.json docs/research/ranking_measurements_phase2.json` evaluates 200 users with the same corpus, seeds, tastes, noise and held-out pairs as the baseline. The horizon was fixed at 40 answers.
+
+- Synthetic records, 200 users: at 20 labels, cold start 0.633925 [0.624925, 0.643175], baseline 0.641675 [0.631225, 0.651625]. At 40: candidate 0.690875 [0.680800, 0.701850], baseline 0.691025 [0.680800, 0.701825]. Paired change at 40 is -0.000150 [-0.008100, 0.007850]. Intervals are 95% bootstrap over users.
+- Neither synthetic mean curve reaches 0.75. Both threshold interval endpoints exceed 40 labels; all 2,000 bootstrap draws are censored. No reduction percentage is inferred from those censored curves.
+- Real feature records, 28 eligible listings and 200 virtual tastes: candidate accuracy is 0.752075 [0.742825, 0.760775] at 20 labels and 0.803725 [0.796150, 0.810900] at 40. Its paired change at 40 is -0.010400 [-0.018350, -0.003050]. These are simulated preferences, not owner answers.
+- Both selectors reach 0.75 at 20 labels on the real records, with 95% paired bootstrap threshold intervals [20, 25] for each. Label reduction is 0.0 [-0.25, 0.20], against at least 0.25. No threshold draw is censored. The no-reduction stop condition fires on this simulation; the prior-only candidate stays out and the installed variance selector remains. See [the real-feature selector report](../research/ranking_real_feature_selector_phase2.json).
+- Real-store replay executed on the authorized 63-listing workspace copy: zero Compare answers against the required 40, zero held-out positives, null accuracy and intervals. The real pairwise bar remains unmet. See [the replay report](../research/ranking_real_store_phase2.json).
+- Impressions and their skip-above diagnostic, optional favorite/dismiss reasons, content identity in card summaries, and the data migration are implemented. The existing implicit-dwell diagnostic and scoring fit are unchanged.
+
+The snapshot-cost harness runs as `python tests/measure_snapshot_cost.py <copied-store.sqlite3> report.json`, backs up the supplied copy, and rolls back every measured journal insertion. The source hash is unchanged in its regression, including the command-line run. On the real copy, 20 samples give a median payload of 30,617 bytes [30,616, 30,617], snapshot read 2.359 ms [2.3445, 2.4258], and journal write inside the transaction 4.5535 ms [4.5149, 4.5972]. With 6,300 synthetic impressions added only to the disposable backup, snapshots retain 63 impressions: 33,794 bytes [33,793, 33,794], read 2.5718 ms [2.5295, 2.7122], journal write 4.7998 ms [4.7315, 4.9258]. Retaining every impression would make that snapshot 1,521,094 raw bytes or 78,490 compressed bytes. The new snapshot has 187,303 raw bytes. These stress events are not user activity. See [snapshot costs](../research/ranking_snapshot_cost_phase2.json).
+
+The seven label/impression tests cover scoping to the selected visit, latest seen ranks, future timestamps, timezone offsets, preserved raw signals, retry idempotency, threshold censoring and source-copy integrity. Full headless Playwright passes 43 tests (1.8 min), zero skips; gallery lint and build pass. Full Git Bash Python verification passes 696 tests and 317 subtests (305.90 s), zero skips; Ruff passes. Production fitting still ignores impressions and skip-above pairs.
+
+Review follow-up: if the baseline reaches 0.75 but the candidate does not, the selector stop condition now fires; a censored baseline remains explicitly unestablished. Neither recorded run changes outcome. A headless regression commits an impression through the server, loses its response, forwards the retry and verifies identical event IDs and one stored row. The eight targeted label tests and four learning browser tests pass, zero skips.

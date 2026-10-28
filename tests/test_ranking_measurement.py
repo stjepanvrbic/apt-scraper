@@ -20,7 +20,7 @@ from test_feature_record import extraction  # noqa: E402
 from ranking_experiments import write_report  # noqa: E402
 from rerank import rerank  # noqa: E402
 from learning import decode, encode  # noqa: E402
-from schema import MIGRATIONS, compress_learning_events  # noqa: E402
+from schema import MIGRATIONS, compress_learning_events, implicit_signals  # noqa: E402
 from rescore_ranking_feedback import validate_saved_curves  # noqa: E402
 
 
@@ -189,6 +189,8 @@ class JournalTests(StoreTestCase):
             original = [(event['id'], decode(event['inputs'])) for event in events]
             for identifier, snapshot in original:
                 connection.execute('UPDATE learning_events SET inputs = ? WHERE id = ?', (encode(snapshot), identifier))
+            connection.execute('DROP TABLE implicit_signals')
+            implicit_signals(connection)
             connection.execute(f'PRAGMA user_version = {MIGRATIONS.index(compress_learning_events)}')
         self.store = type(self.store)(self.store.path)
         with self.store.connect() as connection:

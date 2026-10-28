@@ -1,5 +1,6 @@
 export type Note = { id: number; text: string; role: 'user' | 'agent'; created_at: string };
 export type ListingSummary = {
+  content_fingerprint: string;
   id: string; title: string | null; price: number | null; price_note: string | null; currency: string | null; rental_period: string | null; size: string | null; rooms: string | null;
   address: string | null; photos: string[]; first_seen: string; status: 'available' | 'unavailable';
   rank: number | null; reason: Reason | null; unranked_reason: string | null; exploration: boolean; favorite: boolean; dismissed: boolean;
@@ -10,7 +11,6 @@ export type ListingSummary = {
 };
 export type Listing = ListingSummary & {
   explanation: Explanation | null;
-  content_fingerprint: string;
   description: string | null; amenities: string[]; sources: { label: string; url: string }[];
   notes: Note[]; notes_total: number;
   viewings: { id: string; time: string; details: string; status: 'booked' | 'agreed' | 'canceled'; calendar_event_id: string | null }[];

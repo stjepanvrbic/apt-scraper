@@ -14,6 +14,7 @@ import { RerankPanel } from './RerankPanel';
 import { RankingExplanation } from './RankingExplanation';
 import { useRerank } from './useRerank';
 import { useListingSignals } from './useListingSignals';
+import { FeedbackReason } from './FeedbackReason';
 
 const NotesChat = lazy(() => import('./NotesChat'));
 
@@ -42,7 +43,9 @@ function NoteForm({ save, path }: { save: Save; path: string }) {
   </form>;
 }
 
-function Details({ id, close, save, busy, saveError, readError, compare }: { compare: boolean; id: string | undefined; close: () => void; save: Save; busy: boolean; saveError: string; readError: string }) {
+type ReasonRequest = { id: string; kind: 'favorite' | 'dismiss' };
+
+function Details({ id, close, save, busy, saveError, readError, compare, why, closeWhy }: { compare: boolean; id: string | undefined; close: () => void; save: Save; busy: boolean; saveError: string; readError: string; why: ReasonRequest | undefined; closeWhy: () => void }) {
   const [photo, setPhoto] = useState(-1);
   const [pages, setPages] = useState({ notes_page: 1, correspondence_page: 1, viewings_page: 1 });
   const details = useListing(id, pages);
@@ -78,6 +81,7 @@ function Details({ id, close, save, busy, saveError, readError, compare }: { com
             onClick={() => save(listingPath(listing, 'feedback'), { dismissed: !listing.dismissed })}>
             {listing.dismissed ? 'Restore listing' : 'Dismiss'}</Button>
         </Group>
+        {why?.id === listing.id && <FeedbackReason key={`${why.id}-${why.kind}`} id={why.id} kind={why.kind} save={save} close={closeWhy} />}
         {listing.contact?.status === 'failed' && <Alert color="red" title="Contact failed">{listing.contact.error}</Alert>}
         {listing.contact?.status === 'pending' && <Text size="sm" c="dimmed">Request saved. No message has been sent yet.</Text>}
         {listing.dismissed && <Text size="sm" c="dimmed">Hidden from Rankings and Favorites. Your notes and contact history are kept.</Text>}
@@ -118,7 +122,15 @@ export default function App() {
   const [dismissed, setDismissed] = useState(false);
   const ranking = useRerank();
   const invitation = useCompareInvitation();
-  const { state, readError, saveError, busy, loading, refresh, save } = useGallery(dismissed ? 'Dismissed' : tab!, page);
+  const [why, setWhy] = useState<ReasonRequest>();
+  const { state, readError, saveError, busy, loading, refresh, save: saveAction } = useGallery(dismissed ? 'Dismissed' : tab!, page);
+  const save: Save = async (path, body) => {
+    const saved = await saveAction(path, body);
+    const feedback = path.match(/^\/api\/listings\/([^/]+)\/feedback$/);
+    if (saved && feedback) setWhy(body.dismissed === true ? { id: decodeURIComponent(feedback[1]), kind: 'dismiss' } :
+      body.favorite === true ? { id: decodeURIComponent(feedback[1]), kind: 'favorite' } : undefined);
+    return saved;
+  };
   const listings = state?.items ?? [];
   const awaiting = listings.filter(listing => !listing.rank);
   const groups = tab === 'Rankings' && !dismissed ? [
@@ -154,7 +166,7 @@ export default function App() {
             listings.length ? <Stack gap="xl">{groups.filter(group => group.items.length).map(group => <div key={group.heading ?? 'listings'}>
               {group.heading && <Title order={2} size="h3" mb="md">{group.heading}</Title>}
               <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="xl">{group.items.map(listing =>
-                <ListingCard key={listing.viewing?.id ?? listing.id} listing={listing} open={() => setSelected(listing.id)} save={save} busy={busy} headingOrder={group.heading ? 3 : 2} />)}</SimpleGrid>
+                <ListingCard key={listing.viewing?.id ?? listing.id} listing={listing} open={() => setSelected(listing.id)} save={save} busy={busy} impressions={tab === 'Rankings' && !dismissed && !selected} reason={why?.id === listing.id && why.kind === 'favorite' ? { close: () => setWhy(undefined) } : undefined} headingOrder={group.heading ? 3 : 2} />)}</SimpleGrid>
             </div>)}</Stack> :
               <Paper p={48} radius={20} withBorder><Stack align="center" gap="sm"><current.icon size={32} stroke={1.4} />
                 <Title order={2} size="h3">{tab === 'Favorites' ? 'No favorites yet' : tab === 'Contacted' ? 'No contact requests yet' : tab === 'Viewings' ? 'No viewings booked' : 'No available listings'}</Title>
@@ -168,6 +180,6 @@ export default function App() {
       {listings.some(listing => listing.id.startsWith('sample:')) && <Text size="xs" c="dimmed" mt="xl">
         Sample listings with stock photos. Addresses, prices and rankings are examples, not search results.</Text>}
     </Container>
-    <Details compare={tab === 'Compare'} id={selected} close={() => setSelected(undefined)} save={save} busy={busy} saveError={saveError} readError={readError} />
+    <Details compare={tab === 'Compare'} id={selected} close={() => setSelected(undefined)} save={save} busy={busy} saveError={saveError} readError={readError} why={why} closeWhy={() => setWhy(undefined)} />
   </>;
 }

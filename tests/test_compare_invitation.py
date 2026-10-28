@@ -12,7 +12,7 @@ from urllib.request import Request, urlopen
 from test_features_run import ROOT, SCRIPT, FeaturesTestCase
 import features
 from contact import NotConnected
-from schema import MIGRATIONS, compare_invitation
+from schema import MIGRATIONS, compare_invitation, implicit_signals
 from server import make_server
 from store import ListingStore, extraction_read
 
@@ -196,6 +196,8 @@ class CompareInvitationTests(FeaturesTestCase):
         with closing(sqlite3.connect(self.store.path)) as connection, connection:
             connection.execute('DROP TABLE compare_invitation')
             connection.execute('DROP TABLE learning_events')
+            connection.execute('DROP TABLE implicit_signals')
+            implicit_signals(connection)
             connection.execute(f'PRAGMA user_version = {MIGRATIONS.index(compare_invitation)}')
         self.store = self.features.store = ListingStore(self.store.path)
         self.assertEqual(self.store.compare_invitation()['delivered'], {'gateway': '2026-10-20T12:00:00+00:00'})
