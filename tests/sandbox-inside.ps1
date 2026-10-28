@@ -1,8 +1,11 @@
-# What tests\sandbox.ps1 runs inside the Windows Sandbox through `wsb exec`, as System: installs Python, Git for
-# Windows and Node from the mapped installers, copies the mapped checkout to a writable folder, runs tests\run.ps1
+# What tests\sandbox.ps1 runs inside the Windows Sandbox through `wsb exec`, as System: unpacks Python, Git for
+# Windows and Node from the mapped zip builds, copies the mapped checkout to a writable folder, runs tests\run.ps1
 # with its output in out\log.txt, writes the exit code to out\exit-code and shuts the sandbox down. Not for
 # running on a real machine.
+# The toolchain comes as zip builds, not installers: the Windows Installer service inside a sandbox hung on
+# Python's core MSI for ten minutes at a time, and unpacking needs no service at all.
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 # Where the sandbox mounts the mapped folders, whichever account runs this.
 $desktop = 'C:\Users\WDAGUtilityAccount\Desktop'
 $env:APT_SCRAPER_SANDBOX = '1'
@@ -11,6 +14,7 @@ $toolchain = Join-Path $desktop 'toolchain'
 $cache = Join-Path $desktop 'cache'
 $out = Join-Path $desktop 'out'
 $log = Join-Path $out 'log.txt'
+$tools = 'C:\tools'
 $work = 'C:\work\apt-scraper'
 $code = 1
 $options = $null
@@ -22,15 +26,26 @@ function Write-Log([string]$Message) {
 
 try {
     $options = Get-Content (Join-Path $out 'options.json') -Raw | ConvertFrom-Json
-    Write-Log 'Installing Python 3.14'
-    Start-Process -Wait -FilePath (Join-Path $toolchain 'python-3.14.10-amd64.exe') `
-        -ArgumentList '/quiet', 'InstallAllUsers=1', 'PrependPath=1', 'Include_launcher=1', 'Include_test=0', '/log', (Join-Path $out 'python-install.log')
-    Write-Log 'Installing Git for Windows'
-    Start-Process -Wait -FilePath (Join-Path $toolchain 'Git-2.56.0.4-64-bit.exe') `
-        -ArgumentList '/VERYSILENT', '/NORESTART', '/NOCANCEL', '/SP-', ('/LOG=' + (Join-Path $out 'git-install.log'))
-    Write-Log 'Installing Node 24'
-    Start-Process -Wait -FilePath msiexec -ArgumentList '/i', (Join-Path $toolchain 'node-v24.22.2-x64.msi'), '/qn', '/norestart', '/log', (Join-Path $out 'node-install.log')
-    $env:PATH = [Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('PATH', 'User')
+    New-Item -ItemType Directory -Force $tools | Out-Null
+
+    Write-Log 'Unpacking Python 3.14'
+    # The NuGet build is a zip with python.exe, the standard library, venv, ensurepip and pip under tools\.
+    Copy-Item (Join-Path $toolchain 'python.3.14.10.nupkg') (Join-Path $tools 'python.zip')
+    Expand-Archive -Path (Join-Path $tools 'python.zip') -DestinationPath (Join-Path $tools 'python') -Force
+    Remove-Item (Join-Path $tools 'python.zip')
+    $python = Join-Path $tools 'python\tools'
+
+    Write-Log 'Unpacking Git for Windows'
+    # PortableGit is a self-extracting 7-Zip archive: -o names the folder, -y answers its one question.
+    $git = Join-Path $tools 'git'
+    Start-Process -Wait -FilePath (Join-Path $toolchain 'PortableGit-2.56.0.4-64-bit.7z.exe') -ArgumentList "-o`"$git`"", '-y'
+
+    Write-Log 'Unpacking Node 24'
+    Expand-Archive -Path (Join-Path $toolchain 'node-v24.22.2-win-x64.zip') -DestinationPath $tools -Force
+    $node = Join-Path $tools 'node-v24.22.2-win-x64'
+
+    $env:PATH = "$python;$python\Scripts;$git\cmd;$node;" + $env:PATH
+    Write-Log ("Toolchain: " + (& "$python\python.exe" --version) + ', ' + (git --version) + ', node ' + (node --version))
 
     Write-Log "Copying the checkout to $work"
     New-Item -ItemType Directory -Force $work | Out-Null
@@ -44,7 +59,7 @@ try {
 
     Write-Log 'Running tests\run.ps1'
     # cmd's redirection takes both streams as the checks print them, which PowerShell 5.1 would rewrap.
-    cmd /c "powershell -NoProfile -ExecutionPolicy Bypass -File `"$work\tests\run.ps1`" -Work C:\work\tests >>`"$log`" 2>&1"
+    cmd /c "powershell -NoProfile -ExecutionPolicy Bypass -File `"$work\tests\run.ps1`" -Work C:\work\tests >> `"$log`" 2>&1"
     $code = $LASTEXITCODE
     Write-Log "tests\run.ps1 exited with $code"
 } catch {

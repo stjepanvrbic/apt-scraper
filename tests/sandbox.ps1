@@ -1,6 +1,6 @@
 # Runs every check, tests\run.ps1, on a fresh Windows machine: a Windows Sandbox with nothing on it but Windows,
-# into which this checkout is mapped read-only. The sandbox installs Python, Git for Windows and Node from
-# installers this script downloads once and checks against their pinned hashes, copies the checkout, runs the
+# into which this checkout is mapped read-only. The sandbox unpacks Python, Git for Windows and Node from zip
+# builds this script downloads once and checks against their pinned hashes, copies the checkout, runs the
 # checks and shuts down. What the run prints shows here as it happens, and this exits with the checks' exit code.
 #   tests\sandbox.ps1 [-KeepOpen] [-TimeoutMinutes 120] [-MemoryMB 8192]
 # The sandbox is started through the `wsb` command, so it has an ID, and it is stopped through `wsb stop` when the
@@ -21,15 +21,16 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $root = Split-Path -Parent $PSScriptRoot
 
-# What the sandbox installs. tests\sandbox-inside.ps1 names the same files.
+# What the sandbox unpacks: zip builds, not installers, because the Windows Installer service inside a sandbox
+# hung on Python's core MSI. tests\sandbox-inside.ps1 names the same files.
 $toolchain = @(
-    @{ File = 'python-3.14.10-amd64.exe'; Url = 'https://www.python.org/ftp/python/3.14.10/python-3.14.10-amd64.exe'
-       Sha256 = '92480239264744fe0386a1bd8275786fefa126e3129e56a68e22b52c73329965' },
-    @{ File = 'Git-2.56.0.4-64-bit.exe'
-       Url = 'https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.4/Git-2.56.0.4-64-bit.exe'
-       Sha256 = '4961a4a8cc778d8b6e00a5819e5fe4d078b754555aff7aedc2d77a5d74c2de80' },
-    @{ File = 'node-v24.22.2-x64.msi'; Url = 'https://nodejs.org/dist/v24.22.2/node-v24.22.2-x64.msi'
-       Sha256 = '9231bf64d19bef391dd5ee8af65411d3799c3c44a842d2320849cc1da60b6b6d' }
+    @{ File = 'python.3.14.10.nupkg'; Url = 'https://api.nuget.org/v3-flatcontainer/python/3.14.10/python.3.14.10.nupkg'
+       Sha256 = 'f54ba67c9951c3d773ea47d2bb095150c037c399f0423a968bcda22809241784' },
+    @{ File = 'PortableGit-2.56.0.4-64-bit.7z.exe'
+       Url = 'https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.4/PortableGit-2.56.0.4-64-bit.7z.exe'
+       Sha256 = 'b1f3e52216e2ed6882d1bebfd4d3fdf319bec40d2edbbf9fd26ec4fd3fce7ed1' },
+    @{ File = 'node-v24.22.2-win-x64.zip'; Url = 'https://nodejs.org/dist/v24.22.2/node-v24.22.2-win-x64.zip'
+       Sha256 = 'ca1bff5d8ead13c9f2ea404a176db46bd430704d5b5113734049fa365e7799e2' }
 )
 
 function Get-RunningSandboxes {
