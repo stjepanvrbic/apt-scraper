@@ -157,10 +157,13 @@ class ColumnTests(EncoderTestCase):
         photo_features(self.store, identifiers)
         pass_blind_test(self.store)
         self.store.save_readings(preferences=[('dislike', 'Carpet', [{'feature': 'photo:carpet', 'direction': 'dislike'}]),
-                                              ('like', 'Lots of daylight', [{'feature': 'rating:natural_light', 'direction': 'like'}])])
+                                              ('like', 'Lots of daylight', [{'feature': 'rating:natural_light', 'direction': 'like'},
+                                                                            {'feature': 'photo:bright rooms', 'direction': 'like'}])])
         self.assertIsNotNone(design(self.store.ranking_inputs()).index('photo:carpet'))
+        self.assertEqual(self.store.unread_preferences(), [])
         pass_blind_test(self.store, passed=False)
         self.assertEqual(self.store.preference_readings()[('dislike', 'Carpet')], [])
+        self.assertEqual(set(self.store.unread_preferences()), {('dislike', 'Carpet'), ('like', 'Lots of daylight')})
         model_design = design(self.store.ranking_inputs())
         self.assertIsNone(model_design.index('photo:carpet'))
         self.assertIsNotNone(model_design.index('preference:Carpet'))
@@ -273,12 +276,15 @@ class BlindTests(EncoderTestCase):
 
         def ask(prompt):
             with store.connect() as connection:
-                shown = json.loads(connection.execute('SELECT listings FROM encoder_blind_tests').fetchone()['listings'])['listings']
+                shown = json.loads(connection.execute('SELECT listings FROM encoder_blind_tests ORDER BY id DESC').fetchone()['listings'])['listings']
             expected['without'] = top(store.ranking_inputs(photos=False), shown)
             for identifier in shown[:3]:
                 store.feedback(identifier, favorite=True)
             return '1 2 3 4 5 6 7 8 9 10'
 
+        pass_blind_test(self.store)
+        self.store.save_readings(preferences=[('dislike', 'Carpet', [{'feature': 'photo:carpet', 'direction': 'dislike'}])])
+        pass_blind_test(self.store, passed=False)
         result = blind_test(self.store, self.page, seed=7, ask=ask, say=lambda line: None)
         self.assertEqual(result['top_without_encoder'], expected['without'])
 

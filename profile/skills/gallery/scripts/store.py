@@ -894,13 +894,15 @@ class ListingStore:
                 WHERE n.role = 'user' AND r.note_id IS NULL ORDER BY n.id''')]
 
     def unread_preferences(self):
-        """The stated likes and dislikes without a reading of their current wording, as (kind, phrase), and while the
-        photo encoder is on, those read before its probes were in the vocabulary."""
+        """The stated likes and dislikes without a reading of their current wording, as (kind, phrase); while the photo
+        encoder is on, those read before its probes were in the vocabulary; and while it is off, those whose reading
+        names a photo feature, so the part the photo feature carried is read again into record features or a judgment."""
         with self.connect() as connection:
             settings = {row['name']: json.loads(row['value']) for row in connection.execute('SELECT * FROM settings')}
             encoder = self.encoder_state(connection)
-            read = {(row['kind'], row['phrase']) for row in connection.execute('SELECT kind, phrase, photo_model FROM preference_readings')
-                    if not encoder['enabled'] or row['photo_model'] == encoder['model']}
+            read = {(row['kind'], row['phrase']) for row in connection.execute('SELECT kind, phrase, features, photo_model FROM preference_readings')
+                    if (row['photo_model'] == encoder['model'] if encoder['enabled']
+                        else not any(item['feature'].startswith('photo:') for item in json.loads(row['features'])))}
         return [item for item in stated_phrases(settings) if item not in read]
 
     def preference_readings(self):

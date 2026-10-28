@@ -12,6 +12,7 @@ import random
 from pathlib import Path
 
 from scoring import fit_model, in_fit, labeled, scores
+from store import without_photo_features
 
 MINIMUM_LISTINGS = 30
 PICKS = 10
@@ -111,7 +112,9 @@ def blind_test(store, page_path, *, count=MINIMUM_LISTINGS, seed=None, picks=Non
             say(str(error))
     picked = [shown[number - 1] for number in chosen]
     with_encoder = top(with_photos, shown)
-    without_encoder = top({key: value for key, value in with_photos.items() if key != 'photos'}, shown)
+    baseline = {key: value for key, value in with_photos.items() if key != 'photos'}
+    baseline['preference_readings'] = without_photo_features(with_photos['preference_readings'])
+    without_encoder = top(baseline, shown)
     precision_with = len(set(with_encoder) & set(picked)) / PICKS
     precision_without = len(set(without_encoder) & set(picked)) / PICKS
     result = {'model': model, 'shown': count, 'labels': labels, 'picks': picked,
