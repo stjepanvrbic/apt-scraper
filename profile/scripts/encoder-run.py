@@ -38,7 +38,7 @@ NO_WAKE = json.dumps({'wakeAgent': False})
 
 sys.path.insert(0, str(ENCODER))
 
-from assets import prepare, ready  # noqa: E402
+from assets import prepare, ready, urlopen  # noqa: E402
 
 
 def environment_python(directory):
@@ -146,12 +146,10 @@ def encode_once(home, run):
     print(NO_WAKE)
 
 
-def main(arguments, run=subprocess.run, opener=None):
-    import urllib.request
-
+def main(arguments, run=subprocess.run, opener=urlopen):
     home = Path(os.environ['HERMES_HOME'])
     if arguments == ['install']:
-        return install(home, run, opener or urllib.request.urlopen)
+        return install(home, run, opener)
     try:
         encode_once(home, run)
     except Exception as error:

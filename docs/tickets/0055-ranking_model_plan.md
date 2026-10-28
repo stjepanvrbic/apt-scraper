@@ -250,14 +250,14 @@ Probe AUCs are over the test listings (owner and test houses), with 301 carpet, 
 
 Every candidate meets four of the six gate measures, so the selection falls to their mean: SigLIP 2 giant 0.891, So400m 0.866, MobileCLIP2-S4 0.865, L/16 0.856, B/16 0.853, MobileCLIP2-S2 0.844, DFN5B 0.836. SigLIP 2 giant is the best-measured encoder and is pinned in `model.json`; the shipped path reproduces its sweep embeddings at cosine 1.0 and its 93.94% room agreement. Meta's PE-Core L/14-336 was found too but its only ONNX export ships no tokenizer or preprocessing configuration, so it could not be run faithfully. MobileCLIP2 and DFN5B carry Apple's research-only AMLR license, which would have needed the owner's decision before shipping had either won.
 
-Lower precisions against fp32 of the same model, on the same 256 photos (`encoder_sweep.py compare`):
+Lower precisions against fp32 of the same model, on the same 256 photos, with the text padding and pooling chosen for that model's fp32 (`encoder_sweep.py compare`):
 
 | Model | Precision | Same room as fp32 | Room agreement on the sample's 205 typed photos, fp32 → this | Mean cosine to fp32 |
 | --- | --- | --- | --- | --- |
-| SigLIP 2 giant | fp16 | 0.992 | 0.932 → 0.932 | 0.9999 (least 0.9988) |
-| SigLIP 2 giant | int8 | 0.906 | 0.932 → 0.888 | 0.902 |
-| SigLIP 2 So400m | fp16 | 1.000 | 0.946 → 0.946 | 1.0000 |
-| SigLIP 2 So400m | int8 | 0.102 | 0.946 → 0.078 | 0.425 |
+| SigLIP 2 giant | fp16 | 1.000 | 0.927 → 0.927 | 0.9999 (least 0.9988) |
+| SigLIP 2 giant | int8 | 0.969 | 0.927 → 0.941 | 0.902 (least 0.763) |
+| SigLIP 2 So400m | fp16 | 1.000 | 0.932 → 0.932 | 1.0000 |
+| SigLIP 2 So400m | int8 | 0.090 | 0.932 → 0.039 | 0.425 |
 | SigLIP 2 L/16 | fp16 | 1.000 | 0.961 → 0.961 | 1.0000 |
 | SigLIP 2 L/16 | int8 | 0.953 | 0.961 → 0.917 | 0.904 |
 | SigLIP 2 B/16 | fp16 | 1.000 | 0.961 → 0.961 | 1.0000 |
@@ -267,13 +267,13 @@ Lower precisions against fp32 of the same model, on the same 256 photos (`encode
 | MobileCLIP2-S2 | fp16 | 1.000 | 0.961 → 0.961 | 1.0000 |
 | MobileCLIP2-S2 | int8 | 0.090 | 0.961 → 0.073 | 0.051 |
 
-fp16 costs no measurable quality (giant's changes the room type of 2 of 256 photos, with the same agreement); int8 costs quality everywhere and breaks So400m and both MobileCLIP2 sizes outright. DFN5B's lower precisions were not run: they can at best match its fp32, which ranks last. The shipped manifest keeps giant at fp32, the precision the gates were measured on: its fp16 graph would halve the download but is slower and larger in memory here (below), and download size is not a criterion.
+fp16 costs no measurable quality. int8 breaks So400m and both MobileCLIP2 sizes outright and costs room agreement for B/16 and L/16. Giant's int8 kept its sample's room types, so it was measured on all 3,113 photos: room agreement 0.940 [0.928, 0.953], as fp32, but carpet 0.727 [0.677, 0.775] against fp32's 0.807 and bathtub 0.840 against 0.879, a measurable loss. DFN5B's lower precisions were not run: they can at best match its fp32, which ranks last. The shipped manifest keeps giant at fp32, the precision the gates were measured on: its fp16 graph would halve the download but is slower and larger in memory here (below), and download size is not a criterion.
 
 Resources, as information, on this machine (AMD Ryzen 9 9950X3D, 16 cores, 64 GB, Windows 11), measured by `encoder_resources.py` on 64 owner photos at 4 threads with nothing else running: giant fp32 downloads 4,655,539,399 bytes in two files, loads in 2.9 s, embeds at 2.79 s per photo, about 2 h 20 min for 3,000 photos (scaled from the 64), with a peak resident memory of 6.38 GB. Its fp16 graph downloads 2,328,223,375 bytes and runs at 3.04 s per photo with 6.93 GB peak, so ONNX Runtime's CPU kernels gain it nothing but the download. With the encoder on, every journal snapshot carries the photo features: 3.29 MB on the 300-listing, 50-favorite fixture, 2.53 MB of it the room similarities to the 50 favorites.
 
 Gates:
 
-- Room-type agreement at least 85% on at least 1,000 photos: met by every candidate, giant at 0.939 [0.927, 0.952] on 2,246 photos. The extraction-typed owner subset alone, 462 photos, is above 85% for all but MobileCLIP2-S2.
+- Room-type agreement at least 85% on at least 1,000 photos: met by every candidate, giant at 0.939 [0.927, 0.952] on 2,246 photos. The extraction-typed owner subset alone, 462 photos, is above 85% for all but MobileCLIP2-S2 (0.827) and SigLIP 2 giant (0.842 [0.817, 0.869]): the pinned model clears the bar only on the combined sample.
 - Five probe AUCs at least 0.85: unmet for every candidate. Carpet and open kitchen fail throughout.
 - The gallery rerank: the 300-listing, 50-favorite fixture with all four room columns and two probe columns on reranks in 1.59 CPU seconds, least of three, under 2 seconds; the same fixture without the encoder in 1.14 s. The first measurement was 2.44 s: with a favorite held out, the other favorites whose best room match it was change value, and eight held-out fits fell back to full Newton refits. The converged check now takes those labeled rows into its low-rank update; its held-out ranks equal exact refits for all 50 favorites, the largest score difference 1.4e-6.
 - Blind test: not run. The owner's store has zero labels, so no model fits a taste to test, and the unmet probe gate already keeps the encoder out. `ranking.py blind-test` is the one owner-run command for later ([the ranking guide](../ranking.md#the-blind-test)); it runs end to end on a synthetic labeled store in `tests/test_photo_ranking.py`, which also checks that the criterion and listings are stored before any pick, that the page shows photos and no rank, and that only a pass turns the encoder on.

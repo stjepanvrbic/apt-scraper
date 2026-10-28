@@ -363,7 +363,8 @@ def evaluate(args):
 
 
 def compare(args):
-    """A lower-precision graph against the full-precision embeddings of the same model, on a fixed sample of photos:
+    """A lower-precision graph against the full-precision embeddings of the same model, on a fixed sample of photos,
+    with the text padding and pooling the full-precision graph's evaluation chose (--output names that report):
     how often it predicts the same room, its agreement with the reference rooms next to the full-precision one's, how
     close its embeddings are, and how much each gate probe's score moves."""
     import numpy as np
@@ -391,8 +392,10 @@ def compare(args):
     seconds = time.perf_counter() - started
     lower = unit(np.concatenate(rows))
     entries = [tuple(entry) for entry in json.loads((work / spec['model'] / 'prompts.json').read_text(encoding='utf-8'))]
-    pooling = json.loads(Path(args.output).read_text())['choice']['pooling'] if args.output and Path(args.output).exists() else 'max'
-    texts = np.load(next((work / spec['model']).glob('text-*.npy')))
+    choice = next(item for item in json.loads(Path(args.output).read_text(encoding='utf-8'))['reports']
+                  if item['variant'] == reference)['choice']
+    pooling = choice['pooling']
+    texts = np.load(work / spec['model'] / f'text-{choice["padding"]}.npy')
     room_names, full_rooms = class_scores(full, texts, entries, 'room', pooling)
     _, lower_rooms = class_scores(lower, texts, entries, 'room', pooling)
     full_predicted = [room_names[index] for index in full_rooms.argmax(axis=1)]
@@ -409,7 +412,7 @@ def compare(args):
               'probe_score_shift': {name: float(np.abs(full_probes[:, column] - lower_probes[:, column]).max())
                                     for column, name in enumerate(probe_names)},
               'probe_score_spread': {name: float(full_probes[:, column].std()) for column, name in enumerate(probe_names)}}
-    print(json.dumps(result))
+    print(json.dumps(result, allow_nan=False))
 
 
 def main(argv=None):

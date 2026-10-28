@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-10-28T16:50:22.101933+00:00",
+ "generated_at": "2026-10-28T18:26:04.609923+00:00",
  "ticket": "0055 Phase 4",
  "photos": {
   "owner": 973,
@@ -3190,6 +3190,447 @@
     "photos": 3113,
     "graph_bytes": 2534464715
    }
+  },
+  {
+   "variant": "siglip2-giant-384-int8",
+   "choice": {
+    "padding": "pad",
+    "pooling": "mean",
+    "dev_agreement": 0.952247191011236,
+    "alternatives": [
+     [
+      "pad",
+      "mean",
+      0.952247191011236
+     ],
+     [
+      "pad",
+      "max",
+      0.8595505617977528
+     ]
+    ]
+   },
+   "room": {
+    "owner_extraction": {
+     "photos": 462,
+     "listings": 31,
+     "agreement": 0.8463203463203464,
+     "interval": [
+      0.8214285714285714,
+      0.8732718894009217
+     ]
+    },
+    "houses_test": {
+     "photos": 1784,
+     "listings": 446,
+     "agreement": 0.9641255605381166,
+     "interval": [
+      0.9557174887892377,
+      0.9719730941704036
+     ]
+    },
+    "combined_test": {
+     "photos": 2246,
+     "listings": 477,
+     "agreement": 0.939893143365984,
+     "interval": [
+      0.9278481012658227,
+      0.9527153558052435
+     ]
+    }
+   },
+   "probes": {
+    "carpet": {
+     "auc": 0.7266190324489146,
+     "interval": [
+      0.6771719837982979,
+      0.7753151595139489
+     ],
+     "positive": 301,
+     "negative": 146
+    },
+    "exposed brick": {
+     "auc": 0.9808999081726354,
+     "interval": [
+      0.9526170798898072,
+      0.9972451790633609
+     ],
+     "positive": 11,
+     "negative": 495
+    },
+    "balcony": {
+     "auc": 0.9096188747731397,
+     "interval": [
+      0.8423230490018149,
+      0.9595644283121597
+     ],
+     "positive": 29,
+     "negative": 475
+    },
+    "bathtub": {
+     "auc": 0.8398406374501992,
+     "interval": [
+      0.8050573217334742,
+      0.8711765184161314
+     ],
+     "positive": 251,
+     "negative": 245
+    },
+    "open kitchen": {
+     "auc": 0.8091344062635929,
+     "interval": [
+      0.7597651152675076,
+      0.8560896041757285
+     ],
+     "positive": 121,
+     "negative": 380
+    }
+   },
+   "probe_rule": "raw",
+   "probe_rules": {
+    "raw": {
+     "dev_mean_auc": 0.7088053646342538,
+     "test": {
+      "carpet": {
+       "auc": 0.7266190324489146,
+       "interval": [
+        0.6771719837982979,
+        0.7753151595139489
+       ],
+       "positive": 301,
+       "negative": 146
+      },
+      "exposed brick": {
+       "auc": 0.9808999081726354,
+       "interval": [
+        0.9526170798898072,
+        0.9972451790633609
+       ],
+       "positive": 11,
+       "negative": 495
+      },
+      "balcony": {
+       "auc": 0.9096188747731397,
+       "interval": [
+        0.8423230490018149,
+        0.9595644283121597
+       ],
+       "positive": 29,
+       "negative": 475
+      },
+      "bathtub": {
+       "auc": 0.8398406374501992,
+       "interval": [
+        0.8050573217334742,
+        0.8711765184161314
+       ],
+       "positive": 251,
+       "negative": 245
+      },
+      "open kitchen": {
+       "auc": 0.8091344062635929,
+       "interval": [
+        0.7597651152675076,
+        0.8560896041757285
+       ],
+       "positive": 121,
+       "negative": 380
+      }
+     },
+     "owner": {
+      "carpet": {
+       "auc": 0.8167613636363636,
+       "interval": [
+        0.6747159090909091,
+        0.9332386363636364
+       ],
+       "positive": 16,
+       "negative": 44
+      },
+      "exposed brick": {
+       "auc": 0.9615384615384616,
+       "interval": [
+        0.8942307692307693,
+        1.0
+       ],
+       "positive": 8,
+       "negative": 52
+      },
+      "balcony": {
+       "auc": 0.8993506493506493,
+       "interval": [
+        0.762987012987013,
+        0.9853896103896104
+       ],
+       "positive": 14,
+       "negative": 44
+      },
+      "bathtub": {
+       "auc": 0.9090909090909091,
+       "interval": [
+        0.8248337028824834,
+        0.975609756097561
+       ],
+       "positive": 41,
+       "negative": 11
+      },
+      "open kitchen": {
+       "auc": 0.8597168597168597,
+       "interval": [
+        0.7516087516087516,
+        0.9446589446589446
+       ],
+       "positive": 37,
+       "negative": 21
+      }
+     }
+    },
+    "contrast": {
+     "dev_mean_auc": 0.6642026881120106,
+     "test": {
+      "carpet": {
+       "auc": 0.9087971601510946,
+       "interval": [
+        0.8766213079688708,
+        0.9365585036180767
+       ],
+       "positive": 301,
+       "negative": 146
+      },
+      "exposed brick": {
+       "auc": 0.9821854912764003,
+       "interval": [
+        0.9573921028466483,
+        0.9970615243342517
+       ],
+       "positive": 11,
+       "negative": 495
+      },
+      "balcony": {
+       "auc": 0.8250453720508167,
+       "interval": [
+        0.7218148820326679,
+        0.9112885662431942
+       ],
+       "positive": 29,
+       "negative": 475
+      },
+      "bathtub": {
+       "auc": 0.8060980567525815,
+       "interval": [
+        0.7677697373770225,
+        0.8442800227660785
+       ],
+       "positive": 251,
+       "negative": 245
+      },
+      "open kitchen": {
+       "auc": 0.6315571987820792,
+       "interval": [
+        0.5640930839495433,
+        0.6901478903871249
+       ],
+       "positive": 121,
+       "negative": 380
+      }
+     },
+     "owner": {
+      "carpet": {
+       "auc": 0.8934659090909091,
+       "interval": [
+        0.7911931818181818,
+        0.96875
+       ],
+       "positive": 16,
+       "negative": 44
+      },
+      "exposed brick": {
+       "auc": 0.9471153846153846,
+       "interval": [
+        0.8846153846153846,
+        0.9927884615384616
+       ],
+       "positive": 8,
+       "negative": 52
+      },
+      "balcony": {
+       "auc": 0.8003246753246753,
+       "interval": [
+        0.6428571428571429,
+        0.9301948051948052
+       ],
+       "positive": 14,
+       "negative": 44
+      },
+      "bathtub": {
+       "auc": 0.8292682926829268,
+       "interval": [
+        0.6940133037694013,
+        0.9379157427937915
+       ],
+       "positive": 41,
+       "negative": 11
+      },
+      "open kitchen": {
+       "auc": 0.7181467181467182,
+       "interval": [
+        0.5752895752895753,
+        0.8416988416988417
+       ],
+       "positive": 37,
+       "negative": 21
+      }
+     }
+    },
+    "centered": {
+     "dev_mean_auc": 0.6619086095198747,
+     "test": {
+      "carpet": {
+       "auc": 0.7512174031766259,
+       "interval": [
+        0.7051836344604743,
+        0.7969325990988941
+       ],
+       "positive": 301,
+       "negative": 146
+      },
+      "exposed brick": {
+       "auc": 0.9803489439853076,
+       "interval": [
+        0.9584940312213039,
+        0.9977961432506887
+       ],
+       "positive": 11,
+       "negative": 495
+      },
+      "balcony": {
+       "auc": 0.8872595281306715,
+       "interval": [
+        0.8090744101633394,
+        0.9515789473684211
+       ],
+       "positive": 29,
+       "negative": 475
+      },
+      "bathtub": {
+       "auc": 0.8207659159281242,
+       "interval": [
+        0.7841775754126352,
+        0.8549638181966014
+       ],
+       "positive": 251,
+       "negative": 245
+      },
+      "open kitchen": {
+       "auc": 0.7646150500217486,
+       "interval": [
+        0.7090909090909091,
+        0.8168334058286212
+       ],
+       "positive": 121,
+       "negative": 380
+      }
+     },
+     "owner": {
+      "carpet": {
+       "auc": 0.8011363636363636,
+       "interval": [
+        0.6548295454545454,
+        0.9247159090909091
+       ],
+       "positive": 16,
+       "negative": 44
+      },
+      "exposed brick": {
+       "auc": 0.9230769230769231,
+       "interval": [
+        0.8197115384615384,
+        0.9975961538461539
+       ],
+       "positive": 8,
+       "negative": 52
+      },
+      "balcony": {
+       "auc": 0.8944805194805194,
+       "interval": [
+        0.7418831168831169,
+        0.9951298701298701
+       ],
+       "positive": 14,
+       "negative": 44
+      },
+      "bathtub": {
+       "auc": 0.8980044345898004,
+       "interval": [
+        0.8048780487804879,
+        0.9733924611973392
+       ],
+       "positive": 41,
+       "negative": 11
+      },
+      "open kitchen": {
+       "auc": 0.8571428571428571,
+       "interval": [
+        0.7516087516087516,
+        0.9407979407979408
+       ],
+       "positive": 37,
+       "negative": 21
+      }
+     }
+    }
+   },
+   "record_fields": {
+    "carpet": {
+     "auc": 0.7586206896551724,
+     "interval": [
+      0.5862068965517241,
+      0.896551724137931
+     ],
+     "positive": 1,
+     "negative": 29
+    },
+    "exposed brick": {
+     "auc": 1.0,
+     "interval": [
+      1.0,
+      1.0
+     ],
+     "positive": 3,
+     "negative": 28
+    },
+    "balcony": {
+     "auc": 0.8241758241758241,
+     "interval": [
+      0.6043956043956044,
+      0.989010989010989
+     ],
+     "positive": 13,
+     "negative": 7
+    },
+    "bathtub": {
+     "auc": null,
+     "interval": null,
+     "positive": 0,
+     "negative": 31
+    },
+    "open kitchen": {
+     "auc": null,
+     "interval": null,
+     "positive": 0,
+     "negative": 31
+    }
+   },
+   "gate_measures_met": 3,
+   "gate_measures_mean": 0.8676676670790776,
+   "sweep_timing": {
+    "threads": 30,
+    "batch": 8,
+    "load_seconds": 1.2770357000408694,
+    "seconds": 2695.8479811999714,
+    "photos": 3113,
+    "graph_bytes": 1172793526
+   }
   }
  ],
  "chosen": "siglip2-giant-384-fp32",
@@ -3198,56 +3639,56 @@
    "reference": "siglip2-so400m-512-fp32",
    "variant": "siglip2-so400m-512-int8",
    "photos": 256,
-   "seconds": 811.1,
-   "same_room_as_reference": 0.1015625,
-   "room_agreement_reference": 0.9463414634146341,
-   "room_agreement_variant": 0.07804878048780488,
+   "seconds": 212.5,
+   "same_room_as_reference": 0.08984375,
+   "room_agreement_reference": 0.9317073170731708,
+   "room_agreement_variant": 0.03902439024390244,
    "labeled_photos": 205,
    "cosine_to_reference": {
     "mean": 0.42541632056236267,
     "min": 0.25314146280288696
    },
    "probe_score_shift": {
-    "carpet": 0.10723018646240234,
-    "exposed brick": 0.135536327958107,
-    "balcony": 0.1055108979344368,
-    "bathtub": 0.17534756660461426,
-    "open kitchen": 0.15578021109104156
+    "carpet": 0.10734523832798004,
+    "exposed brick": 0.13947683572769165,
+    "balcony": 0.09742137789726257,
+    "bathtub": 0.17368075251579285,
+    "open kitchen": 0.1584058403968811
    },
    "probe_score_spread": {
-    "carpet": 0.026162678375840187,
-    "exposed brick": 0.031665340065956116,
-    "balcony": 0.024399537593126297,
-    "bathtub": 0.03024423122406006,
-    "open kitchen": 0.03820066899061203
+    "carpet": 0.02559293992817402,
+    "exposed brick": 0.0323343425989151,
+    "balcony": 0.02452096715569496,
+    "bathtub": 0.03137880191206932,
+    "open kitchen": 0.038744013756513596
    }
   },
   {
    "reference": "siglip2-so400m-512-fp32",
    "variant": "siglip2-so400m-512-fp16",
    "photos": 256,
-   "seconds": 1834.3,
+   "seconds": 358.8,
    "same_room_as_reference": 1.0,
-   "room_agreement_reference": 0.9463414634146341,
-   "room_agreement_variant": 0.9463414634146341,
+   "room_agreement_reference": 0.9317073170731708,
+   "room_agreement_variant": 0.9317073170731708,
    "labeled_photos": 205,
    "cosine_to_reference": {
     "mean": 0.9999978542327881,
     "min": 0.9999446868896484
    },
    "probe_score_shift": {
-    "carpet": 0.0003420412540435791,
-    "exposed brick": 0.00036743050441145897,
-    "balcony": 0.0009334464557468891,
-    "bathtub": 0.0006985925137996674,
-    "open kitchen": 0.00015112757682800293
+    "carpet": 0.00043318234384059906,
+    "exposed brick": 0.00039314012974500656,
+    "balcony": 0.0005720201879739761,
+    "bathtub": 0.0005892105400562286,
+    "open kitchen": 0.0002035573124885559
    },
    "probe_score_spread": {
-    "carpet": 0.026162678375840187,
-    "exposed brick": 0.031665340065956116,
-    "balcony": 0.024399537593126297,
-    "bathtub": 0.03024423122406006,
-    "open kitchen": 0.03820066899061203
+    "carpet": 0.02559293992817402,
+    "exposed brick": 0.0323343425989151,
+    "balcony": 0.02452096715569496,
+    "bathtub": 0.03137880191206932,
+    "open kitchen": 0.038744013756513596
    }
   },
   {
@@ -3478,56 +3919,56 @@
    "reference": "siglip2-giant-384-fp32",
    "variant": "siglip2-giant-384-fp16",
    "photos": 256,
-   "seconds": 890.9,
-   "same_room_as_reference": 0.9921875,
-   "room_agreement_reference": 0.9317073170731708,
-   "room_agreement_variant": 0.9317073170731708,
+   "seconds": 354.9,
+   "same_room_as_reference": 1.0,
+   "room_agreement_reference": 0.926829268292683,
+   "room_agreement_variant": 0.926829268292683,
    "labeled_photos": 205,
    "cosine_to_reference": {
     "mean": 0.9999024868011475,
     "min": 0.9988127946853638
    },
    "probe_score_shift": {
-    "carpet": 0.0020741717889904976,
-    "exposed brick": 0.002531797159463167,
-    "balcony": 0.006986752152442932,
-    "bathtub": 0.00536857545375824,
-    "open kitchen": 0.0026661641895771027
+    "carpet": 0.0022009452804923058,
+    "exposed brick": 0.0022766245529055595,
+    "balcony": 0.004302743822336197,
+    "bathtub": 0.004463814198970795,
+    "open kitchen": 0.002698631025850773
    },
    "probe_score_spread": {
-    "carpet": 0.027864566072821617,
-    "exposed brick": 0.03224026784300804,
-    "balcony": 0.022082945331931114,
-    "bathtub": 0.03081331215798855,
-    "open kitchen": 0.03579019382596016
+    "carpet": 0.027653533965349197,
+    "exposed brick": 0.03191738948225975,
+    "balcony": 0.021199529990553856,
+    "bathtub": 0.0322495698928833,
+    "open kitchen": 0.0365263856947422
    }
   },
   {
    "reference": "siglip2-giant-384-fp32",
    "variant": "siglip2-giant-384-int8",
    "photos": 256,
-   "seconds": 262.0,
-   "same_room_as_reference": 0.90625,
-   "room_agreement_reference": 0.9317073170731708,
-   "room_agreement_variant": 0.8878048780487805,
+   "seconds": 193.8,
+   "same_room_as_reference": 0.96875,
+   "room_agreement_reference": 0.926829268292683,
+   "room_agreement_variant": 0.9414634146341463,
    "labeled_photos": 205,
    "cosine_to_reference": {
     "mean": 0.9019328355789185,
     "min": 0.7627089619636536
    },
    "probe_score_shift": {
-    "carpet": 0.04548485204577446,
-    "exposed brick": 0.04017370194196701,
-    "balcony": 0.06352993845939636,
-    "bathtub": 0.05512795224785805,
-    "open kitchen": 0.04364737495779991
+    "carpet": 0.03923377767205238,
+    "exposed brick": 0.04321829974651337,
+    "balcony": 0.04753904044628143,
+    "bathtub": 0.048927925527095795,
+    "open kitchen": 0.039651475846767426
    },
    "probe_score_spread": {
-    "carpet": 0.027864566072821617,
-    "exposed brick": 0.03224026784300804,
-    "balcony": 0.022082945331931114,
-    "bathtub": 0.03081331215798855,
-    "open kitchen": 0.03579019382596016
+    "carpet": 0.027653533965349197,
+    "exposed brick": 0.03191738948225975,
+    "balcony": 0.021199529990553856,
+    "bathtub": 0.0322495698928833,
+    "open kitchen": 0.0365263856947422
    }
   }
  ],

@@ -4,7 +4,7 @@
  "source": {
   "repository": "onnx-community/siglip2-giant-opt-patch16-384-ONNX",
   "revision": "5eb77343667e0bd747a4aea8a59746184c3d50a4",
-  "weights": "google/siglip2-giant-384",
+  "weights": "google/siglip2-giant-opt-patch16-384",
   "license": "Apache-2.0"
  },
  "graph": "onnx/vision_model.onnx",

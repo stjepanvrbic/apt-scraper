@@ -19,6 +19,7 @@ from test_feature_record import extraction  # noqa: E402
 from test_gallery_store import ListingStore, listing  # noqa: E402
 from test_listing_photos import picture, recompressed, zillow  # noqa: E402
 import features  # noqa: E402
+import store as store_module  # noqa: E402
 from contact import NotConnected  # noqa: E402
 from features import PHOTO_PATIENCE, READ_ATTEMPTS, STATION_RETRY, SUBAGENTS_PER_WAKE, Features, PhotosUnavailable, RunState, note_read  # noqa: E402
 from geodata import SourceUnavailable  # noqa: E402
@@ -543,6 +544,23 @@ class AttemptTests(FeaturesTestCase):
         self.assertEqual(self.store.given_up_extractions(), {identifier})
         self.features.retry()
         self.assertTrue(self.run_job()[1])
+
+    def test_a_second_read_the_photo_encoder_asks_for_is_tried_three_times_and_then_never_again(self):
+        identifier = self.add(1)
+        [task] = self.tasks(self.run_job()[0])
+        self.save(task)
+        self.assertFalse(self.run_job()[1])
+        manifest = self.home / 'model.json'
+        manifest.write_text(json.dumps({'identity': 'model-a', 'quality': {'passed': False, 'room_passed': True}}))
+        fingerprint = self.store.listing(identifier)['content_fingerprint']
+        with mock.patch.object(store_module, 'ENCODER_MANIFEST', manifest):
+            self.store.save_photo_features('model-a', {identifier: {'fingerprint': fingerprint, 'probes': {}, 'rooms': [], 'reread': True}}, [])
+            for _ in range(READ_ATTEMPTS):
+                self.assertTrue(self.run_job()[1])
+            for _ in range(READ_ATTEMPTS + 1):
+                self.assertFalse(self.run_job()[1])
+            self.assertEqual(self.features.status()['given_up'], [])
+            self.assertIsNotNone(self.store.feature_record(identifier))
 
     def test_changed_content_starts_counting_again(self):
         self.add(1)

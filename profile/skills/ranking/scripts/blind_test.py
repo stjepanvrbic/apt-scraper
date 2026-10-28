@@ -41,7 +41,7 @@ def candidates(store, count, rng):
         raise BlindTestUnavailable('The blind test compares models fitted on your labels, and there are none yet: '
                                    'favorite, dismiss or compare some listings first.')
     pool = [listing['id'] for listing in listings if listing['rankable'] and in_fit(listing) and not labeled(listing)
-            and listing['id'] in with_photos['photos']['probes']]
+            and with_photos['photos']['probes'].get(listing['id'])]
     if len(pool) < count:
         raise BlindTestUnavailable(f'{len(pool)} ranked listings without a label have photo features; the blind test needs {count}.')
     chosen = rng.sample(sorted(pool), count)
@@ -111,7 +111,7 @@ def blind_test(store, page_path, *, count=MINIMUM_LISTINGS, seed=None, picks=Non
             say(str(error))
     picked = [shown[number - 1] for number in chosen]
     with_encoder = top(with_photos, shown)
-    without_encoder = top(store.ranking_inputs(photos=False), shown)
+    without_encoder = top({key: value for key, value in with_photos.items() if key != 'photos'}, shown)
     precision_with = len(set(with_encoder) & set(picked)) / PICKS
     precision_without = len(set(without_encoder) & set(picked)) / PICKS
     result = {'model': model, 'shown': count, 'labels': labels, 'picks': picked,

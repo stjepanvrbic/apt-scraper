@@ -22,6 +22,8 @@ from photo_catalog import GATE_PROBES, entries  # noqa: E402
 from encoder_sweep import variants  # noqa: E402
 
 ROOM_BAR, PROBE_BAR, ROOM_PHOTOS = 0.85, 0.85, 1000
+WEIGHTS = {'siglip2-base-224': 'google/siglip2-base-patch16-224', 'siglip2-large-384': 'google/siglip2-large-patch16-384',
+           'siglip2-so400m-512': 'google/siglip2-so400m-patch16-512', 'siglip2-giant-384': 'google/siglip2-giant-opt-patch16-384'}
 
 
 def sha256(path):
@@ -85,7 +87,7 @@ def main(argv):
                                           'probes': probes['sha256']}, sort_keys=True).encode()).hexdigest()
     manifest = {
         'name': variant, 'identity': identity,
-        'source': {'repository': lock['repository'], 'revision': lock['revision'], 'weights': f'google/{spec["model"]}',
+        'source': {'repository': lock['repository'], 'revision': lock['revision'], 'weights': WEIGHTS[spec['model']],
                    'license': 'Apache-2.0'},
         'graph': graph, 'output': 'pooler_output', 'dimensions': int(vectors.shape[1]), 'preprocessing': preprocessing,
         'pooling': report['choice']['pooling'], 'probe_rule': gate['probe_rule'], 'files': files, 'probes': probes,

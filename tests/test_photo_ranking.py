@@ -248,6 +248,27 @@ class BlindTests(EncoderTestCase):
         self.assertFalse(result['passed'])
         self.assertFalse(self.store.encoder_state()['enabled'])
 
+    def test_both_models_rank_the_snapshot_taken_before_the_picks_and_listings_without_photos_are_never_shown(self):
+        with self.store.connect(write=True) as connection:
+            connection.executemany("UPDATE photo_features SET probes = '{}' WHERE listing_id = ?", [(identifier,) for identifier in self.identifiers[4:15]])
+        with self.assertRaisesRegex(BlindTestUnavailable, '25 ranked listings'):
+            blind_test(self.store, self.page, picks='1 2 3 4 5 6 7 8 9 10')
+        with self.store.connect(write=True) as connection:
+            connection.execute("UPDATE photo_features SET probes = '{\"carpet\": 0.1}' WHERE probes = '{}'")
+        expected = {}
+        store = self.store
+
+        def ask(prompt):
+            with store.connect() as connection:
+                shown = json.loads(connection.execute('SELECT listings FROM encoder_blind_tests').fetchone()['listings'])['listings']
+            expected['without'] = top(store.ranking_inputs(photos=False), shown)
+            for identifier in shown[:3]:
+                store.feedback(identifier, favorite=True)
+            return '1 2 3 4 5 6 7 8 9 10'
+
+        result = blind_test(self.store, self.page, seed=7, ask=ask, say=lambda line: None)
+        self.assertEqual(result['top_without_encoder'], expected['without'])
+
     def test_the_blind_test_needs_labels_and_thirty_unlabeled_listings_with_photo_features(self):
         with self.assertRaisesRegex(BlindTestUnavailable, 'needs 40'):
             blind_test(self.store, self.page, count=40, picks='1 2 3 4 5 6 7 8 9 10')

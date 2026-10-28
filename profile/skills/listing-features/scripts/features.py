@@ -220,6 +220,8 @@ class Features:
             'extract': [listing for listing in extract if attempts.get(extraction_read(listing['id'], listing['content_fingerprint']), 0) < READ_ATTEMPTS],
             'extract_given_up': [listing for listing in extract if attempts.get(extraction_read(listing['id'], listing['content_fingerprint']), 0) >= READ_ATTEMPTS
                                  and listing['id'] not in records],
+            'reread_given_up': [listing for listing in extract if attempts.get(extraction_read(listing['id'], listing['content_fingerprint']), 0) >= READ_ATTEMPTS
+                                and listing['id'] in records],
             'judge': [(listing, [phrase for phrase in missing if attempts.get(judgment_read(listing, phrase), 0) < READ_ATTEMPTS])
                       for listing, missing in judge if any(attempts.get(judgment_read(listing, phrase), 0) < READ_ATTEMPTS for phrase in missing)],
             'judge_given_up': [(listing, [phrase for phrase in missing if attempts.get(judgment_read(listing, phrase), 0) >= READ_ATTEMPTS])
@@ -432,7 +434,8 @@ class Features:
     @staticmethod
     def reads(work):
         """Every model read that waits, given up or not."""
-        reads = {extraction_read(listing['id'], listing['content_fingerprint']) for listing in work['extract'] + work['extract_given_up']}
+        reads = {extraction_read(listing['id'], listing['content_fingerprint'])
+                 for listing in work['extract'] + work['extract_given_up'] + work['reread_given_up']}
         reads |= {note_read(note) for note in work['notes'] + work['notes_given_up']}
         reads |= {preference_read(*item) for item in work['unread'] + work['unread_given_up']}
         return reads | {judgment_read(listing, phrase) for listing, phrases in work['judge'] + work['judge_given_up'] for phrase in phrases}

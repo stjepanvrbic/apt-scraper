@@ -8,6 +8,13 @@ import urllib.request
 from pathlib import Path
 
 CHUNK = 1 << 20
+SOCKET_TIMEOUT = 60
+
+
+def urlopen(url):
+    """The download's response. The timeout bounds each wait on the socket, so a stalled server ends the install's
+    encoder step instead of hanging it; it does not bound the whole download."""
+    return urllib.request.urlopen(url, timeout=SOCKET_TIMEOUT)
 
 
 def verify(path, item):
@@ -23,7 +30,7 @@ def verify(path, item):
         raise ValueError(f'{item["filename"]} does not match its pinned SHA-256.')
 
 
-def fetch(item, directory, *, opener=urllib.request.urlopen):
+def fetch(item, directory, *, opener=urlopen):
     """Downloads one pinned file into directory unless a verified copy is there, through a temporary file that replaces
     the target only once its length and hash match. Returns the bytes downloaded."""
     directory = Path(directory).resolve()
@@ -54,7 +61,7 @@ def fetch(item, directory, *, opener=urllib.request.urlopen):
     return count
 
 
-def prepare(manifest, directory, *, opener=urllib.request.urlopen):
+def prepare(manifest, directory, *, opener=urlopen):
     """Every file of the manifest downloaded and verified, then verified.json written with the model's identity, which
     the encoder requires before it loads anything. Returns the bytes downloaded."""
     directory = Path(directory)
