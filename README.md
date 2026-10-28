@@ -2,11 +2,11 @@
 
 # apt-scraper
 
-An apartment-hunting agent built on [Hermes Agent](https://hermes-agent.nousresearch.com). It runs on your Claude Pro or Max subscription and can operate desktop apps through computer use.
+An apartment-hunting agent built on [Hermes Agent](https://hermes-agent.nousresearch.com). It runs on your Claude Pro or Max subscription by default, or on any provider Hermes supports, and can operate desktop apps through computer use.
 
 ## Install
 
-You need Windows 10 1809 or later, or macOS 13 or later on Apple Silicon, and a Claude Pro or Max subscription. Paste one line into a terminal.
+You need Windows 10 1809 or later, or macOS 13 or later on Apple Silicon, and a Claude Pro or Max subscription or an account with another provider Hermes supports. Paste one line into a terminal.
 
 Windows, in PowerShell:
 
@@ -22,15 +22,17 @@ curl -fsSL https://raw.githubusercontent.com/stjepanvrbic/apt-scraper/main/boots
 
 The line installs Git if it is missing, with winget on Windows. It then downloads apt-scraper to `%LOCALAPPDATA%\apt-scraper\repo` on Windows or `~/Library/Application Support/apt-scraper/repo` on macOS and runs the installer from there. On a Mac without the Xcode command line tools, which include Git, the line opens their installer: press Install in the dialog, and the line continues once they are installed. The line works only while this repository is public on GitHub.
 
+The installer first asks whether to use your Claude Pro or Max subscription. Press Enter for yes, the recommended choice. Answer `n` to run the agent on any provider Hermes supports: the installer then skips Claude Code and the subscription plugin and opens Hermes's own provider and model menu, where you pick a provider, log in or paste its API key, and pick a model. Only Claude models have been measured for reading and ranking listings; other providers work but are not measured yet. The question comes on every run, so answer `n` again when you update to stay on your provider. An install without a terminal to ask on uses the Claude subscription.
+
 The installer:
 
-1. installs or updates Claude Code, and opens the Claude login if you are logged out,
+1. installs or updates Claude Code, and opens the Claude login if you are logged out, when you use the Claude subscription,
 2. installs Hermes Agent with its computer-use driver, or updates an older Hermes,
 3. installs `profile/` as the Hermes profile `apt-scraper`, with Hermes's Google Workspace skill,
-4. installs the Claude subscription provider plugin into that profile,
+4. installs the Claude subscription provider plugin into that profile, or opens Hermes's provider and model menu if you answered `n`,
 5. prepares the computer-use driver, and on macOS asks for Accessibility and Screen Recording access,
 6. installs the Hermes gateway as a service that starts when you log in. It runs the search and your conversations with the agent. Windows may ask for administrator approval,
-7. sends one test message through your subscription,
+7. sends one test message through your subscription or the provider you picked,
 8. makes the Hermes web dashboard start when you log in, and adds an apt-scraper shortcut: in the Start menu on Windows, in Applications on macOS,
 9. starts the dashboard and opens its chat in your browser. The first start builds the dashboard and takes a few minutes.
 

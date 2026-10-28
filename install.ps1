@@ -1,12 +1,17 @@
 #Requires -Version 5.1
-# Installs Claude Code, Hermes Agent with its computer-use driver, the Claude
-# subscription provider plugin and this repository's Hermes profile on Windows,
-# then opens the profile's chat in the Hermes web dashboard.
+# Installs Hermes Agent with its computer-use driver and this repository's
+# Hermes profile on Windows, with Claude Code and the Claude subscription
+# provider plugin for an agent on the user's Claude subscription, then opens
+# the profile's chat in the Hermes web dashboard.
 # Safe to re-run: every step updates what is already there.
 $ErrorActionPreference = 'Stop'
 
 $ProfileName = 'apt-scraper'
 $PluginName = 'claude-subscription-directsdk'
+# The model settings of the distribution's config.yaml, which run the agent on the Claude subscription.
+$ClaudeProvider = 'claude-subscription-directsdk-experimental'
+$ClaudeModel = 'opus'
+$ClaudeSubagentModel = 'sonnet'
 $MinimumClaudeVersion = [version]'2.1.284'
 $MinimumHermesVersion = [version]'0.22.5'
 $ProfileSource = Join-Path $PSScriptRoot 'profile'
@@ -66,15 +71,27 @@ function Invoke-RemoteInstaller([string]$Url, [string[]]$Arguments) {
     ) -join ';'
 }
 
-Write-Step 'Claude Code'
-if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
-    Invoke-RemoteInstaller 'https://claude.ai/install.ps1' @()
-    $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
+# The agent runs on the user's Claude subscription through Claude Code and the subscription provider plugin.
+# A user who answers no gets neither, and picks a provider and model in Hermes's own menu once the profile is
+# installed. A console that cannot be asked, under -NonInteractive, takes the Claude subscription.
+try {
+    $answer = Read-Host 'Use your Claude Pro or Max subscription? [Y/n]'
+} catch [Management.Automation.PSInvalidOperationException] {
+    $answer = ''
 }
-if ((Get-Version (Get-NativeOutput claude @('--version'))) -lt $MinimumClaudeVersion) { Invoke-OnConsole claude @('update') }
-if ((Get-NativeOutput claude @('auth', 'status') -AllowFailure) -notmatch '"loggedIn":\s*true') {
-    Write-Step 'Log in to Claude with your Pro or Max subscription'
-    Invoke-OnConsole claude @('auth', 'login')
+$useClaude = $answer -notmatch '^\s*n'
+
+if ($useClaude) {
+    Write-Step 'Claude Code'
+    if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+        Invoke-RemoteInstaller 'https://claude.ai/install.ps1' @()
+        $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
+    }
+    if ((Get-Version (Get-NativeOutput claude @('--version'))) -lt $MinimumClaudeVersion) { Invoke-OnConsole claude @('update') }
+    if ((Get-NativeOutput claude @('auth', 'status') -AllowFailure) -notmatch '"loggedIn":\s*true') {
+        Write-Step 'Log in to Claude with your Pro or Max subscription'
+        Invoke-OnConsole claude @('auth', 'login')
+    }
 }
 
 Write-Step 'Hermes Agent and computer-use driver'
@@ -114,6 +131,29 @@ try {
 Write-Step 'Google Workspace skill'
 Invoke-OnConsole $hermes @('-p', $ProfileName, 'skills', 'install', 'google-workspace', '--yes')
 
+# Hermes's menu writes the provider and model into the profile's config.yaml and the login into the profile's
+# .env or auth.json, all of which the host gateway reads for each new session of the profile. It exits 0
+# whatever happens, so a profile still on the Claude provider afterwards got no provider. A profile an earlier
+# install switched to another provider goes back to the Claude subscription when the user answers yes.
+function Get-ProfileSetting([string]$Key) { (Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', $Key)).Trim() }
+if ($useClaude) {
+    Write-Step 'Claude subscription provider plugin'
+    Invoke-OnConsole $hermes @('-p', $ProfileName, 'plugins', 'install', $PluginName, '--force', '--enable')
+    if ((Get-ProfileSetting 'model.provider') -ne $ClaudeProvider) {
+        Invoke-OnConsole $hermes @('-p', $ProfileName, 'config', 'set', 'model.provider', $ClaudeProvider)
+        Invoke-OnConsole $hermes @('-p', $ProfileName, 'config', 'set', 'model.default', $ClaudeModel)
+        foreach ($key in 'model.base_url', 'model.api_mode', 'delegation.model') {
+            if (Get-ProfileSetting $key) { Invoke-OnConsole $hermes @('-p', $ProfileName, 'config', 'unset', $key) }
+        }
+    }
+} else {
+    Write-Step 'Provider and model in Hermes'
+    Invoke-OnConsole $hermes @('-p', $ProfileName, 'model')
+    if ((Get-ProfileSetting 'model.provider') -eq $ClaudeProvider) {
+        throw "No provider was picked in Hermes's menu. Run the install again and pick one, or answer yes to use the Claude subscription."
+    }
+}
+
 # The account setup and the contact forms use Hermes's built-in browser tools, which Hermes replaces
 # with browser_exec while browser.backend is unset. A kept config.yaml gains the setting only when it
 # names no backend of its own.
@@ -150,20 +190,22 @@ Write-Step 'Listing correspondence and listing search jobs'
 Invoke-OnConsole $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-contact')
 Invoke-OnConsole $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-search')
 
-# Each listing is read once by a subagent of its own, pinned to Sonnet through delegation.model. A kept
-# config.yaml gains the pin only when it names no subagent model of its own.
+# Each listing is read once by a subagent of its own. On the Claude subscription it is pinned to Sonnet
+# through delegation.model, which a kept config.yaml gains only when it names no subagent model of its own.
+# With another provider an empty delegation.model gives the subagent the model picked in Hermes's menu, and
+# Sonnet is a Claude model, so the distribution's pin goes.
 Write-Step 'Listing features job'
-if (-not (Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', 'delegation.model')).Trim()) {
-    Invoke-OnConsole $hermes @('-p', $ProfileName, 'config', 'set', 'delegation.model', 'sonnet')
+$subagentModel = Get-ProfileSetting 'delegation.model'
+if ($useClaude -and -not $subagentModel) {
+    Invoke-OnConsole $hermes @('-p', $ProfileName, 'config', 'set', 'delegation.model', $ClaudeSubagentModel)
+} elseif (-not $useClaude -and $subagentModel -eq $ClaudeSubagentModel) {
+    Invoke-OnConsole $hermes @('-p', $ProfileName, 'config', 'unset', 'delegation.model')
 }
 Invoke-OnConsole $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-features')
 
 # The ranking review job checks every minute whether a rerank's review pass waits, and wakes the model only then.
 Write-Step 'Ranking review job'
 Invoke-OnConsole $hermes @('-p', $ProfileName, 'cron', 'resume', 'apt-scraper-review')
-
-Write-Step 'Claude subscription provider plugin'
-Invoke-OnConsole $hermes @('-p', $ProfileName, 'plugins', 'install', $PluginName, '--force', '--enable')
 
 Write-Step 'Computer-use driver'
 Invoke-OnConsole $hermes @('-p', $ProfileName, 'computer-use', 'install', '--upgrade')
@@ -245,7 +287,7 @@ if ($refusal) {
     if ($refusal) { throw "$refusal`nThe gateway still runs as administrator after it was stopped and started again." }
 }
 
-Write-Step 'Test message through the Claude subscription'
+Write-Step 'Test message through the model provider'
 $reply = Get-NativeOutput $hermes @('-p', $ProfileName, 'chat', '-q', 'Reply with exactly: ready', '--oneshot', '-Q')
 if ($reply -notmatch '\bready\b') { throw "Test message failed. Reply: $reply" }
 

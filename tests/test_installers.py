@@ -73,6 +73,79 @@ FAKE_GIT = textwrap.dedent("""\
     if arguments[0] == 'clone':
         shutil.copytree(template, arguments[2])
     """)
+# Runs the command in argv[4:] as a command typed or pasted into a terminal runs: in a session of its own whose
+# controlling terminal is a new pseudo-terminal, with standard output and error on that terminal, and standard
+# input too when argv[3] is "terminal", or left as given, a pipe, when it is "pipe". It writes the terminal's
+# device, such as /dev/pty0, to the file in argv[1], types the contents of the file in argv[2] on the terminal's
+# keyboard, copies what the command prints to standard output and exits with the command's exit code. Git
+# Bash's MSYS perl opens the pseudo-terminal, as Windows Python cannot; in it, as on macOS, /dev/tty is an alias
+# of the terminal and the terminal also has a device of its own.
+TERMINAL = textwrap.dedent("""\
+    use strict; use warnings; use POSIX ();
+    my ($device_file, $typed_file, $input) = splice(@ARGV, 0, 3);
+    open(my $keys, '<', $typed_file) or die "$typed_file: $!";
+    my $typed = do { local $/; <$keys> };
+    close $keys;
+    my %existing = map { $_ => 1 } glob('/dev/pty*');
+    open(my $master, '+<', '/dev/ptmx') or die "ptmx: $!";
+    my @opened = grep { !$existing{$_} } glob('/dev/pty*');
+    die "Expected one new pseudo-terminal, found: @opened" unless @opened == 1;
+    open(my $file, '>', $device_file) or die "$device_file: $!";
+    print $file $opened[0];
+    close $file;
+    my $pid = fork() // die "fork: $!";
+    if ($pid == 0) {
+        close $master;
+        POSIX::setsid() or die "setsid: $!";
+        open(STDOUT, '+<', $opened[0]) or die "$opened[0]: $!";
+        open(STDERR, '>&', \\*STDOUT) or die "dup: $!";
+        if ($input eq 'terminal') { open(STDIN, '<&', \\*STDOUT) or die "dup: $!"; }
+        exec(@ARGV) or die "exec: $!";
+    }
+    syswrite($master, $typed);
+    binmode STDOUT;
+    $| = 1;
+    my $output;
+    while (sysread($master, $output, 4096)) { print $output; }
+    waitpid($pid, 0);
+    exit($? >> 8);
+    """)
+# Stands in for macOS's `ps -o tty= -p <pid>`, which names the controlling terminal under /dev, or prints ??
+# without one. MSYS's ps has no -o, and its tty names the device behind /dev/tty, which macOS's does not.
+FAKE_PS = textwrap.dedent("""\
+    if device=$(tty </dev/tty 2>/dev/null); then printf '%s\\n' "${device#/dev/}"; else echo '??'; fi
+    """)
+# What Claude Code 2.1.312 prints on macOS when its process.stdin is /dev/tty (Bun 1.4.4, src/io/posix_event_loop.rs
+# and src/js/builtins/ProcessObjectInternals.ts): registering standard input with kqueue fails with EINVAL, the read
+# destroys process.stdin, and the unhandled error ends the process.
+KQUEUE_ERROR = textwrap.dedent("""\
+    error: EINVAL: invalid argument, kqueue
+          at emitError (node:events:50:13)
+          at emitErrorNT (internal:streams/destroy:88:12)
+          at emitErrorCloseNT (internal:streams/destroy:69:14)
+
+    Bun v1.4.4 (macOS arm64)
+    """)
+# Stands in for Claude Code 2.1.243 on macOS, logged out. It logs each call with the file its standard input was
+# opened from to the file in FAKE_CLAUDE_CALLS. `update` and `auth login` read standard input through kqueue, so
+# they fail as Claude Code does when it is /dev/tty, and `auth login` needs a terminal to read the keys from.
+FAKE_CLAUDE = textwrap.dedent(f"""\
+    input=$(readlink /proc/$$/fd/0)
+    printf '%s|%s\\n' "$*" "$input" >> "$FAKE_CLAUDE_CALLS"
+    case "$*" in
+        --version) echo '2.1.243 (Claude Code)' ;;
+        'auth status') echo '{{"loggedIn": false, "authMethod": "none"}}' ;;
+        update|'auth login')
+            if [ "$input" = /dev/tty ]; then
+                printf '%s' {shlex.quote(KQUEUE_ERROR)} >&2
+                exit 1
+            fi
+            if [ "$*" = 'auth login' ] && [ ! -t 0 ]; then
+                echo 'error: Raw mode is not supported on the current process.stdin' >&2
+                exit 1
+            fi ;;
+    esac
+    """)
 
 
 # Stands in for hermes's profile commands on the Hermes root in HERMES_HOME, as Hermes 0.22.5 runs them
@@ -206,6 +279,8 @@ DECLINED = ("function Deny-Elevation { throw [InvalidOperationException]::new("
             "'This command cannot be run due to the error: The operation was canceled by the user.') }\n")
 GATEWAY_STEP_POWERSHELL = "Write-Step 'Hermes gateway service'"
 TEST_MESSAGE_POWERSHELL = "Write-Step 'Test message"
+# Where both installers ask whether the agent runs on the Claude subscription.
+ACCOUNT_QUESTION = "# The agent runs on the user's Claude subscription"
 
 
 def steps(installer: str) -> list[str]:
@@ -286,6 +361,20 @@ def answer_when_asked(command: list[str], environment: dict[str, str], answer: s
         raise
     reader.join(10)
     return asked, output.decode(errors='replace'), process.returncode
+
+
+def run_in_a_terminal(folder: Path, command: list[str], environment: dict[str, str], typed: str = '',
+                      piped: str | None = None) -> tuple[subprocess.CompletedProcess, str]:
+    """Runs command, a list of MSYS paths and arguments, in a new terminal with `typed` typed on its keyboard,
+    through TERMINAL. Its standard input is the terminal, or a pipe that carries `piped`. Returns the result, with
+    what the command printed to the terminal as stdout, and the terminal's device."""
+    (folder / 'terminal.pl').write_text(TERMINAL, newline='\n')
+    device, keys = folder / 'terminal-device', folder / 'typed'
+    keys.write_text(typed, newline='')
+    result = subprocess.run([BASH, '-c', 'exec /usr/bin/perl "$@"', 'perl', (folder / 'terminal.pl').as_posix(),
+                             device.as_posix(), keys.as_posix(), 'terminal' if piped is None else 'pipe', *command],
+                            input=piped, env=environment, capture_output=True, text=True, timeout=120)
+    return result, device.read_text()
 
 
 def port_answers(port: int) -> bool:
@@ -802,10 +891,10 @@ class QuestionTests(unittest.TestCase):
             "Get-NativeOutput claude @('--version')",
             "Get-NativeOutput claude @('auth', 'status') -AllowFailure",
             "Get-NativeOutput $hermes @('--version')",
+            "Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', $Key)",
             "Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', 'browser.backend')",
             "Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', $key)",
             "Get-NativeOutput $hermes @('pm', 'env')",
-            "Get-NativeOutput $hermes @('-p', $ProfileName, 'config', 'get', 'delegation.model')",
             "Get-NativeOutput $hermes @('-p', 'default', 'gateway', 'status') -AllowFailure",
             "Get-NativeOutput $hermes @('-p', 'default', 'gateway', 'status') -AllowFailure",
             "Get-NativeOutput $hermes @('-p', 'default', 'gateway', 'ensure', '--timeout', '60') -AllowFailure",
@@ -815,6 +904,7 @@ class QuestionTests(unittest.TestCase):
         for asks in ("Invoke-OnConsole claude @('auth', 'login')",
                      "Invoke-OnConsole $hermes @('update')",
                      "Invoke-OnConsole $hermes @('profile', 'install', $ProfileSource, '--force', '--yes')",
+                     "Invoke-OnConsole $hermes @('-p', $ProfileName, 'model')",
                      "Invoke-OnConsole $hermes @('-p', 'default', 'gateway', 'start')",
                      "Invoke-OnConsole $hermes @('-p', $ProfileName, 'computer-use', 'install', '--upgrade')"):
             self.assertIn(asks, named('Invoke-OnConsole'))
@@ -1097,6 +1187,7 @@ class BootstrapTests(unittest.TestCase):
                                # The dialog installs the tools after a while, in the background, as Apple's does.
                                f'(sleep {install_after_seconds}; touch "{self.tools_installed.as_posix()}") &\n'
                                if install_after_seconds is not None else ''),
+            'ps': FAKE_PS,
         }
         for name, body in fakes.items():
             (self.tools / name).write_text(f'#!/bin/sh\n{body}', newline='\n')
@@ -1113,6 +1204,23 @@ class BootstrapTests(unittest.TestCase):
                        'COMMAND_LINE_TOOLS_WAIT_SECONDS': str(wait_seconds)}
         return subprocess.run([BASH, '-s', '--', *arguments], input=(ROOT / 'bootstrap.sh').read_text(encoding='utf-8'),
                               env=environment, capture_output=True, text=True, timeout=60)
+
+    def test_the_shell_bootstrap_runs_the_claude_code_step_on_the_terminal_device_and_not_through_dev_tty(self):
+        self.shell_tools()
+        claude_calls = self.folder / 'claude-calls'
+        (self.tools / 'claude').write_text(f'#!/bin/sh\n{FAKE_CLAUDE}', newline='\n')
+        (self.tools / 'claude').chmod(0o755)
+        installer = (ROOT / 'install.sh').read_text(encoding='utf-8')
+        (self.template / 'install.sh').write_text(installer[:installer.index("step 'Hermes Agent")], newline='\n')
+        # bootstrap.sh piped into bash in a terminal, as the one line runs it. Enter answers the installer's first
+        # question, whether to use the Claude subscription, with its default.
+        result, terminal = run_in_a_terminal(self.folder, ['/usr/bin/bash', '-s'],
+                                             {**self.shell_environment, 'FAKE_CLAUDE_CALLS': claude_calls.as_posix()},
+                                             typed='\n', piped=(ROOT / 'bootstrap.sh').read_text(encoding='utf-8'))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn('kqueue', result.stdout)
+        self.assertEqual(claude_calls.read_text().splitlines(),
+                         [f'{call}|{terminal}' for call in ('--version', 'update', 'auth status', 'auth login')])
 
     def test_the_shell_bootstrap_clones_and_runs_the_installer_then_updates_and_runs_it_again(self):
         self.shell_tools()
@@ -1261,6 +1369,205 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(exit_code, 0, output)
         self.assertEqual(answers.read_text().splitlines(), ['"y"'])
 
+
+# Stands in for hermes in the account tests. It logs every call to the file in argv[1] and keeps the profile's
+# settings in the JSON file in argv[2]: `config get`, `config set` and `config unset` work on them as Hermes
+# 0.22.5's do (hermes_cli/config.py; unset refuses a key that is not set), and `model`, Hermes's provider and
+# model menu, writes the settings in FAKE_PICKED as picking a provider does, or nothing, as cancelling does,
+# and exits 0 either way (hermes_cli/main.py cmd_model). `chat` replies "ready".
+FAKE_ACCOUNT_HERMES = textwrap.dedent("""\
+    import json, os, sys
+    log, settings, *arguments = sys.argv[1:]
+    with open(log, 'a') as calls:
+        calls.write(json.dumps(arguments) + '\\n')
+    with open(settings) as file:
+        config = json.load(file)
+    command = arguments[2:] if arguments[:2] == ['-p', 'apt-scraper'] else arguments
+    if command[:2] == ['config', 'get']:
+        print(config.get(command[2], ''))
+    elif command[:2] == ['config', 'set']:
+        config[command[2]] = command[3]
+    elif command[:2] == ['config', 'unset']:
+        if command[2] not in config:
+            sys.exit(f'Config key not set: {command[2]}')
+        del config[command[2]]
+    elif command == ['model']:
+        config.update(json.loads(os.environ.get('FAKE_PICKED', '{}')))
+    elif command[:1] == ['chat']:
+        print('ready')
+    with open(settings, 'w') as file:
+        json.dump(config, file)
+    """)
+# Stands in for Claude Code 2.1.300, logged out. It logs every call to the file in argv[1].
+FAKE_ACCOUNT_CLAUDE = textwrap.dedent("""\
+    import json, sys
+    log, *arguments = sys.argv[1:]
+    with open(log, 'a') as calls:
+        calls.write(json.dumps(arguments) + '\\n')
+    if arguments == ['--version']:
+        print('2.1.300 (Claude Code)')
+    elif arguments == ['auth', 'status']:
+        print('{"loggedIn": false, "authMethod": "none"}')
+    """)
+QUESTION_ASKED = 'Use your Claude Pro or Max subscription? [Y/n]'
+# The model settings of the distribution's config.yaml, and those of a provider picked in Hermes's menu.
+CLAUDE_SETTINGS = {'model.provider': 'claude-subscription-directsdk-experimental', 'model.default': 'opus',
+                   'delegation.model': 'sonnet'}
+PICKED = {'model.provider': 'openai-codex', 'model.default': 'the-picked-model',
+          'model.base_url': 'https://chatgpt.com/backend-api/codex', 'model.api_mode': 'codex_responses'}
+TEST_MESSAGE = ['-p', 'apt-scraper', 'chat', '-q', 'Reply with exactly: ready', '--oneshot', '-Q']
+SKILL = ['-p', 'apt-scraper', 'skills', 'install', 'google-workspace', '--yes']
+PLUGIN = ['-p', 'apt-scraper', 'plugins', 'install', 'claude-subscription-directsdk', '--force', '--enable']
+PICKER = ['-p', 'apt-scraper', 'model']
+FEATURES_JOB = ['-p', 'apt-scraper', 'cron', 'resume', 'apt-scraper-features']
+
+
+class AccountTests(unittest.TestCase):
+    """The installers' question whether the agent runs on the Claude subscription, and the steps that depend on the
+    answer: the Claude Code step, the provider step, the listing features job's subagent model and the test message,
+    run against a fake claude and a fake hermes that keeps the profile's settings."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.folder = Path(directory.name)
+        self.hermes_calls, self.claude_calls = self.folder / 'hermes-calls', self.folder / 'claude-calls'
+        self.settings = self.folder / 'settings.json'
+        (self.folder / 'hermes.py').write_text(FAKE_ACCOUNT_HERMES)
+        (self.folder / 'claude.py').write_text(FAKE_ACCOUNT_CLAUDE)
+        self.hermes = [sys.executable, self.folder / 'hermes.py', self.hermes_calls, self.settings]
+        self.claude = [sys.executable, self.folder / 'claude.py', self.claude_calls]
+
+    def calls_made(self) -> tuple[list[list[str]], list[list[str]]]:
+        """The calls that changed something or reached a model: those to claude, and those to hermes other than
+        `config get`."""
+        def read(log: Path) -> list[list[str]]:
+            return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+        hermes = [call for call in read(self.hermes_calls) if call[2:4] != ['config', 'get']]
+        return read(self.claude_calls), hermes
+
+    def run_installer(self, platform: str, typed: str | None, settings: dict[str, str],
+                      picked: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess, str]:
+        """Runs the installer's question, its Claude Code step, its provider step, its listing features step and its
+        test message over a profile with `settings`. `typed` is what the user types; None runs it without a terminal
+        to ask on. Hermes's menu picks `picked`, or is cancelled. Returns the result and everything it printed."""
+        self.settings.write_text(json.dumps(settings))
+        tools = self.folder / platform
+        tools.mkdir()
+        environment = {**os.environ, 'HOME': self.folder.as_posix(), 'PATH': f'{tools}{os.pathsep}{os.environ["PATH"]}',
+                       'FAKE_PICKED': json.dumps(picked or {})}
+        if platform == 'windows':
+            for name, command in (('hermes', self.hermes), ('claude', self.claude)):
+                (tools / f'{name}.cmd').write_text('@' + ' '.join(f'"{part}"' for part in command) + ' %*\r\n')
+            script = self.folder / 'install.ps1'
+            script.write_text(section('install.ps1', "$ErrorActionPreference = 'Stop'", "Write-Step 'Hermes Agent")
+                              + f"$hermes = '{tools / 'hermes.cmd'}'\n"
+                              + section('install.ps1', '# The account connections use', '# The account setup and')
+                              + section('install.ps1', '# Each listing is read once', '# The ranking review job')
+                              + section('install.ps1', TEST_MESSAGE_POWERSHELL, '# The first start builds'),
+                              encoding='utf-8-sig')
+            command = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)]
+            if typed is None:
+                result = subprocess.run(command[:2] + ['-NonInteractive'] + command[2:], env=environment,
+                                        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+            else:
+                result = subprocess.run(command, env=environment, input=typed, capture_output=True, text=True,
+                                        timeout=120)
+        else:
+            for name, command in (('hermes', self.hermes), ('claude', self.claude)):
+                (tools / name).write_text('#!/bin/sh\nexec ' + ' '.join(f'"{Path(part).as_posix()}"' for part in command)
+                                          + ' "$@"\n', newline='\n')
+                (tools / name).chmod(0o755)
+            script = self.folder / 'install.sh'
+            script.write_text(section('install.sh', '#!/usr/bin/env bash', "step 'Hermes Agent")
+                              + section('install.sh', '# The account connections use', '# The account setup and')
+                              + section('install.sh', '# Each listing is read once', '# The ranking review job')
+                              + section('install.sh', "step 'Test message", '# The first start builds'), newline='\n')
+            if typed is None:
+                result = subprocess.run([BASH, script.as_posix()], env=environment, stdin=subprocess.DEVNULL,
+                                        capture_output=True, text=True, timeout=120)
+            else:
+                result, _ = run_in_a_terminal(self.folder, ['/usr/bin/bash', script.as_posix()], environment, typed)
+        return result, result.stdout + result.stderr
+
+    def settings_left(self) -> dict[str, str]:
+        return json.loads(self.settings.read_text())
+
+    def test_the_installers_run_the_agent_on_the_claude_subscription_when_the_user_presses_enter(self):
+        for platform in ('windows', 'macos'):
+            with self.subTest(platform):
+                result, output = self.run_installer(platform, '\n', CLAUDE_SETTINGS)
+                self.assertEqual(result.returncode, 0, output)
+                if platform == 'macos':
+                    self.assertIn(QUESTION_ASKED, output)
+                self.assertEqual(self.calls_made(), ([['--version'], ['auth', 'status'], ['auth', 'login']],
+                                                     [SKILL, PLUGIN, FEATURES_JOB, TEST_MESSAGE]))
+                self.assertEqual(self.settings_left(), CLAUDE_SETTINGS)
+                self.forget_run()
+
+    def test_the_installers_hand_the_provider_to_hermess_menu_and_install_nothing_of_claude_when_the_user_answers_no(self):
+        for platform in ('windows', 'macos'):
+            with self.subTest(platform):
+                result, output = self.run_installer(platform, 'n\n', CLAUDE_SETTINGS, PICKED)
+                self.assertEqual(result.returncode, 0, output)
+                self.assertNotIn('Claude Code', output)
+                # The distribution's Sonnet pin goes, so the listing features subagent runs the picked model.
+                self.assertEqual(self.calls_made(), ([], [SKILL, PICKER, ['-p', 'apt-scraper', 'config', 'unset', 'delegation.model'],
+                                                          FEATURES_JOB, TEST_MESSAGE]))
+                self.assertEqual(self.settings_left(), PICKED)
+                self.forget_run()
+
+    def test_the_installers_stop_before_the_test_message_when_no_provider_is_picked_in_hermess_menu(self):
+        for platform in ('windows', 'macos'):
+            with self.subTest(platform):
+                result, output = self.run_installer(platform, 'n\n', CLAUDE_SETTINGS)
+                self.assertNotEqual(result.returncode, 0, output)
+                self.assertIn("No provider was picked in Hermes's menu. Run the install again and pick one, or answer "
+                              'yes to use the Claude subscription.', ' '.join(output.split()))
+                self.assertEqual(self.calls_made(), ([], [SKILL, PICKER]))
+                self.forget_run()
+
+    def test_the_installers_without_a_terminal_to_ask_on_run_the_agent_on_the_claude_subscription(self):
+        for platform in ('windows', 'macos'):
+            with self.subTest(platform):
+                result, output = self.run_installer(platform, None, CLAUDE_SETTINGS)
+                self.assertEqual(result.returncode, 0, output)
+                self.assertEqual(self.calls_made(), ([['--version'], ['auth', 'status'], ['auth', 'login']],
+                                                     [SKILL, PLUGIN, FEATURES_JOB, TEST_MESSAGE]))
+                self.forget_run()
+
+    def test_the_installers_switch_a_profile_on_another_provider_back_to_the_claude_subscription_on_yes(self):
+        for platform in ('windows', 'macos'):
+            with self.subTest(platform):
+                result, output = self.run_installer(platform, 'y\n', {**PICKED, 'delegation.model': 'the-picked-mini'})
+                self.assertEqual(result.returncode, 0, output)
+                configured = [['-p', 'apt-scraper', 'config', *change] for change in (
+                    ['set', 'model.provider', CLAUDE_SETTINGS['model.provider']],
+                    ['set', 'model.default', CLAUDE_SETTINGS['model.default']],
+                    ['unset', 'model.base_url'], ['unset', 'model.api_mode'], ['unset', 'delegation.model'],
+                    ['set', 'delegation.model', CLAUDE_SETTINGS['delegation.model']])]
+                self.assertEqual(self.calls_made()[1], [SKILL, PLUGIN, *configured, FEATURES_JOB, TEST_MESSAGE])
+                self.assertEqual(self.settings_left(), CLAUDE_SETTINGS)
+                self.forget_run()
+
+    def test_the_installers_switch_to_the_model_settings_of_the_distribution_config(self):
+        config = (ROOT / 'profile' / 'config.yaml').read_text(encoding='utf-8')
+        self.assertEqual(re.findall(r'^model:\n  provider: (\S+)\n  default: (\S+)\n\ndelegation:\n  model: (\S+)$',
+                                    config, re.MULTILINE),
+                         [tuple(CLAUDE_SETTINGS.values())])
+        names = {'install.sh': ('CLAUDE_PROVIDER={}', 'CLAUDE_MODEL={}', 'CLAUDE_SUBAGENT_MODEL={}'),
+                 'install.ps1': ("$ClaudeProvider = '{}'", "$ClaudeModel = '{}'", "$ClaudeSubagentModel = '{}'")}
+        for installer, assignments in names.items():
+            text = (ROOT / installer).read_text(encoding='utf-8')
+            for assignment, value in zip(assignments, CLAUDE_SETTINGS.values()):
+                self.assertIn(assignment.format(value), text, installer)
+
+    def forget_run(self):
+        """Forgets the calls and the tools of one platform's run, so the next starts clean."""
+        for log in (self.hermes_calls, self.claude_calls):
+            log.unlink(missing_ok=True)
+        for platform in ('windows', 'macos'):
+            shutil.rmtree(self.folder / platform, ignore_errors=True)
 
 
 # Stands in for hermes in the uninstall tests: FAKE_HERMES, plus `profile delete` as Hermes 0.22.5 runs it
@@ -1796,7 +2103,7 @@ class UninstallTests(unittest.TestCase):
             dashboard = section('install.ps1', "Write-Step 'Hermes web dashboard'", CLOSING_POWERSHELL)
             self.assertEqual(dashboard.count('Start-Process $chatUrl'), 1)
             script = self.folder / 'install.ps1'
-            script.write_text(section('install.ps1', "$ErrorActionPreference = 'Stop'", "Write-Step 'Claude Code'")
+            script.write_text(section('install.ps1', "$ErrorActionPreference = 'Stop'", ACCOUNT_QUESTION)
                               + f"$ProfileSource = '{source}'\n$hermes = '{self.tools / 'hermes.cmd'}'\n"
                               + section('install.ps1', 'Write-Step "Hermes profile', '# The account connections use')
                               + dashboard.replace('Start-Process $chatUrl', ''), encoding='utf-8-sig')
@@ -1810,7 +2117,7 @@ class UninstallTests(unittest.TestCase):
                                        env=environment, capture_output=True, text=True, timeout=60)
             self.assertEqual(bootstrap.returncode, 0, bootstrap.stdout + bootstrap.stderr)
             script = self.folder / 'install.sh'
-            script.write_text(section('install.sh', 'set -euo pipefail', "step 'Claude Code'")
+            script.write_text(section('install.sh', 'set -euo pipefail', ACCOUNT_QUESTION)
                               + f"PROFILE_SOURCE='{source.as_posix()}'\n"
                               + section('install.sh', 'step "Hermes profile', '# The account connections use')
                               + section('install.sh', "step 'Hermes web dashboard'", CLOSING_SHELL), newline='\n')

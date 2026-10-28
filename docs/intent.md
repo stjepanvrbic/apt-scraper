@@ -18,7 +18,7 @@ Finding an apartment means searching several listing sites again and again, comp
 ## Constraints
 
 - Runs on Windows and macOS. Texting goes through iMessage, which exists only on macOS, so Windows has no texting.
-- Every account is the user's own: a Claude subscription, Google (Gmail and Calendar) and, on macOS, iMessage. Many listing agents correspond only by text.
+- Every account is the user's own: the model account, a Claude subscription by default or any provider Hermes supports, Google (Gmail and Calendar) and, on macOS, iMessage. Many listing agents correspond only by text.
 - Listing sites detect and block automated access. The search must keep working without the user's accounts or network getting blocked.
 
 ## Non-goals
