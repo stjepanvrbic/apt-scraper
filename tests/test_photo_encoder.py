@@ -87,7 +87,8 @@ class RunTests(unittest.TestCase):
         vectors = np.random.default_rng(1).normal(size=(len(entries()), 8)).astype(np.float32)
         np.save(self.home / 'probes.npy', vectors, allow_pickle=False)
         manifest = {'name': 'tiny', 'identity': 'tiny-1', 'graph': 'tower.onnx', 'output': 'pooler_output', 'dimensions': 8,
-                    'preprocessing': {'kind': 'siglip', 'size': 32, 'mean': [0.5] * 3, 'std': [0.5] * 3}, 'pooling': 'max',
+                    'preprocessing': {'resize': 'squash', 'size': 32, 'resample': 'bilinear', 'mean': [0.5] * 3, 'std': [0.5] * 3},
+                    'pooling': 'max',
                     'probe_rule': 'raw', 'probes': {'sha256': encoder.sha256(self.home / 'probes.npy')}, 'files': []}
         (self.home / 'model.json').write_text(json.dumps(manifest))
         (self.model / 'verified.json').write_text(json.dumps({'identity': 'tiny-1'}))
@@ -162,15 +163,16 @@ class RunTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'not downloaded and verified'):
             self.run_encoder()
 
-    def test_the_preprocessing_matches_the_measurement(self):
-        sys.path.insert(0, str(ROOT / 'tests'))
-        from encoder_sweep import preprocess
-        path = self.home / 'photo.png'
-        Image.new('RGB', (300, 200), (120, 30, 200)).save(path)
-        with Image.open(path) as image:
-            for kind, size, mean, std in (('siglip', 64, 0.5, 0.5), ('openclip', 64, 0.0, 1.0)):
-                ours = encoder.preprocess(image.convert('RGB'), {'kind': kind, 'size': size, 'mean': [mean] * 3, 'std': [std] * 3})
-                np.testing.assert_array_equal(ours, preprocess(path, {'kind': kind, 'size': size}))
+    def test_preprocessing_squashes_or_crops_and_normalizes_each_channel(self):
+        image = Image.new('RGB', (300, 200), (255, 0, 51))
+        image.paste((0, 0, 0), (0, 0, 50, 200))
+        squashed = encoder.preprocess(image, {'resize': 'squash', 'size': 30, 'resample': 'bilinear', 'mean': [0.5] * 3, 'std': [0.5] * 3})
+        self.assertEqual(squashed.shape, (3, 30, 30))
+        np.testing.assert_allclose(squashed[:, 15, 29], [1.0, -1.0, -0.6], atol=1e-6)
+        self.assertAlmostEqual(float(squashed[0, 15, 0]), -1.0, places=6)
+        cropped = encoder.preprocess(image, {'resize': 'shortest', 'size': 20, 'resample': 'bicubic', 'mean': [0.0] * 3, 'std': [2.0] * 3})
+        self.assertEqual(cropped.shape, (3, 20, 20))
+        np.testing.assert_allclose(cropped[:, 10, 10], [0.5, 0.0, 0.1], atol=1e-6)
 
 
 class AssetTests(unittest.TestCase):

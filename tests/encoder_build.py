@@ -76,7 +76,7 @@ def main(argv):
     vectors = text_vectors(directory, spec['text'])
     output.mkdir(parents=True, exist_ok=True)
     np.save(output / 'probes.npy', vectors, allow_pickle=False)
-    preprocessing = {'kind': 'siglip', 'size': spec['size'], 'mean': [0.5] * 3, 'std': [0.5] * 3, 'resample': 'bilinear'}
+    preprocessing = spec['preprocessing']
     probes = {'file': 'probes.npy', 'sha256': sha256(output / 'probes.npy'), 'rows': int(vectors.shape[0]),
               'text_graph': {key: item[key] for item in lock['files'] if item['filename'] == spec['text'] for key in ('filename', 'sha256')}}
     gate = quality(report)

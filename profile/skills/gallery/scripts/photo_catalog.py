@@ -2,8 +2,9 @@
 names, and the build step turns the phrasings into the text vectors that ship in probes.npy.
 
 The text tower runs only at build time, so a probe exists only when it is in this catalog. Each probe has several
-phrasings; a photo's score for it is the cosine with its best phrasing, and a listing's score is that of its best photo.
-The room types are those of extraction (record.py ROOM_TYPES), each with phrasings scored the same way."""
+phrasings; a photo's score for it is the cosine with their mean or with the best of them, as model.json's pooling says,
+and a listing's score is that of its best photo. The room types are those of extraction (record.py ROOM_TYPES), each
+with phrasings scored the same way."""
 
 ROOM_PROMPTS = {
     'kitchen': ['a photo of a kitchen', 'a kitchen in an apartment', 'kitchen cabinets, countertops and appliances'],

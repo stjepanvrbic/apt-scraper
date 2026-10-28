@@ -75,19 +75,23 @@ def unit(values):
     return np.divide(values, norms, out=np.zeros_like(values), where=norms > 0)
 
 
+RESAMPLING = {'bilinear': Image.Resampling.BILINEAR, 'bicubic': Image.Resampling.BICUBIC}
+
+
 def preprocess(image, preprocessing):
-    """The tower's input for one RGB image: SigLIP squeezes it to a square, OpenCLIP resizes its short side and crops
-    the center. Both use bilinear resampling, as their published processors do."""
-    size = preprocessing['size']
-    if preprocessing['kind'] == 'siglip':
-        values = np.asarray(image.resize((size, size), Image.Resampling.BILINEAR), dtype=np.float32) / 255.0
+    """The tower's input for one RGB image, as its published processor makes it: resize "squash" stretches it to the
+    square, "shortest" scales its short side to the size and crops the center; then the pixels, scaled to 0 to 1, are
+    normalized by the mean and standard deviation of each channel."""
+    size, resample = preprocessing['size'], RESAMPLING[preprocessing['resample']]
+    if preprocessing['resize'] == 'squash':
+        image = image.resize((size, size), resample)
     else:
         width, height = image.size
-        short, long = min(width, height), max(width, height)
-        resized = int(size * long / short)
-        image = image.resize((size, resized) if width <= height else (resized, size), Image.Resampling.BILINEAR)
+        resized = int(size * max(width, height) / min(width, height))
+        image = image.resize((size, resized) if width <= height else (resized, size), resample)
         left, top = int(round((image.width - size) / 2.0)), int(round((image.height - size) / 2.0))
-        values = np.asarray(image.crop((left, top, left + size, top + size)), dtype=np.float32) / 255.0
+        image = image.crop((left, top, left + size, top + size))
+    values = np.asarray(image, dtype=np.float32) / 255.0
     values = (values - np.asarray(preprocessing['mean'], dtype=np.float32)) / np.asarray(preprocessing['std'], dtype=np.float32)
     return values.transpose(2, 0, 1)
 

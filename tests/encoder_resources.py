@@ -57,9 +57,7 @@ def main(argv):
     spec = variants(arguments.models)[arguments.variant]
     directory = arguments.models / spec['model']
     model = {'graph': spec['graph'], 'output': 'pooler_output' if spec['kind'] == 'siglip' else 'image_embeddings',
-             'dimensions': None, 'preprocessing': {'kind': spec['kind'], 'size': spec['size'],
-                                                   'mean': [0.5] * 3 if spec['kind'] == 'siglip' else [0.0] * 3,
-                                                   'std': [0.5] * 3 if spec['kind'] == 'siglip' else [1.0] * 3}}
+             'dimensions': None, 'preprocessing': spec['preprocessing']}
     started = time.perf_counter()
     tower = encoder.Tower(directory, model, arguments.threads)
     load = time.perf_counter() - started

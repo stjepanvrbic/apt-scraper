@@ -163,6 +163,66 @@ With more than 20 ranked listings, up to two exploration listings are placed at 
 
 `pairwise_questions(store, count)` in `rerank.py` fits the model with the latest rerank's prior scale and weak-negative weight, without the leave-one-out check, and returns pairs among the 40 best-ranked listings with the largest posterior variance of their feature difference. Identical records are excluded. The reported probability still describes the predicted order; it does not choose the pair. Each listing is in at most one question, and a pair answered either way is not asked again. A skipped pair is excluded until twenty other questions have been answered or skipped, persisted in `pairwise_skips`. Refreshing a question does not advance this cooldown. Answers are stored with `ListingStore.answer_pair(chosen, other)` and count at the next rerank. Before any explicit label, the fit still includes the weak negatives and the prior from stated preferences.
 
+## The photo encoder
+
+A local image encoder reads every unique listing photo once, in the background, and turns the photos into named features of the scoring model. It never runs during a rerank: a rerank reads what the encoder stored, with the standard library only, as it reads the feature records. The [ranking model plan](research/ranking_model_plan.md) explains why it takes this shape, and [0055](tickets/0055-ranking_model_plan.md) has the measurements that chose it.
+
+### The model
+
+The image tower is SigLIP 2 So400m/16 at 512 pixels, fp32, the published ONNX export `onnx-community/siglip2-so400m-patch16-512-ONNX` of Google's Apache-2.0 weights, pinned in `profile/skills/ranking/encoder/model.json` by repository revision and by the SHA-256 of the one file a user downloads, 1.72 GB. It scored best of the measured candidates, SigLIP 2 B/16, L/16, So400m/16 and giant and MobileCLIP2 S2 and S4, each at fp32, fp16 and int8 ([0055](tickets/0055-ranking_model_plan.md) has the numbers). Its text tower never ships: at build time it turned every phrasing of `photo_catalog.py` (in the gallery's scripts) into a unit vector, saved in `probes.npy` and pinned in `model.json` by its hash. A photo's score for a room type is its cosine with the mean of that type's phrasings, and for a probe with the mean of the probe's phrasings.
+
+It did not pass the probe gate below: carpet and open kitchen have AUCs under 0.85. So the encoder is off, the installers build and download nothing for it, and its job does nothing. Everything below describes what runs once a model passes.
+
+### How it runs
+
+The installers run `encoder-run.py install` with Hermes's Python. It builds the encoder's environment under `workspace/encoder/environment` from the hash-pinned wheels of `requirements.txt` (onnxruntime, numpy, Pillow and onnxruntime's flatbuffers, packaging and protobuf), downloads the image tower into `workspace/encoder/model`, verifies every file's length and SHA-256 before it replaces anything, and checks that the environment loads the tower and embeds an image. onnxruntime publishes wheels for Python 3.14 on Windows x64 and Apple-silicon macOS, not on Intel Macs, so there the install says it could not install the encoder and the ranking works without it. A failed encoder install never stops the rest of the install, and the next install tries again.
+
+The profile ships the Hermes cron job `apt-scraper-encoder`, "Photo encoder", every 10 minutes. Its script `encoder-run.py` runs `encoder.py run` in the encoder's environment and never wakes the agent: a problem goes into `workspace/encoder/status.json`, which `ranking.py status` reports. One run works on the listings the ranking ranks or learns from, labeled ones first, then the longest known, for at most 9 minutes:
+
+- It downloads each photo URL once, as extraction does, and embeds each photo content once. The cache, `workspace/encoder/embeddings.sqlite3`, keys an embedding by model and content and each URL by the content it had, so a photo shown by two listings or two contents is embedded once. A URL the site no longer has is missing; one that fails three times, or does not decode, has failed, and its listing is complete without it.
+- When the listings, their photos or their records changed since the last derivation, it derives every complete listing's features and saves them in one transaction into the listing store's `photo_features` and `photo_similarity` tables, for the content fingerprint they were computed from. A listing whose content changes meanwhile keeps none until the next run.
+
+### What it derives
+
+- **Room types.** The encoder types each photo among extraction's room types. A photo keeps extraction's type where the record has one, the encoder's otherwise. When the encoder disagrees with the record on more than half the photos the record typed, the listing is marked for a second read, and the features job extracts it once more for that content.
+- **Probe matches.** For each probe of the catalog, the listing's best photo's score. The catalog holds the five probes of the quality gate (carpet, exposed brick, balcony, bathtub, open kitchen) and the visual qualities preferences often name, such as hardwood floors, bright rooms, floor-to-ceiling windows, white kitchen cabinets or a dated bathroom.
+- **Best-match similarity.** For kitchen, bathroom, living room and bedroom, the similarity of two listings is that of their two most alike photos of that room, after the mean of the store's photos of that room is subtracted from each: raw embeddings of interiors sit in a narrow cone, where every two kitchens look alike. Never a mean over a listing's photos.
+
+### The columns
+
+The encoder adds three kinds of named column to `design` in `scoring.py`, numeric and scaled as the ratings are, and nothing else:
+
+| Column | Value | In a reason |
+| --- | --- | --- |
+| `photo:<probe>` | the listing's probe match, for each probe a stated preference's reading or a note's reading names | photos look like "carpet" |
+| `looks_like:<room>` | the best-match similarity of the room with the most similar favorite other than the listing itself | kitchen looks like your favorite 2650 N Kedzie Ave |
+| `hypothesis:<phrase>` | the match of the probe a visual hypothesis names, instead of judgments from photo reads | photos look like "exposed brick" (model's guess) |
+
+A listing without photos of a room, or without features, has the column mean, which counts neither way. The leave-one-out check computes each `looks_like` column without the held-out favorite, as it does `near_favorites`: a listing whose most similar favorite is held out takes its second most similar. While the encoder is on, the reading vocabulary has a `photo:<probe>` entry for each probe, and a stated preference read before the encoder was on is read once more, so a preference such as "Lots of light" can name `photo:bright rooms` beside `rating:natural_light`. A hypothesis proposal can name one of the probes for a visual concept, and the encoder scores it on every listing without a photo read.
+
+### The gate
+
+`model.json` carries what was measured before the model shipped: room-type agreement on at least 1,000 photos at least 85%, and an AUC of at least 0.85 for each of the five gate probes. The encoder is on only when both passed and the latest blind test of that model, below, passed. While it is off, `ranking_inputs` carries no photo feature: ranks, explanations, readings and the journal are as without an encoder, while the job keeps the features current for the blind test. The second read on room-type disagreement needs only the room-type gate.
+
+### The blind test
+
+The owner runs the blind test once, with the encoder's features in the store and some labels:
+
+```bash
+python "$HERMES_HOME/skills/ranking/scripts/ranking.py" blind-test
+```
+
+It draws 30 ranked listings (`--count` for more) that have photo features and no label from the user, records them and the criterion in the store's `encoder_blind_tests` before anything is shown, prints the criterion, and writes the listings in random order to `blind-test.html` beside the listing store (`--page` for another file), each numbered, with its photos, price, address, rooms, size, amenities and description and no rank or score. It does not open the page. The user opens it, picks the 10 they would view and types their numbers. The criterion, fixed before the run: precision at 10 of the model with the encoder against the picks at least 0.5, and above that of the model without the encoder, both fitted on the user's labels and ranking only the shown listings. The command prints both precisions and whether the encoder is now on, and stores the picks and the result. The picks are not labels and move nothing. A later blind test replaces the earlier one's verdict.
+
+### Measuring and building it
+
+These developer tools live in `tests/` and are not shipped; they run in a build environment with onnxruntime, numpy, Pillow and transformers, which only tokenizes the text phrasings:
+
+- `encoder_models.py` downloads the candidate exports, pinned by revision and hash.
+- `encoder_sweep.py` builds the photo manifest (the owner store copy's photos with extraction's room types, and the public Houses dataset of Ahmed and Moustafa (2016), whose 535 homes have one photo each of bedroom, bathroom, kitchen and front), embeds every photo with each candidate (`images`), scores the room types and the gate probes (`evaluate`), and compares a lower-precision graph with the full-precision one photo for photo (`compare`). Choices between the pre-registered prompt poolings and probe rules are made on the dev fifth of the houses only.
+- `encoder_label_sheets.py` makes the contact sheets from which the probes' reference labels were read.
+- `encoder_build.py` writes `model.json` and `probes.npy` for the chosen candidate, and `encoder_resources.py` measures load time, time per photo and peak memory.
+
 ## The review pass
 
 After each rerank, a model reviews its result once, as text. The review rewrites the reasons of the top 50 listings, flags each whose rank conflicts with a stated preference, reports what looks wrong in the ranking state, and may move listings. Its moves stand only when the leave-one-out check confirms them, because language-model rankers show position and popularity bias. The code is `review.py`, pure functions, and `pending_review` and `save_review` in `rerank.py`.
@@ -220,6 +280,7 @@ python "$HERMES_HOME/skills/ranking/scripts/ranking.py" rerank
 python "$HERMES_HOME/skills/ranking/scripts/ranking.py" status
 python "$HERMES_HOME/skills/ranking/scripts/ranking.py" explain "<listing id>"
 python "$HERMES_HOME/skills/ranking/scripts/ranking.py" questions --count 8
+python "$HERMES_HOME/skills/ranking/scripts/ranking.py" blind-test
 python "$HERMES_HOME/skills/ranking/scripts/ranking.py" run
 ```
 
@@ -232,7 +293,7 @@ python -m unittest discover -s tests -v
 ruff check profile tests
 ```
 
-`tests/test_feature_record.py` covers the record contract, `tests/test_listing_photos.py` the duplicate removal and the contact sheets on a 40-photo fixture, `tests/test_feature_store.py` the store, and `tests/test_features_run.py` the job against real SQLite stores: which listings wait, preparation, saving through the command line, preferences stated later, readings, attempts, failures and the shipped job. `tests/test_geodata.py` covers geocoding and reading stations from a GTFS feed, `tests/test_code_features.py` the distances in the store, and `tests/test_scoring.py` covers the scoring model on constructed listings, among them Spec › Acceptance "Overruled preference", "Location", "Exploration" and a single pairwise answer, and `tests/test_rerank.py` reranks against real SQLite stores, the 300-listing timing, as the least CPU time of three reranks, and the ranking script. `tests/test_review.py` covers the review pass with controlled reviews, among them Spec › Acceptance "Review pass": moves that put favorites lower are reverted with both check values, moves that put them higher stand, and a reason, a move's reason or a finding that cites a value the task lacks or uses another word outside its citations rejects the whole file. It also covers the label-free task, the format checks, the check on the rerank's own scores while labels and listings change, superseded reviews, the single-label finding, the job's wake gate and attempts, the command line and the shipped job.
+`tests/test_feature_record.py` covers the record contract, `tests/test_listing_photos.py` the duplicate removal and the contact sheets on a 40-photo fixture, `tests/test_feature_store.py` the store, and `tests/test_features_run.py` the job against real SQLite stores: which listings wait, preparation, saving through the command line, preferences stated later, readings, attempts, failures and the shipped job. `tests/test_geodata.py` covers geocoding and reading stations from a GTFS feed, `tests/test_code_features.py` the distances in the store, and `tests/test_scoring.py` covers the scoring model on constructed listings, among them Spec › Acceptance "Overruled preference", "Location", "Exploration" and a single pairwise answer, and `tests/test_rerank.py` reranks against real SQLite stores, the 300-listing timing, as the least CPU time of three reranks, and the ranking script. `tests/test_review.py` covers the review pass with controlled reviews, among them Spec › Acceptance "Review pass": moves that put favorites lower are reverted with both check values, moves that put them higher stand, and a reason, a move's reason or a finding that cites a value the task lacks or uses another word outside its citations rejects the whole file. It also covers the label-free task, the format checks, the check on the rerank's own scores while labels and listings change, superseded reviews, the single-label finding, the job's wake gate and attempts, the command line and the shipped job. `tests/test_photo_encoder.py` runs the photo encoder against real SQLite stores with a tiny ONNX tower (`tests/fixtures/tiny_tower.onnx`): the derivation, one download and one embedding per photo content, failures, the budget, the pinned downloads, the launcher and the shipped job. `tests/test_photo_ranking.py` covers the encoder's gate, its columns, their explanations and leave-one-out values, the readings and hypotheses that name probes, the second read, the blind test end to end on a labeled store, and the 300-listing, 50-favorite rerank with every photo column on, under 2 seconds of CPU time.
 
 ## Measuring learning
 

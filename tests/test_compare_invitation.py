@@ -200,6 +200,9 @@ class CompareInvitationTests(FeaturesTestCase):
             connection.execute('DROP TABLE hypotheses')
             connection.execute('DROP TABLE hypothesis_passes')
             connection.execute('DROP TABLE implicit_signals')
+            for table in ('photo_features', 'photo_similarity', 'photo_rereads', 'encoder_blind_tests'):
+                connection.execute(f'DROP TABLE {table}')
+            connection.execute('ALTER TABLE preference_readings DROP COLUMN photo_model')
             implicit_signals(connection)
             connection.execute(f'PRAGMA user_version = {MIGRATIONS.index(compare_invitation)}')
         self.store = self.features.store = ListingStore(self.store.path)

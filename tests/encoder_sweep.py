@@ -42,19 +42,26 @@ PROBES = tuple(PROBE_PROMPTS)
 PROBE_RULES = ('raw', 'contrast', 'centered')
 
 
+CLIP_MEAN, CLIP_STD = [0.48145466, 0.4578275, 0.40821073], [0.26862954, 0.26130258, 0.27577711]
+
+
 def variants(models):
-    """Candidate graphs. Each SigLIP 2 size is published as fp32, fp16 and int8; MobileCLIP2's fp32 export is
-    converted locally (``derive``)."""
+    """Candidate graphs and their published preprocessing. Each SigLIP 2 size is published as fp32, fp16 and int8;
+    the OpenCLIP exports' fp16 and int8 graphs are converted locally (encoder_convert.py)."""
     result = {}
     for name, size in [('siglip2-base-224', 224), ('siglip2-large-384', 384), ('siglip2-so400m-512', 512),
                        ('siglip2-giant-384', 384)]:
         for precision, suffix in [('fp32', ''), ('fp16', '_fp16'), ('int8', '_int8')]:
-            result[f'{name}-{precision}'] = {'model': name, 'kind': 'siglip', 'size': size,
-                                             'graph': f'onnx/vision_model{suffix}.onnx', 'text': 'onnx/text_model.onnx'}
-    for name in ('mobileclip2-s2', 'mobileclip2-s4'):
+            result[f'{name}-{precision}'] = {
+                'model': name, 'kind': 'siglip', 'graph': f'onnx/vision_model{suffix}.onnx', 'text': 'onnx/text_model.onnx',
+                'preprocessing': {'resize': 'squash', 'size': size, 'resample': 'bilinear', 'mean': [0.5] * 3, 'std': [0.5] * 3}}
+    for name, preprocessing in [
+            ('mobileclip2-s2', {'resize': 'shortest', 'size': 256, 'resample': 'bilinear', 'mean': [0.0] * 3, 'std': [1.0] * 3}),
+            ('mobileclip2-s4', {'resize': 'shortest', 'size': 256, 'resample': 'bilinear', 'mean': [0.0] * 3, 'std': [1.0] * 3}),
+            ('dfn5b-h14-378', {'resize': 'squash', 'size': 378, 'resample': 'bicubic', 'mean': CLIP_MEAN, 'std': CLIP_STD})]:
         for precision, graph in [('fp32', 'visual.onnx'), ('fp16', 'visual_fp16.onnx'), ('int8', 'visual_int8.onnx')]:
-            result[f'{name}-{precision}'] = {'model': name, 'kind': 'openclip', 'size': 256, 'graph': graph,
-                                             'text': 'text.onnx'}
+            result[f'{name}-{precision}'] = {'model': name, 'kind': 'openclip', 'graph': graph, 'text': 'text.onnx',
+                                             'preprocessing': preprocessing}
     return result
 
 
@@ -133,25 +140,13 @@ def text(args):
 
 
 def preprocess(path, spec):
-    import numpy as np
+    """The shipped encoder's preprocessing, so the measured and the shipped inputs are one."""
     from PIL import Image, ImageOps
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/ranking/encoder'))
+    from encoder import preprocess as shipped
 
-    size = spec['size']
     with Image.open(path) as source:
-        image = ImageOps.exif_transpose(source).convert('RGB')
-    if spec['kind'] == 'siglip':
-        image = image.resize((size, size), Image.Resampling.BILINEAR)
-        values = (np.asarray(image, dtype=np.float32) / 255.0 - 0.5) / 0.5
-    else:
-        width, height = image.size
-        short, long = (width, height) if width <= height else (height, width)
-        resized_long = int(size * long / short)
-        image = image.resize((size, resized_long) if width <= height else (resized_long, size), Image.Resampling.BILINEAR)
-        width, height = image.size
-        left, top = int(round((width - size) / 2.0)), int(round((height - size) / 2.0))
-        image = image.crop((left, top, left + size, top + size))
-        values = np.asarray(image, dtype=np.float32) / 255.0
-    return values.transpose(2, 0, 1)
+        return shipped(ImageOps.exif_transpose(source).convert('RGB'), spec['preprocessing'])
 
 
 def images(args):

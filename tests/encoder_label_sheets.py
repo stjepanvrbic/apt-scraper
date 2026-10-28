@@ -28,6 +28,30 @@ cannot tell):
   between them. Null when no kitchen is visible.
 
 Answer only from what the photos show, never from what is typical."""
+# The brief each labeling subagent (Sonnet) read, with its group of sheets and its output file in its task.
+BRIEF_HEAD = """# Labeling photos of home listings
+
+You label listings from contact sheets, images that show a listing's photos as tiles. Each tile has a black tag in its
+top-left corner such as "L5 #3" (listing L5, photo 3) or "H100 #2" (listing H100, photo 2). Owner sheets (owner-NN.jpg)
+show one listing on up to four rows. Houses sheets (houses-NNN.jpg) show four listings, one row of four photos each.
+
+Open each sheet of your group with the Read tool, one after another, look at it, and record the answers for every
+listing on it. Open nothing else: no other file, no web page. Do not write code. Work through every sheet in your group.
+
+"""
+BRIEF_TAIL = """
+
+## Output
+
+When every sheet is done, write one JSON file with the Write tool, to the path your task gives, mapping each listing tag
+to its five answers, for example:
+
+{"L5": {"carpet": 0, "exposed brick": 0, "balcony": 0, "bathtub": null, "open kitchen": 0},
+ "H100": {"carpet": 1, "exposed brick": 0, "balcony": 0, "bathtub": 1, "open kitchen": null}}
+
+Every listing on your sheets must be in the file, with exactly these five keys, each 1, 0 or null. Then end with one
+line: how many sheets and listings you labeled.
+"""
 
 
 def tile(path, label):
@@ -76,6 +100,7 @@ def main(argv):
         index.append({'sheet': name, 'listings': {f'H{key[1].split(":")[1]}': key[1] for key in group}})
     (output / 'index.json').write_text(json.dumps(index, indent=1) + '\n', encoding='utf-8')
     (output / 'definitions.txt').write_text(DEFINITIONS + '\n', encoding='utf-8')
+    (output.parent / 'brief.md').write_text(BRIEF_HEAD + DEFINITIONS + BRIEF_TAIL, encoding='utf-8')
     print(json.dumps({'sheets': len(index), 'owner': len(owner), 'houses': len(houses)}))
 
 

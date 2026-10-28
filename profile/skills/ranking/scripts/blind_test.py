@@ -30,6 +30,8 @@ def candidates(store, count, rng):
     encoder = store.encoder_state()
     if not encoder['model']:
         raise BlindTestUnavailable('This profile ships no photo encoder.')
+    if not encoder['quality_passed']:
+        raise BlindTestUnavailable('The shipped photo encoder did not pass its quality measurements, so no blind test can turn it on.')
     with_photos = store.ranking_inputs(photos=True)
     if not with_photos.get('photos'):
         raise BlindTestUnavailable('No listing has photo features yet. The encoder job adds them every 10 minutes.')

@@ -1,0 +1,141 @@
+{
+ "name": "siglip2-giant-384-fp32",
+ "identity": "dfe05f362810727095cc2d595a277398eda04d6ebcf51c2a7cc7404b49576c34",
+ "source": {
+  "repository": "onnx-community/siglip2-giant-opt-patch16-384-ONNX",
+  "revision": "5eb77343667e0bd747a4aea8a59746184c3d50a4",
+  "weights": "google/siglip2-giant-384",
+  "license": "Apache-2.0"
+ },
+ "graph": "onnx/vision_model.onnx",
+ "output": "pooler_output",
+ "dimensions": 1536,
+ "preprocessing": {
+  "resize": "squash",
+  "size": 384,
+  "resample": "bilinear",
+  "mean": [
+   0.5,
+   0.5,
+   0.5
+  ],
+  "std": [
+   0.5,
+   0.5,
+   0.5
+  ]
+ },
+ "pooling": "mean",
+ "probe_rule": "raw",
+ "files": [
+  {
+   "filename": "onnx/vision_model.onnx",
+   "bytes": 900295,
+   "sha256": "e256e08219286ff5d4bced8ee10625716c721dd1f8a794e4e8cbe2d8e3611248",
+   "url": "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-384-ONNX/resolve/5eb77343667e0bd747a4aea8a59746184c3d50a4/onnx/vision_model.onnx"
+  },
+  {
+   "filename": "onnx/vision_model.onnx_data",
+   "bytes": 4654639104,
+   "sha256": "713620114d348ebab98910d69fb6daa1088b76dc70705ba724f31968855ef0e9",
+   "url": "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-384-ONNX/resolve/5eb77343667e0bd747a4aea8a59746184c3d50a4/onnx/vision_model.onnx_data"
+  }
+ ],
+ "probes": {
+  "file": "probes.npy",
+  "sha256": "660c716e6a706d31c9ba56e1f98038e6387e8b575110989eada6b2be80c9c0e8",
+  "rows": 103,
+  "text_graph": {
+   "filename": "onnx/text_model.onnx",
+   "sha256": "caa9002dd629eb8cb88b37af3dec5b4e5f190a06561328085a67d892203a9fc9"
+  }
+ },
+ "quality": {
+  "room": {
+   "owner_extraction": {
+    "photos": 462,
+    "listings": 31,
+    "agreement": 0.841991341991342,
+    "interval": [
+     0.8171806167400881,
+     0.8685831622176592
+    ]
+   },
+   "houses_test": {
+    "photos": 1784,
+    "listings": 446,
+    "agreement": 0.9646860986547086,
+    "interval": [
+     0.9557174887892377,
+     0.9730941704035875
+    ]
+   },
+   "combined_test": {
+    "photos": 2246,
+    "listings": 477,
+    "agreement": 0.9394479073909172,
+    "interval": [
+     0.927087749046206,
+     0.9521597770552717
+    ]
+   }
+  },
+  "probes": {
+   "carpet": {
+    "auc": 0.8068766213079689,
+    "interval": [
+     0.763300414144632,
+     0.8503845628726164
+    ],
+    "positive": 301,
+    "negative": 146
+   },
+   "exposed brick": {
+    "auc": 0.9755739210284665,
+    "interval": [
+     0.9494949494949495,
+     0.9944903581267218
+    ],
+    "positive": 11,
+    "negative": 495
+   },
+   "balcony": {
+    "auc": 0.9324137931034483,
+    "interval": [
+     0.886896551724138,
+     0.9673321234119783
+    ],
+    "positive": 29,
+    "negative": 475
+   },
+   "bathtub": {
+    "auc": 0.8792422148142125,
+    "interval": [
+     0.8488657614440198,
+     0.9078299048703147
+    ],
+    "positive": 251,
+    "negative": 245
+   },
+   "open kitchen": {
+    "auc": 0.810656807307525,
+    "interval": [
+     0.7561765985210961,
+     0.8586124401913876
+    ],
+    "positive": 121,
+    "negative": 380
+   }
+  },
+  "probe_rule": "raw",
+  "room_passed": true,
+  "probes_passed": false,
+  "passed": false,
+  "bars": {
+   "room_agreement": 0.85,
+   "room_photos": 1000,
+   "probe_auc": 0.85
+  }
+ },
+ "resources": null
+}

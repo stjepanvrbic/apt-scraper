@@ -16,6 +16,7 @@ MODELS = {
                        'text_repository': 'google/siglip2-base-patch16-naflex'},
     'mobileclip2-s2': {'repository': 'RuteNL/MobileCLIP2-S2-OpenCLIP-ONNX', 'kind': 'openclip'},
     'mobileclip2-s4': {'repository': 'RuteNL/MobileCLIP2-S4-OpenCLIP-ONNX', 'kind': 'openclip'},
+    'dfn5b-h14-378': {'repository': 'RuteNL/DFN5B-CLIP-ViT-H-14-378-ONNX', 'kind': 'openclip'},
 }
 
 

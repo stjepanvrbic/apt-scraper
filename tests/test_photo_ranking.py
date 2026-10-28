@@ -242,6 +242,9 @@ class BlindTests(EncoderTestCase):
             blind_test(self.store, self.page, picks='1 2 3 4 5 6 7 8 9 10')
         with self.assertRaises(ValueError):
             blind_test(self.store, self.page, count=29, picks='1 2 3 4 5 6 7 8 9 10')
+        manifest(self.manifest, probes=False)
+        with self.assertRaisesRegex(BlindTestUnavailable, 'did not pass its quality measurements'):
+            blind_test(self.store, self.page, picks='1 2 3 4 5 6 7 8 9 10')
 
 
 class TimingTests(EncoderTestCase):
