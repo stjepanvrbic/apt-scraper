@@ -152,6 +152,19 @@ class ColumnTests(EncoderTestCase):
         best = max(range(len(model_design.ids)), key=lambda index: model_design.raw[index]['photo:carpet'])
         self.assertEqual(display(model_design, best, 'photo:carpet'), 'photos look like "carpet"')
 
+    def test_a_preference_read_as_photos_only_is_judged_per_listing_while_the_encoder_is_off(self):
+        identifiers = fill(self.store, 10, 2)
+        photo_features(self.store, identifiers)
+        pass_blind_test(self.store)
+        self.store.save_readings(preferences=[('dislike', 'Carpet', [{'feature': 'photo:carpet', 'direction': 'dislike'}]),
+                                              ('like', 'Lots of daylight', [{'feature': 'rating:natural_light', 'direction': 'like'}])])
+        self.assertIsNotNone(design(self.store.ranking_inputs()).index('photo:carpet'))
+        pass_blind_test(self.store, passed=False)
+        self.assertEqual(self.store.preference_readings()[('dislike', 'Carpet')], [])
+        model_design = design(self.store.ranking_inputs())
+        self.assertIsNone(model_design.index('photo:carpet'))
+        self.assertIsNotNone(model_design.index('preference:Carpet'))
+
     def test_a_visual_hypothesis_a_probe_scores_is_a_numeric_column_without_photo_reads(self):
         identifiers = fill(self.store, 10, 3)
         photo_features(self.store, identifiers)

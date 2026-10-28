@@ -290,6 +290,12 @@ def encoder_manifest(path=None):
     return json.loads(path.read_text(encoding='utf-8')) if path.is_file() else None
 
 
+def without_photo_features(readings):
+    """The preference readings as the ranking uses them while it has no photo columns: a reading that named only photo
+    features names nothing, so its preference is judged per listing as one no feature expresses."""
+    return {key: [item for item in features if not item['feature'].startswith('photo:')] for key, features in readings.items()}
+
+
 def extraction_read(listing_id, fingerprint):
     """The model_reads key of the extraction of one listing content."""
     return json.dumps(['extraction', listing_id, fingerprint])
@@ -621,6 +627,8 @@ class ListingStore:
             photo_inputs = None
             if encoder['model'] and (encoder['enabled'] if photos is None else photos):
                 photo_inputs = self.photo_inputs(connection, encoder['model'], feedback)
+        if photo_inputs is None:
+            preference_readings = without_photo_features(preference_readings)
         inputs = {'listings': listings, 'settings': settings, 'preference_readings': preference_readings, **clock,
                   'note_readings': {note: reading for note, (_, reading) in note_readings.items()},
                   'sentiments': {listing_id: reading['sentiment'] for listing_id, reading in note_readings.values()}, 'pairs': pairs,
@@ -897,7 +905,8 @@ class ListingStore:
 
     def preference_readings(self):
         with self.connect() as connection:
-            return {(row['kind'], row['phrase']): json.loads(row['features']) for row in connection.execute('SELECT * FROM preference_readings')}
+            readings = {(row['kind'], row['phrase']): json.loads(row['features']) for row in connection.execute('SELECT * FROM preference_readings')}
+            return readings if self.encoder_state(connection)['enabled'] else without_photo_features(readings)
 
     def note_readings(self):
         with self.connect() as connection:

@@ -371,6 +371,8 @@ def compare(args):
     import onnxruntime as ort
 
     reference, variant = args.variants
+    if not args.output or not Path(args.output).is_file():
+        raise SystemExit('compare needs --output, the evaluate report that chose the reference variant\'s padding and pooling.')
     specs = variants(args.models)
     spec = specs[variant]
     work = Path(args.work)
