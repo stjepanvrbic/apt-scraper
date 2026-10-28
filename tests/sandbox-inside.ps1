@@ -21,12 +21,12 @@ try {
     $options = Get-Content (Join-Path $out 'options.json') -Raw | ConvertFrom-Json
     Write-Log 'Installing Python 3.14'
     Start-Process -Wait -FilePath (Join-Path $toolchain 'python-3.14.10-amd64.exe') `
-        -ArgumentList '/quiet', 'InstallAllUsers=1', 'PrependPath=1', 'Include_launcher=1', 'Include_test=0'
+        -ArgumentList '/quiet', 'InstallAllUsers=1', 'PrependPath=1', 'Include_launcher=1', 'Include_test=0', '/log', (Join-Path $out 'python-install.log')
     Write-Log 'Installing Git for Windows'
     Start-Process -Wait -FilePath (Join-Path $toolchain 'Git-2.56.0.4-64-bit.exe') `
-        -ArgumentList '/VERYSILENT', '/NORESTART', '/NOCANCEL', '/SP-'
+        -ArgumentList '/VERYSILENT', '/NORESTART', '/NOCANCEL', '/SP-', ('/LOG=' + (Join-Path $out 'git-install.log'))
     Write-Log 'Installing Node 24'
-    Start-Process -Wait -FilePath msiexec -ArgumentList '/i', (Join-Path $toolchain 'node-v24.22.2-x64.msi'), '/qn', '/norestart'
+    Start-Process -Wait -FilePath msiexec -ArgumentList '/i', (Join-Path $toolchain 'node-v24.22.2-x64.msi'), '/qn', '/norestart', '/log', (Join-Path $out 'node-install.log')
     $env:PATH = [Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('PATH', 'User')
 
     Write-Log "Copying the checkout to $work"

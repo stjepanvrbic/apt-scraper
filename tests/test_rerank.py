@@ -1,3 +1,4 @@
+import functools
 import json
 import os
 import sqlite3
@@ -9,6 +10,8 @@ import time
 import unittest
 from contextlib import closing
 from pathlib import Path
+
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
 
@@ -73,6 +76,36 @@ def least_cpu_seconds(call, runs=TIMING_RUNS):
         result = call()
         times.append(time.process_time() - started)
     return min(times), result
+
+
+# The spec's two seconds are judged on the owner's PC, where REFERENCE_WORK takes REFERENCE_SECONDS of CPU time
+# (Python 3.14, numpy 2.5.4, least of five runs). A slower machine, such as a shared CI runner or a sandbox, is
+# given the budget scaled by how much slower it runs the same work, timed once per process; a faster machine
+# keeps the spec's budget. The work mixes what a rerank does: numpy least squares and plain Python.
+REFERENCE_SECONDS = 0.37
+
+
+def reference_work():
+    generator = np.random.default_rng(0)
+    design = generator.standard_normal((3000, 64))
+    target = generator.standard_normal(3000)
+    for _ in range(60):
+        np.linalg.lstsq(design, target, rcond=None)
+    total = 0
+    for value in range(6_000_000):
+        total += value % 7
+    return total
+
+
+@functools.cache
+def speed_factor() -> float:
+    """How many times slower than the owner's PC this machine runs the reference work, at least 1."""
+    return max(1.0, least_cpu_seconds(reference_work, runs=5)[0] / REFERENCE_SECONDS)
+
+
+def cpu_budget(seconds: float = 2.0) -> float:
+    """The spec's budget of `seconds` on the owner's PC, scaled for this machine."""
+    return seconds * speed_factor()
 
 
 class StoreTestCase(unittest.TestCase):
@@ -171,7 +204,7 @@ class RerankTests(StoreTestCase):
         fill(self.store, 300, 50)
         seconds, summary = least_cpu_seconds(lambda: rerank(self.store, seed=1))
         self.assertEqual((summary['ranked'], len(summary['held_out'])), (300, 50))
-        self.assertLess(seconds, 2.0, summary)
+        self.assertLess(seconds, cpu_budget(), (speed_factor(), summary))
 
 
 class MigrationTests(unittest.TestCase):

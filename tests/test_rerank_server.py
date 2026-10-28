@@ -7,7 +7,7 @@ from urllib.error import HTTPError
 from unittest.mock import patch
 
 from test_gallery_server import GalleryServerCase
-from test_rerank import SETTINGS, fill
+from test_rerank import SETTINGS, cpu_budget, fill, speed_factor
 from rerank import rerank, save_review
 from store import READ_ATTEMPTS, extraction_read
 from test_gallery_store import listing
@@ -115,7 +115,7 @@ class RerankServerTests(GalleryServerCase):
         elapsed = time.perf_counter() - started
         self.assertEqual((summary['ranked'], len(summary['held_out'])), (300, 50))
         self.assertEqual(items[0]['rank'], 1)
-        self.assertLess(elapsed, 2.0)
+        self.assertLess(elapsed, cpu_budget(), speed_factor())
 
     def test_pending_reasons_follow_current_features_and_never_expose_an_old_explanation(self):
         identifiers = fill(self.store, 25, 3)
