@@ -155,7 +155,7 @@ Real-store evidence: [inventory and replay](../research/ranking_real_store_phase
 | 1 | Merged PR #51 as `7002c7b` after CodeRabbit approval | Prior candidate not promoted |
 | 2 | Merged PR #52 as `bf03fbb` after CodeRabbit approval | Impressions/reasons; cold-start candidate not promoted |
 | 3 | Merged PR #53 as `cf1fe89` after CodeRabbit approval | Real labels 0; automatic pass not promoted |
-| 4 | This pull request | Encoder built and measured; probe gate unmet, encoder off; blind test ready, not run |
+| 4 | PR #57, with the close-out | Encoder built and measured; probe gate unmet, encoder off; blind test ready, not run |
 | 5 | Not run | Needs four weeks of the owner's labels; the store has none |
 
 Re-review: the frozen-feedback rescorer now rejects inconsistent run counts, truncated curves/trajectories and non-finite accuracies before fitting. A regression test distinguishes displayed rank 1 from refitted ranks 1 and 3 under two alternative models. Both actual exposure and counterfactual model quality are reported.
