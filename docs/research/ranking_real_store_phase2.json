@@ -1,0 +1,31 @@
+{
+  "listings": 63,
+  "events": 0,
+  "prequential": {
+    "held_out": [],
+    "known_positive_actions": [],
+    "rank_definition": "Refitted model rank over the historical candidate set, for model comparisons.",
+    "displayed_median_rank": null,
+    "displayed_median_interval": null,
+    "median_rank": null,
+    "median_interval": null,
+    "top_20": null,
+    "top_20_interval": null,
+    "pairwise_answers": 0,
+    "pairwise_scored": 0,
+    "pairwise_ties": 0,
+    "pairwise_unscorable": 0,
+    "pairwise_accuracy": null,
+    "pairwise_interval": null,
+    "pairwise_interval_90": null,
+    "excluded": 0,
+    "skip_above_diagnostic": []
+  },
+  "leave_one_out": {},
+  "history_limit": "Only journaled actions have their original records, settings and candidate sets. Older labels cannot be replayed.",
+  "owner_label_count": 0,
+  "required_compare_answers": 40,
+  "pairwise_bar_met": false,
+  "source": "authorized profile workspace copy",
+  "reason": "Zero Compare answers; accuracy and Wilson intervals are undefined, so the real-data bar is unmet."
+}

@@ -542,7 +542,7 @@ class ListingStore:
                     for row in connection.execute('''SELECT c.*, l.first_seen FROM code_features c
                         JOIN listings l ON l.id = c.listing_id AND l.fingerprint = c.fingerprint ORDER BY c.listing_id''')}
 
-    def ranking_inputs(self, *, include_signals=False, include_impressions=False, connection=None):
+    def ranking_inputs(self, *, include_signals=False, connection=None):
         """Everything a rerank reads, from one snapshot of the store: each listing with its current feature record or
         None, its judgments of stated preferences, its code-derived features, the criteria areas whose search found it
         or None, whether extraction gave up on it, whether it is ranked (available, inside the criteria and not
@@ -598,13 +598,10 @@ class ListingStore:
                     'user_notes': identifier in noted, 'paired': identifier in compared,
                 })
             clock = label_clock(connection, listings, pairs)
-            impressions = [dict(row) for row in connection.execute('''SELECT s.listing_id, s.fingerprint, s.visit_id,
-                s.shown_rank, s.occurred_at FROM implicit_signals s JOIN listings l ON l.id = s.listing_id
-                AND l.fingerprint = s.fingerprint WHERE kind = 'impression' ORDER BY s.rowid''')] if include_impressions else []
         return {'listings': listings, 'settings': settings, 'preference_readings': preference_readings, **clock,
                 'note_readings': {note: reading for note, (_, reading) in note_readings.items()},
                 'sentiments': {listing_id: reading['sentiment'] for listing_id, reading in note_readings.values()}, 'pairs': pairs,
-                'tags': tags, 'implicit_visits': visits, 'impressions': impressions}
+                'tags': tags, 'implicit_visits': visits}
 
     def record_signals(self, events):
         """Stores an atomic, retryable batch without changing the gallery's content revision."""
@@ -1130,9 +1127,27 @@ class ListingStore:
             connection.execute("UPDATE contacts SET status = 'pending', error = NULL WHERE listing_id = ? AND status = 'failed'", (listing_id,))
 
     def record_learning_event(self, connection, kind, listing, other=None):
+        occurred_at = datetime.now(timezone.utc).isoformat()
+        inputs = self.ranking_inputs(connection=connection)
+        if kind == 'favorite':
+            inputs['impressions'] = self.favorite_impressions(connection, listing, occurred_at)
         connection.execute('INSERT INTO learning_events (occurred_at, kind, listing, other, inputs) VALUES (?, ?, ?, ?, ?)',
-                           (datetime.now(timezone.utc).isoformat(), kind, listing, other,
-                            compress(encode(self.ranking_inputs(connection=connection, include_impressions=True)))))
+                           (occurred_at, kind, listing, other, compress(encode(inputs))))
+
+    def favorite_impressions(self, connection, listing, occurred_at):
+        visit = connection.execute('''SELECT s.visit_id FROM implicit_signals s JOIN listings l
+            ON l.id = s.listing_id AND l.fingerprint = s.fingerprint
+            WHERE s.kind = 'impression' AND s.listing_id = ? AND s.shown_rank IS NOT NULL
+            AND julianday(s.occurred_at) <= julianday(?)
+            ORDER BY julianday(s.occurred_at) DESC, s.rowid DESC LIMIT 1''', (listing, occurred_at)).fetchone()
+        if visit is None:
+            return []
+        return [dict(row) for row in connection.execute('''SELECT listing_id, fingerprint, visit_id, shown_rank, occurred_at
+            FROM (SELECT s.*, row_number() OVER (PARTITION BY s.listing_id ORDER BY julianday(s.occurred_at) DESC, s.rowid DESC) AS latest
+                FROM implicit_signals s JOIN listings l ON l.id = s.listing_id AND l.fingerprint = s.fingerprint
+                WHERE s.kind = 'impression' AND s.visit_id = ? AND s.shown_rank IS NOT NULL
+                AND julianday(s.occurred_at) <= julianday(?))
+            WHERE latest = 1 ORDER BY listing_id''', (visit['visit_id'], occurred_at))]
 
     def correspond(self, listing_id, direction, channel, text, *, external_message_id, external_thread_id=None):
         text = require_text(text, 'Message')

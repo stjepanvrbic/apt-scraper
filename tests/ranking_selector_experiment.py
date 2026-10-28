@@ -4,8 +4,11 @@ import argparse
 import gzip
 import hashlib
 import json
+import random
+import shlex
 import sys
 from concurrent.futures import ProcessPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from statistics import fmean
 
@@ -23,6 +26,26 @@ def batch(arguments):
 
 def crossing(curve):
     return next((index * 5 for index, value in enumerate(curve) if value >= 0.75), None)
+
+
+def threshold_uncertainty(baseline, candidate):
+    generator = random.Random(0)
+    before, after, reductions = [], [], []
+    for _ in range(2000):
+        indices = generator.choices(range(len(baseline)), k=len(baseline))
+        first, second = [crossing([fmean(values) for values in zip(*(curves[index] for index in indices))])
+                         for curves in (baseline, candidate)]
+        before.append(first)
+        after.append(second)
+        if first and second is not None:
+            reductions.append(1 - second / first)
+    def interval(values):
+        ordered = sorted(values, key=lambda value: float('inf') if value is None else value)
+        return [ordered[50], ordered[1949]]
+    return {'baseline_interval': interval(before), 'candidate_interval': interval(after),
+            'reduction_interval': interval(reductions) if len(reductions) == 2000 else None,
+            'censored_draws': sum(a is None or b is None for a, b in zip(before, after)),
+            'method': 'Paired bootstrap over users, 2000 resamples; null threshold bounds exceed 40 labels; reduction interval requires all draws identifiable.'}
 
 
 def main():
@@ -46,6 +69,7 @@ def main():
     before, after = crossing(baseline), crossing(candidate)
     reduction = 1 - after / before if before and after is not None else None
     report = {'runs': runs, 'horizon': 40, 'baseline_labels_to_0.75': before, 'candidate_labels_to_0.75': after,
+              'threshold_uncertainty': threshold_uncertainty(original['run_curves'], curves),
               'label_reduction': reduction, 'bar': 0.25, 'bar_met': reduction is not None and reduction >= 0.25,
               'baseline_curves': original['curves'], 'candidate_curves': [
                   {'labels': index * 5, 'accuracy': fmean(values), 'interval': bootstrap(list(values), fmean)}
@@ -53,9 +77,13 @@ def main():
               'paired_change_at_40': fmean([a[-1] - b[-1] for a, b in zip(curves, original['run_curves'])]),
               'paired_interval_at_40': bootstrap([a[-1] - b[-1] for a, b in zip(curves, original['run_curves'])], fmean),
               'censoring': 'A null threshold means not reached within 40 answers; no extrapolation.',
-              'real_store': 'not run, no database in the authorized source directory',
+              'real_store': 'Actual-label replay is reported separately; this experiment uses simulated preferences.',
               'production': 'prior-only cold-start selector stays out; retain the variance selector',
-              'stop_condition': 'not established: both label thresholds are right-censored at 40', 'candidate_runs': curves}
+              'stop_condition': 'not established: threshold is censored at 40' if reduction is None else 'fired' if reduction <= 0 else 'not fired',
+              'candidate_runs': curves}
+    report['run'] = {'id': hashlib.sha256(json.dumps(report, sort_keys=True).encode()).hexdigest()[:16],
+                     'date_utc': datetime.now(timezone.utc).date().isoformat(), 'command': shlex.join(['python', *sys.argv]),
+                     'feedback_sha256': original['feedback_sha256']}
     args.output.write_text(json.dumps(report, indent=2) + '\n')
 
 

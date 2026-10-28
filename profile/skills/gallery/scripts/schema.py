@@ -228,6 +228,8 @@ def card_impressions(connection):
     connection.execute('INSERT INTO implicit_signals SELECT *, NULL FROM earlier_signals')
     connection.execute('DROP TABLE earlier_signals')
     connection.execute('CREATE INDEX implicit_signals_listing_visit ON implicit_signals(listing_id, fingerprint, visit_id)')
+    connection.execute("CREATE INDEX impressions_latest ON implicit_signals(listing_id, fingerprint, julianday(occurred_at) DESC) WHERE kind = 'impression'")
+    connection.execute("CREATE INDEX impressions_visit ON implicit_signals(visit_id) WHERE kind = 'impression'")
 
 
 MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals,
