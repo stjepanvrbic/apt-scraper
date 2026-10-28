@@ -68,8 +68,8 @@ export function RerankPanel({ ranking, open, busy, galleryReadError }: { ranking
         <Title order={3} size="h5">Preference guesses</Title>
         <Text size="sm" c="dimmed">These are the model's guesses. Confirm one to make it a stated preference.</Text>
         {hypotheses.map(item => <Group key={item.id} justify="space-between" align="start" gap="sm">
-          <Text size="sm" style={{ flex: '1 1 200px', minWidth: 0, overflowWrap: 'anywhere' }}>You may {item.direction}: {item.phrase}</Text>
-          <Group gap="xs"><Button size="xs" variant="light" disabled={busy || ranking.hypothesis.isPending}
+          <Text size="sm" style={{ flex: '1 1 200px', minWidth: 0, overflowWrap: 'anywhere' }}>{item.direction ? `You may ${item.direction}: ${item.phrase}` : `Still learning about: ${item.phrase}`}</Text>
+          <Group gap="xs"><Button size="xs" variant="light" disabled={busy || ranking.hypothesis.isPending || !item.direction}
             loading={ranking.hypothesis.isPending && ranking.hypothesis.variables?.id === item.id && ranking.hypothesis.variables.decision === 'confirm'}
             aria-label={`Confirm preference: ${item.phrase}`} onClick={() => ranking.hypothesis.mutate({ id: item.id, decision: 'confirm' })}>Confirm preference</Button>
             <Button size="xs" variant="subtle" color="dark" disabled={busy || ranking.hypothesis.isPending}

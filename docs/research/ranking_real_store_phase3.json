@@ -1,0 +1,44 @@
+{
+  "source": "authorized profile workspace copy",
+  "owner_label_count": 0,
+  "prepare": {
+    "requested_passes": 0,
+    "reason": "No unreviewed new labels."
+  },
+  "assess": [],
+  "status": [],
+  "replay": {
+    "listings": 63,
+    "events": 0,
+    "prequential": {
+      "held_out": [],
+      "known_positive_actions": [],
+      "rank_definition": "Refitted model rank over the historical candidate set, for model comparisons.",
+      "displayed_median_rank": null,
+      "displayed_median_interval": null,
+      "median_rank": null,
+      "median_interval": null,
+      "top_20": null,
+      "top_20_interval": null,
+      "pairwise_answers": 0,
+      "pairwise_scored": 0,
+      "pairwise_ties": 0,
+      "pairwise_unscorable": 0,
+      "pairwise_accuracy": null,
+      "pairwise_interval": null,
+      "pairwise_interval_90": null,
+      "excluded": 0,
+      "skip_above_diagnostic": []
+    },
+    "leave_one_out": {},
+    "history_limit": "Only journaled actions have their original records, settings and candidate sets. Older labels cannot be replayed."
+  },
+  "remote_model_calls": 0,
+  "required_new_labels": 20,
+  "real_survival_bar_met": false,
+  "real_garden_bar_met": false,
+  "garden_reason": "None of the five historical favorites is present; the copy has 63 listings rather than the historical 129.",
+  "survival_reason": "No user labels or hypotheses exist; survival and its interval are undefined.",
+  "stop_condition_fired": false,
+  "stop_reason": "The store has not accumulated the required 40 labels."
+}

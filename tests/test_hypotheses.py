@@ -3,6 +3,7 @@ import json
 import hashlib
 import sqlite3
 import sys
+import zlib
 from pathlib import Path
 from contextlib import closing
 from unittest import mock
@@ -16,9 +17,21 @@ from scoring import fit_model  # noqa: E402
 from store_copy import copy_database  # noqa: E402
 from hypothesis_trial import proposal_file, judgment_files, apply_judgments  # noqa: E402
 from test_gallery_store import listing  # noqa: E402
+from test_scoring import entry, inputs  # noqa: E402
+from learning import prediction  # noqa: E402
 
 
 class HypothesisTests(StoreTestCase):
+    def test_prediction_marks_ties_and_existing_positive_labels(self):
+        snapshot = inputs([entry('a', price=1000), entry('b', price=1000)])
+        pair = prediction(snapshot, {'kind': 'pair', 'listing': 'a', 'other': 'b'})
+        self.assertEqual(pair['value'], 0.5)
+        self.assertTrue(pair['tied'])
+        snapshot['listings'][0].update(favorite=True, rank=1)
+        contact = prediction(snapshot, {'kind': 'contact', 'listing': 'a', 'other': None})
+        self.assertTrue(contact['already_positive'])
+        self.assertEqual(contact['displayed_rank'], 1)
+
     def prepare_case(self):
         self.identifiers = fill(self.store, 30, 1)
         rerank(self.store, seed=1)
@@ -39,10 +52,59 @@ class HypothesisTests(StoreTestCase):
         rerank(self.store, seed=1)
         self.assertIsNone(prepare(self.store))
 
+    def test_pass_storage_compresses_the_task_without_a_duplicate_input_snapshot(self):
+        self.prepare_case()
+        with self.store.connect() as connection:
+            columns = {row['name'] for row in connection.execute('PRAGMA table_info(hypothesis_passes)')}
+            saved = connection.execute('SELECT task FROM hypothesis_passes').fetchone()['task']
+        self.assertNotIn('inputs', columns)
+        self.assertIsInstance(saved, bytes)
+        raw = zlib.decompress(saved)
+        self.assertLess(len(saved), len(raw) / 2)
+        self.assertEqual(json.loads(raw), json.loads(json.dumps(self.task)))
+
+    def test_removing_labels_does_not_advance_the_twenty_label_grace_period(self):
+        value = self.prepare_case()
+        save(self.store, value)
+        for index in range(20):
+            self.store.feedback(self.identifiers[1], favorite=index % 2 == 0)
+        result = assess(self.store)
+        self.assertEqual(result[0]['labels'], 10)
+        self.assertEqual(result[0]['state'], 'active')
+        self.store.add_note('Changed my mind.', listing_id=self.identifiers[2])
+        note = self.store.unread_notes()[0]['id']
+        self.store.save_readings(notes=[(note, {'sentiment': 'positive', 'likes': [], 'dislikes': []})])
+        self.store.save_readings(notes=[(note, {'sentiment': 'neutral', 'likes': [], 'dislikes': []})])
+        self.assertEqual(assess(self.store)[0]['labels'], 11)
+
+    def test_a_removal_after_a_completed_pass_does_not_request_another_pass(self):
+        save(self.store, self.prepare_case())
+        self.store.feedback(self.identifiers[1], favorite=True)
+        rerank(self.store, seed=1)
+        task = prepare(self.store)
+        save(self.store, {'rerank': task['rerank'], 'reasons': [], 'flags': [], 'findings': [], 'hypotheses': []})
+        self.store.feedback(self.identifiers[1], favorite=False)
+        rerank(self.store, seed=1)
+        self.assertIsNone(prepare(self.store))
+
+    def test_legacy_labels_receive_one_initial_pass_and_removal_does_not_repeat_it(self):
+        identifiers = fill(self.store, 8, 2)
+        with self.store.connect(write=True) as connection:
+            connection.execute('DELETE FROM learning_events')
+        rerank(self.store, seed=1)
+        task = prepare(self.store)
+        save(self.store, {'rerank': task['rerank'], 'reasons': [], 'flags': [], 'findings': [], 'hypotheses': []})
+        self.store.feedback(identifiers[1], favorite=False)
+        rerank(self.store, seed=1)
+        self.assertTrue(prepare(self.store) is None)
+
     def test_named_judgments_have_zero_prior_and_confirmation_becomes_a_preference(self):
         value = self.prepare_case()
         save(self.store, value)
         hypothesis = active(self.store)[0]
+        self.assertIsNone(hypothesis['direction'])
+        with self.assertRaisesRegex(ValueError, 'learned direction'):
+            decide(self.store, hypothesis['id'], 'confirm')
         tasks = pending_judgments(self.store)
         self.assertEqual(sum(len(task['listings']) for task in tasks), 30)
         entries = [{'id': identifier, 'fingerprint': self.store.listing(identifier)['content_fingerprint'],
@@ -53,6 +115,7 @@ class HypothesisTests(StoreTestCase):
         index = model.design.index('hypothesis:original wood trim')
         self.assertIsNotNone(index)
         self.assertEqual(model.design.prior_mean[index], 0)
+        assess(self.store)
         decide(self.store, hypothesis['id'], 'confirm')
         decide(self.store, hypothesis['id'], 'confirm')
         self.assertIn('original wood trim', self.store.settings()['preferences']['likes'])
@@ -91,7 +154,7 @@ class HypothesisTests(StoreTestCase):
         value = self.prepare_case()
         save(self.store, value)
         for index in range(40):
-            self.store.feedback(self.identifiers[1], favorite=index % 2 == 0)
+            self.store.answer_pair(self.identifiers[index % 20], self.identifiers[20 + index // 20])
         assess(self.store)
         rerank(self.store, seed=1)
         self.assertEqual(prepare(self.store)['max_hypotheses'], 0)
@@ -177,21 +240,8 @@ class HypothesisTests(StoreTestCase):
         self.assertEqual(result[0]['state'], 'retired')
 
     def test_six_hypotheses_keep_the_300_listing_50_favorite_rerank_under_two_seconds(self):
-        identifiers = fill(self.store, 300, 50)
-        for round_number in range(2):
-            rerank(self.store, seed=1)
-            task = prepare(self.store)
-            summary = next(item['record']['summary'] for item in task['records'] if item['id'] == identifiers[0])
-            proposals = [{'phrase': f'benchmark detail {round_number * 3 + number}', 'kind': 'textual',
-                          'evidence': [{'id': identifiers[0], 'text': summary}]} for number in range(3)]
-            save(self.store, {'rerank': task['rerank'], 'reasons': [], 'flags': [], 'findings': [], 'hypotheses': proposals})
-            if round_number == 0:
-                self.store.answer_pair(identifiers[50], identifiers[51])
-        fingerprints = {item['id']: item['fingerprint'] for item in self.store.ranking_inputs()['listings']}
-        entries = [{'hypothesis': hypothesis['id'], 'id': identifier, 'fingerprint': fingerprints[identifier],
-                    'verdict': 'has' if index % (number + 2) == 0 else 'rules out', 'evidence': 'Fixture.'}
-                   for number, hypothesis in enumerate(active(self.store)) for index, identifier in enumerate(identifiers)]
-        save_judgments(self.store, entries)
+        from ranking_hypothesis_experiment import populate_benchmark
+        populate_benchmark(self.store)
         seconds, result = least_cpu_seconds(lambda: rerank(self.store, seed=1))
         self.assertEqual(sum(name.startswith('hypothesis:') for name in result['weights']), 6)
         self.assertLess(seconds, 2.0)
@@ -203,6 +253,9 @@ class HypothesisTests(StoreTestCase):
         self.assertEqual([item['phrase'] for item in survivors], ['original wood trim'])
         self.assertGreater(survivors[0]['rank_summary']['mean_improvement'], 0)
         self.assertEqual(result['requested_passes'], result['reranks_with_new_labels'])
+        store = type(self.store)(self.home / 'survival' / 'listings.sqlite3')
+        store.request_contact('zillow:0000')
+        self.assertEqual(len(assess(store)[0]['comparisons']['rank']), 20)
 
 
 class CopyTests(StoreTestCase):

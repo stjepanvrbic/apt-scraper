@@ -107,6 +107,7 @@
         ],
         "pair": []
       },
+      "pair_scoring": "Chance credit for tied scores; paired prequential accuracy, not a binomial Wilson estimate.",
       "rank_summary": {
         "with_median": 35.5,
         "with_interval": [
@@ -121,7 +122,7 @@
         "mean_improvement": 6.0,
         "improvement_interval": [
           2.85,
-          10.85
+          10.8
         ]
       }
     },
@@ -137,7 +138,8 @@
       "comparisons": {
         "rank": [],
         "pair": []
-      }
+      },
+      "pair_scoring": "Chance credit for tied scores; paired prequential accuracy, not a binomial Wilson estimate."
     },
     {
       "id": "0853c2550c82c3ae114b97ce48ffd4a9b84c0dcbc287aa35b73e24aa03fdc24b",
@@ -151,10 +153,42 @@
       "comparisons": {
         "rank": [],
         "pair": []
-      }
+      },
+      "pair_scoring": "Chance credit for tied scores; paired prequential accuracy, not a binomial Wilson estimate."
     }
   ],
-  "real_garden_proposal": "not run, real store absent",
-  "real_twenty_label_survival": "not run, real store absent",
-  "promotion": "automatic hypothesis generation stays outside the installed review job"
+  "real_garden_proposal": "Reported separately from this scripted fixture.",
+  "real_twenty_label_survival": "Reported separately from this scripted fixture.",
+  "pass_storage": {
+    "count": 21,
+    "compressed_mean_bytes": 18287.238095238095,
+    "compressed_interval": [
+      18228.619047619046,
+      18341.666666666668
+    ],
+    "raw_mean_bytes": 182127.52380952382
+  },
+  "promotion": "automatic hypothesis generation stays outside the installed review job",
+  "rerank_benchmark": {
+    "listings": 300,
+    "favorites": 50,
+    "hypotheses": 6,
+    "cpu_seconds": [
+      1.140625,
+      1.140625,
+      1.125
+    ],
+    "least_cpu_seconds": 1.125,
+    "observed_range": [
+      1.125,
+      1.140625
+    ],
+    "bar_met": true,
+    "timing_selection": "Least of three complete reranks, including store read/write and leave-one-out."
+  },
+  "run": {
+    "id": "28a691e39bf08d7a",
+    "date_utc": "2026-10-28",
+    "command": "python tests/ranking_hypothesis_experiment.py docs/research/ranking_measurements_phase3.json --benchmark"
+  }
 }

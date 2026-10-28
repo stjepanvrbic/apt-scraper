@@ -9,10 +9,15 @@ test('Rankings marks guesses and confirms or rejects them without moving listing
   execFileSync('python', ['-c', `import sys
 sys.path.insert(0, sys.argv[1])
 from ranking_hypothesis_experiment import seed_hypotheses, ListingStore
-seed_hypotheses(ListingStore(sys.argv[2]), count=30)`, resolve('../tests'), gallery.database]);
+from hypotheses import assess
+store = ListingStore(sys.argv[2])
+seed_hypotheses(store, count=30)
+assess(store)`, resolve('../tests'), gallery.database]);
   await page.goto(gallery.url);
   const guesses = page.getByRole('region', { name: 'Preference guesses' });
   await expect(guesses).toContainText("the model's guesses");
+  await expect(guesses).toContainText('Still learning about: white kitchen cabinet doors');
+  await expect(guesses.getByRole('button', { name: 'Confirm preference: white kitchen cabinet doors', exact: true })).toBeDisabled();
   await expect(page.getByText('Learning from 2 labels', { exact: true })).toBeVisible();
   const ranks = await page.locator('.rank-badge').allTextContents();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);

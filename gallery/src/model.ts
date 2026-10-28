@@ -52,7 +52,7 @@ export type RerankSummary = {
   held_out_median: number | null; held_out_mean: number | null;
   exploration: string[]; findings: string[]; stale: string[]; review: Review | null; seconds?: number;
 };
-export type Hypothesis = { id: string; phrase: string; kind: 'textual' | 'visual'; direction: 'like' | 'dislike' };
+export type Hypothesis = { id: string; phrase: string; kind: 'textual' | 'visual'; direction: 'like' | 'dislike' | null };
 export type RerankState = { running: boolean; last_rerank: RerankSummary | null; hypotheses?: Hypothesis[] };
 
 export const price = (listing: ListingSummary) => listing.price === null ? listing.price_note ?? 'Price not listed' : new Intl.NumberFormat(undefined, {

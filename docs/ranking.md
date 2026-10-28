@@ -257,3 +257,14 @@ A Rankings card records an impression after at least half of it remains visible 
 Favorite and dismiss offer an optional one-line reason. Save reason writes a normal user note, which the existing note-reading job reads into sentiment and feature preferences. Skip leaves the action saved without a note; a failed save keeps the text for retry.
 
 The prior-only cold-start experiment is in `tests/ranking_selector_experiment.py`. Neither mean curve reached 0.75 within 40 answers over 200 users on synthetic records. On the 28 eligible real feature records with virtual tastes, both reached it at 20 answers: zero reduction, with a 95% interval from -25% to +20%, below the required 25%. The installed variance selector stays unchanged.
+
+
+### Trial hypotheses
+
+The hypothesis trial prepares a no-move review with at most three evidence-backed concepts per new label state. At most six remain live. Text judgments reuse the preference format in batches of 25 listings; visual judgments read cached sheets for labeled listings and the top 50, with at most six full-resolution opens per listing. The scheduled review remains unchanged while real-store validation is unmet.
+
+Run `python profile/skills/ranking/scripts/hypothesis_trial.py init <copied-store.sqlite3> <new-trial-directory>` to make a working database without opening the source in SQLite. `prepare <working-database> <tasks-directory>` reranks only after new labels and writes a review task. `apply-review ... --file <output.json>` validates it; `judgments ... --cache <extraction-cache>` writes judgment tasks; `apply-judgments` saves complete results; `assess` evaluates the hypotheses after judgments and new labels. These commands use an explicit working copy. Model tasks must run in an isolated configured runtime, using the cached content only.
+
+Judged hypotheses become named sparse columns with zero prior mean and a standard deviation at most 0.5. After 20 new labels they retire unless their absolute fitted weight is at least 0.1 and the paired chronological check with them is no worse than without them. This magnitude threshold is not a significance test; assessments include a separate Laplace interval. Removals and neutralized notes do not advance the label clock. Known-positive actions do not enter held-out ranks; tied pair scores receive chance credit for the paired comparison. With no survivor after 40 new labels, later passes request reasons, flags and findings only.
+
+Rankings distinguishes a guessed like or dislike from a concept whose direction is still unknown. Confirming a scored guess copies its judgments into a stated preference; rejecting it retires the phrase permanently. An unknown direction cannot be confirmed until assessed. Neither action moves the already-displayed order. The panel also reports the number of explicit listing labels and Compare answers in the fit.

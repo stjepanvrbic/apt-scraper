@@ -241,8 +241,8 @@ def ranking_hypotheses(connection):
     connection.execute('''CREATE TABLE hypothesis_judgments (hypothesis TEXT NOT NULL REFERENCES hypotheses(id),
         listing_id TEXT NOT NULL REFERENCES listings(id), fingerprint TEXT NOT NULL, verdict TEXT NOT NULL,
         evidence TEXT NOT NULL, PRIMARY KEY (hypothesis, listing_id))''')
-    connection.execute('''CREATE TABLE hypothesis_passes (signature TEXT PRIMARY KEY, rerank_id INTEGER NOT NULL,
-        inputs TEXT NOT NULL, task TEXT NOT NULL, saved INTEGER NOT NULL DEFAULT 0)''')
+    connection.execute('''CREATE TABLE hypothesis_passes (label_event INTEGER PRIMARY KEY, rerank_id INTEGER NOT NULL,
+        task BLOB NOT NULL, saved INTEGER NOT NULL DEFAULT 0)''')
 
 
 # Persisted schema versions must not shift when a migration is removed.

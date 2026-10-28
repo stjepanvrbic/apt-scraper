@@ -8,9 +8,10 @@ import hashlib
 import json
 import math
 import re
+import zlib
 from statistics import fmean, median
 
-from learning import decode, encode, prediction
+from learning import compress, decode, prediction
 from record import CATEGORIES, RATINGS, validate_judgments
 from review import review_outcome, review_task, validated_review
 from scoring import design, fit_model, label, labeled
@@ -20,31 +21,25 @@ MAX_PROPOSALS = 3
 GRACE_LABELS = 20
 STOP_LABELS = 40
 MIN_WEIGHT = 0.1
+LABEL_EVENT_FILTER = "(kind IN ('favorite', 'dismiss', 'contact', 'pair') OR (kind = 'note' AND other IN ('positive', 'negative')))"
 
 
 def active(store):
     with store.connect() as connection:
         return [{**dict(row), 'evidence': json.loads(row['evidence']), 'assessment': json.loads(row['assessment']),
-                 'direction': 'like' if row['weight'] >= 0 else 'dislike'}
+                 'direction': ('like' if row['weight'] > 0 else 'dislike') if row['weight'] else None}
                 for row in connection.execute("SELECT * FROM hypotheses WHERE state = 'active' ORDER BY rowid")]
 
 
 def event_number(connection):
-    return connection.execute('SELECT COALESCE(MAX(id), 0) FROM learning_events').fetchone()[0]
+    return connection.execute(f'SELECT COALESCE(MAX(id), 0) FROM learning_events WHERE {LABEL_EVENT_FILTER}').fetchone()[0]
 
 
 def stopped(connection):
     first = connection.execute('SELECT MIN(start_event) FROM hypotheses').fetchone()[0]
     surviving = connection.execute("SELECT 1 FROM hypotheses WHERE state = 'active' AND json_extract(assessment, '$.survives') = 1").fetchone()
-    return first is not None and event_number(connection) - first >= STOP_LABELS and not surviving
-
-
-def label_signature(inputs, number):
-    labels = {listing['id']: [listing['favorite'], listing['dismissed'], listing['contact']] for listing in inputs['listings']
-              if listing['favorite'] or listing['dismissed'] or listing['contact']}
-    readings = {identifier: reading for identifier, reading in inputs['note_readings'].items()
-                if reading['sentiment'] in ('positive', 'negative') or reading['likes'] or reading['dislikes']}
-    return hashlib.sha256(json.dumps([number, labels, readings, inputs['pairs']], sort_keys=True).encode()).hexdigest()
+    count = connection.execute(f'SELECT COUNT(*) FROM learning_events WHERE id > ? AND {LABEL_EVENT_FILTER}', (first,)).fetchone()[0]
+    return first is not None and count >= STOP_LABELS and not surviving
 
 
 def has_new_labels(store):
@@ -52,8 +47,7 @@ def has_new_labels(store):
     if not inputs['pairs'] and not any(label(listing, inputs['sentiments'].get(listing['id'])) is not None for listing in inputs['listings']):
         return False
     with store.connect() as connection:
-        signature = label_signature(inputs, event_number(connection))
-        return connection.execute('SELECT 1 FROM hypothesis_passes WHERE signature = ?', (signature,)).fetchone() is None
+        return connection.execute('SELECT 1 FROM hypothesis_passes WHERE label_event = ?', (event_number(connection),)).fetchone() is None
 
 
 def prepare(store):
@@ -65,8 +59,7 @@ def prepare(store):
         return None
     with store.connect(write=True) as connection:
         number = event_number(connection)
-        signature = label_signature(inputs, number)
-        if connection.execute('SELECT 1 FROM hypothesis_passes WHERE signature = ?', (signature,)).fetchone():
+        if connection.execute('SELECT 1 FROM hypothesis_passes WHERE label_event = ?', (number,)).fetchone():
             return None
         existing = [dict(row) for row in connection.execute('SELECT * FROM hypotheses')]
         allowed = 0 if stopped(connection) else min(MAX_PROPOSALS, MAX_LIVE - sum(item['state'] == 'active' for item in existing))
@@ -79,8 +72,8 @@ def prepare(store):
         task['label_evidence'] = {'actions': {listing['id']: label(listing, inputs['sentiments'].get(listing['id']))
                                              for listing in inputs['listings'] if label(listing, inputs['sentiments'].get(listing['id'])) is not None},
                                   'pairs': inputs['pairs']}
-        connection.execute('INSERT INTO hypothesis_passes (signature, rerank_id, inputs, task) VALUES (?, ?, ?, ?)',
-                           (signature, last['id'], encode(inputs), json.dumps(task)))
+        connection.execute('INSERT INTO hypothesis_passes (label_event, rerank_id, task) VALUES (?, ?, ?)',
+                           (number, last['id'], compress(json.dumps(task))))
     return task
 
 
@@ -124,7 +117,7 @@ def save(store, value):
         request = connection.execute('SELECT * FROM hypothesis_passes WHERE rerank_id = ? AND saved = 0', (last['id'],)).fetchone()
     if request is None:
         raise ValueError('No hypothesis pass is pending.')
-    task = json.loads(request['task'])
+    task = json.loads(zlib.decompress(request['task']))
     proposals = checked_proposals(value['hypotheses'], task)
     snapshot = store.review_snapshot(last['id'])
     review = validated_review({key: value[key] for key in ('rerank', 'reasons', 'flags', 'findings')} | {'moves': []},
@@ -138,7 +131,7 @@ def save(store, value):
             connection.execute("INSERT INTO hypotheses (id, phrase, kind, state, evidence, start_event) VALUES (?, ?, ?, 'active', ?, ?)",
                                (proposal['id'], proposal['phrase'], proposal['kind'], json.dumps(proposal['evidence']), number))
         store.save_review(last['id'], ranks, reasons, result, connection=connection)
-        connection.execute('UPDATE hypothesis_passes SET saved = 1 WHERE signature = ?', (request['signature'],))
+        connection.execute('UPDATE hypothesis_passes SET saved = 1 WHERE label_event = ?', (request['label_event'],))
     return {**result, 'hypotheses': len(proposals)}
 
 
@@ -203,6 +196,8 @@ def decide(store, identifier, decision):
         if hypothesis is None or hypothesis['state'] != 'active':
             raise ValueError('This hypothesis is no longer active.')
         if decision == 'confirm':
+            if not hypothesis['weight']:
+                raise ValueError('This hypothesis has no learned direction yet.')
             row = connection.execute("SELECT value FROM settings WHERE name = 'preferences'").fetchone()
             preferences = json.loads(row['value']) if row else {'likes': [], 'dislikes': []}
             direction = 'likes' if hypothesis['weight'] >= 0 else 'dislikes'
@@ -224,7 +219,7 @@ def assess(store):
     weights = dict(zip((column.name for column in model.design.columns), model.fit.weights[1:]))
     results = []
     with store.connect() as connection:
-        events = [dict(row) for row in connection.execute('SELECT * FROM learning_events ORDER BY id')]
+        events = [dict(row) for row in connection.execute(f'SELECT * FROM learning_events WHERE {LABEL_EVENT_FILTER} ORDER BY id')]
     for hypothesis in active(store):
         later = [event for event in events if event['id'] > hypothesis['start_event']]
         weight = weights.get(f'hypothesis:{hypothesis["phrase"]}', 0)
@@ -246,7 +241,7 @@ def assess(store):
                 for listing in without['listings']:
                     listing.get('hypotheses', {}).pop(hypothesis['phrase'], None)
                 without_column = prediction(without, event)
-                if with_column and without_column:
+                if with_column and without_column and not with_column.get('already_positive'):
                     comparisons[with_column['kind']].append([with_column['value'], without_column['value']])
         ranks, pairs = comparisons['rank'], comparisons['pair']
         survives = bool(ranks or pairs) and abs(weight) >= MIN_WEIGHT
@@ -256,6 +251,7 @@ def assess(store):
         result = {'id': hypothesis['id'], 'phrase': hypothesis['phrase'], 'state': state, 'labels': len(later),
                   'weight': weight, 'weight_interval': interval, 'weight_interval_method': '95% Laplace normal interval when a column exists',
                   'survives': bool(survives), 'comparisons': comparisons}
+        result['pair_scoring'] = 'Chance credit for tied scores; paired prequential accuracy, not a binomial Wilson estimate.'
         results.append(result)
     with store.connect(write=True) as connection:
         for result in results:

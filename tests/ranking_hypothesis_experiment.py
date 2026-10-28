@@ -1,9 +1,14 @@
 """Exercise a hypothesis lifecycle with a declared synthetic cue; no model proposal is claimed."""
 
 import argparse
+import hashlib
 import json
+import shlex
 import sys
 import tempfile
+import time
+import zlib
+from datetime import datetime, timezone
 from pathlib import Path
 from statistics import fmean, median
 
@@ -14,6 +19,25 @@ from hypotheses import active, assess, pending_judgments, prepare, save, save_ju
 from measurement import bootstrap
 from rerank import rerank
 from store import ListingStore
+
+
+def populate_benchmark(store):
+    store.update_settings(**SETTINGS)
+    identifiers = fill(store, 300, 50)
+    for round_number in range(2):
+        rerank(store, seed=1)
+        task = prepare(store)
+        summary = next(item['record']['summary'] for item in task['records'] if item['id'] == identifiers[0])
+        proposals = [{'phrase': f'benchmark detail {round_number * 3 + number}', 'kind': 'textual',
+                      'evidence': [{'id': identifiers[0], 'text': summary}]} for number in range(3)]
+        save(store, {'rerank': task['rerank'], 'reasons': [], 'flags': [], 'findings': [], 'hypotheses': proposals})
+        if round_number == 0:
+            store.answer_pair(identifiers[50], identifiers[51])
+    fingerprints = {item['id']: item['fingerprint'] for item in store.ranking_inputs()['listings']}
+    entries = [{'hypothesis': hypothesis['id'], 'id': identifier, 'fingerprint': fingerprints[identifier],
+                'verdict': 'has' if index % (number + 2) == 0 else 'rules out', 'evidence': 'Fixture.'}
+               for number, hypothesis in enumerate(active(store)) for index, identifier in enumerate(identifiers)]
+    save_judgments(store, entries)
 
 
 def seed_hypotheses(store, count=60):
@@ -56,10 +80,17 @@ def run(directory):
         if task:
             save(store, {'rerank': task['rerank'], 'reasons': [], 'flags': [], 'findings': [], 'hypotheses': []})
     assessments = assess(store)
+    with store.connect() as connection:
+        tasks = [row['task'] for row in connection.execute('SELECT task FROM hypothesis_passes')]
+    sizes = [len(task) for task in tasks]
     report = {'data': 'synthetic fixture; scripted proposals and known judgments, not model output',
               'new_labels': 20, 'requested_passes': requests, 'reranks_with_new_labels': 21, 'remote_model_calls': 0,
               'budget': budget, 'assessments': assessments,
-              'real_garden_proposal': 'not run, real store absent', 'real_twenty_label_survival': 'not run, real store absent',
+              'real_garden_proposal': 'Reported separately from this scripted fixture.',
+              'real_twenty_label_survival': 'Reported separately from this scripted fixture.',
+              'pass_storage': {'count': len(tasks), 'compressed_mean_bytes': fmean(sizes),
+                               'compressed_interval': bootstrap(sizes, fmean),
+                               'raw_mean_bytes': fmean(len(zlib.decompress(task)) for task in tasks)},
               'promotion': 'automatic hypothesis generation stays outside the installed review job'}
     for item in assessments:
         pairs = item['comparisons']['rank']
@@ -75,9 +106,24 @@ def run(directory):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output', type=Path)
+    parser.add_argument('--benchmark', action='store_true')
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='ranking-hypotheses-') as directory:
         report = run(Path(directory))
+        if args.benchmark:
+            store = ListingStore(Path(directory) / 'benchmark.sqlite3')
+            populate_benchmark(store)
+            times = []
+            for _ in range(3):
+                started = time.process_time()
+                rerank(store, seed=1)
+                times.append(time.process_time() - started)
+            report['rerank_benchmark'] = {'listings': 300, 'favorites': 50, 'hypotheses': 6,
+                                          'cpu_seconds': times, 'least_cpu_seconds': min(times),
+                                          'observed_range': [min(times), max(times)], 'bar_met': min(times) < 2,
+                                          'timing_selection': 'Least of three complete reranks, including store read/write and leave-one-out.'}
+    report['run'] = {'id': hashlib.sha256(json.dumps(report, sort_keys=True).encode()).hexdigest()[:16],
+                     'date_utc': datetime.now(timezone.utc).date().isoformat(), 'command': shlex.join(['python', *sys.argv])}
     args.output.write_text(json.dumps(report, indent=2, allow_nan=False) + '\n')
 
 
