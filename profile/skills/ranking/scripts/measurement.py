@@ -15,9 +15,9 @@ from statistics import NormalDist, fmean, median
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'gallery/scripts'))
 
-from learning import decode, encode  # noqa: E402
+from learning import decode, encode, prediction  # noqa: E402
 from record import CATEGORIES, FLAGS, RATINGS  # noqa: E402
-from scoring import design, dot, fit_model, label, labeled, leave_one_out, ranked_order, scores  # noqa: E402
+from scoring import design, dot, fit_model, labeled, leave_one_out, ranked_order, scores  # noqa: E402
 from store import ListingStore  # noqa: E402
 
 PAIR_TIE_POLICY = 'Chance credit for tied model scores or tied latent tastes; bootstrap over runs.'
@@ -75,30 +75,19 @@ def replay(events, fitter=fit_model):
         if event['kind'] not in ('favorite', 'contact', 'pair'):
             continue
         inputs = {**event['inputs'], 'history': events[:index]}
-        values = utilities(fitter(inputs))
-        identifier = event['listing']
-        if event['kind'] == 'pair':
-            if identifier not in values or event['other'] not in values:
-                excluded += 1
-                continue
-            difference = values[identifier] - values[event['other']]
-            if difference == 0:
+        result = prediction(inputs, event, fitter)
+        if result is None:
+            excluded += 1
+        elif result['kind'] == 'pair':
+            if result['tied']:
                 ties += 1
             else:
-                answers.append(difference > 0)
+                answers.append(result['value'])
         else:
-            candidates = [listing['id'] for listing in inputs['listings']
-                          if listing['rankable'] and listing.get('rank') is not None and listing['id'] in values]
-            if identifier not in candidates:
-                excluded += 1
-                continue
-            order = sorted(candidates, key=lambda key: (-values[key], key))
-            listing = next(item for item in inputs['listings'] if item['id'] == identifier)
-            previous = label(listing, inputs['sentiments'].get(identifier))
-            already_positive = previous is not None and previous[0] == 1
-            destination = known_positive if already_positive else held_out
-            destination.append({'listing': identifier, 'kind': event['kind'], 'rank': order.index(identifier) + 1,
-                                'displayed_rank': listing['rank'], 'candidates': len(order), 'already_positive': already_positive})
+            destination = known_positive if result['already_positive'] else held_out
+            destination.append({'listing': event['listing'], 'kind': event['kind'], 'rank': result['value'],
+                                'displayed_rank': result['displayed_rank'], 'candidates': result['candidates'],
+                                'already_positive': result['already_positive']})
     ranks = [item['rank'] for item in held_out]
     displayed = [item['displayed_rank'] for item in held_out]
     top = [int(rank <= 20) for rank in ranks]

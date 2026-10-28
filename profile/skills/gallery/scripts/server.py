@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 from chat import ChatController
 from rerank import pairwise_questions, rerank
+from hypotheses import active as active_hypotheses, decide as decide_hypothesis
 
 
 STATIC = Path(__file__).resolve().parents[1] / 'web'
@@ -74,7 +75,7 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                     if path == '/api/revision':
                         result = {'revision': store.revision()}
                     elif path == '/api/rerank':
-                        result = {'running': rerank_lock.locked(), 'last_rerank': store.last_rerank()}
+                        result = {'running': rerank_lock.locked(), 'last_rerank': store.last_rerank(), 'hypotheses': active_hypotheses(store)}
                     elif path == '/api/compare':
                         result = comparison(store)
                     elif path == '/api/compare/invitation':
@@ -171,6 +172,9 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                 elif parts == ['api', 'compare', 'skip']:
                     self.require_fields(body, {'first', 'second'})
                     store.skip_pair(body['first'], body['second'])
+                elif len(parts) == 4 and parts[:2] == ['api', 'hypotheses']:
+                    self.require_fields(body, set())
+                    decide_hypothesis(store, parts[2], parts[3])
                 elif parts == ['api', 'rerank']:
                     self.require_fields(body, set())
                     if not rerank_lock.acquire(blocking=False):

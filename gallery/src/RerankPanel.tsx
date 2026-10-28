@@ -48,6 +48,7 @@ export function RerankPanel({ ranking, open, busy, galleryReadError }: { ranking
   const { query, mutation, run, running } = ranking;
   const summary = query.data?.last_rerank;
   const review = summary?.review;
+  const hypotheses = query.data?.hypotheses ?? [];
   return <Paper component="section" aria-label="Ranking controls and results" radius={20} withBorder p="lg" mb="lg" className="rerank-panel">
     <Stack gap="md">
       <Group justify="space-between" align="center" className="rerank-heading">
@@ -62,6 +63,21 @@ export function RerankPanel({ ranking, open, busy, galleryReadError }: { ranking
         <Button mt="sm" size="xs" variant="light" color="red" loading={query.isFetching} onClick={() => void query.refetch()}>Retry ranking status</Button>
       </Alert>}
       {mutation.isError && <Alert color="red" title="Could not rerank">{mutation.error.message}</Alert>}
+      {summary?.labels !== undefined && <Text size="sm" c="dimmed">Learning from {summary.labels} {summary.labels === 1 ? 'label' : 'labels'}</Text>}
+      {!!hypotheses.length && <Stack component="section" aria-label="Preference guesses" gap="sm">
+        <Title order={3} size="h5">Preference guesses</Title>
+        <Text size="sm" c="dimmed">These are the model's guesses. Confirm one to make it a stated preference.</Text>
+        {hypotheses.map(item => <Group key={item.id} justify="space-between" align="start" gap="sm">
+          <Text size="sm" style={{ flex: '1 1 200px', minWidth: 0, overflowWrap: 'anywhere' }}>{item.direction ? `You may ${item.direction}: ${item.phrase}` : `Still learning about: ${item.phrase}`}</Text>
+          <Group gap="xs"><Button size="xs" variant="light" disabled={busy || ranking.hypothesis.isPending || !item.direction}
+            loading={ranking.hypothesis.isPending && ranking.hypothesis.variables?.id === item.id && ranking.hypothesis.variables.decision === 'confirm'}
+            aria-label={`Confirm preference: ${item.phrase}`} onClick={() => ranking.hypothesis.mutate({ id: item.id, decision: 'confirm' })}>Confirm preference</Button>
+            <Button size="xs" variant="subtle" color="dark" disabled={busy || ranking.hypothesis.isPending}
+              loading={ranking.hypothesis.isPending && ranking.hypothesis.variables?.id === item.id && ranking.hypothesis.variables.decision === 'reject'}
+              aria-label={`Reject guess: ${item.phrase}`} onClick={() => ranking.hypothesis.mutate({ id: item.id, decision: 'reject' })}>Reject guess</Button></Group>
+        </Group>)}
+      </Stack>}
+      {ranking.hypothesis.isError && <Alert color="red" title="Could not save your decision">{ranking.hypothesis.error.message}</Alert>}
       <div role="status" aria-live="polite" aria-atomic="true">
         {running ? <Text size="sm">Scoring your listings and checking each favorite…</Text> : summary ?
           <Group gap="sm"><Badge variant="light" tt="none" color="gray">{summary.ranked} ranked</Badge>

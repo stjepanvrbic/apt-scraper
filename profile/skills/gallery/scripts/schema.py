@@ -232,10 +232,23 @@ def card_impressions(connection):
     connection.execute("CREATE INDEX impressions_visit ON implicit_signals(visit_id) WHERE kind = 'impression'")
 
 
+def ranking_hypotheses(connection):
+    connection.execute('''CREATE TABLE hypotheses (id TEXT PRIMARY KEY, phrase TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL CHECK (kind IN ('textual', 'visual')),
+        state TEXT NOT NULL CHECK (state IN ('active', 'retired', 'confirmed')),
+        evidence TEXT NOT NULL, start_event INTEGER NOT NULL, weight REAL NOT NULL DEFAULT 0,
+        assessment TEXT NOT NULL DEFAULT '{}')''')
+    connection.execute('''CREATE TABLE hypothesis_judgments (hypothesis TEXT NOT NULL REFERENCES hypotheses(id),
+        listing_id TEXT NOT NULL REFERENCES listings(id), fingerprint TEXT NOT NULL, verdict TEXT NOT NULL,
+        evidence TEXT NOT NULL, PRIMARY KEY (hypothesis, listing_id))''')
+    connection.execute('''CREATE TABLE hypothesis_passes (label_event INTEGER PRIMARY KEY, rerank_id INTEGER NOT NULL,
+        task TEXT NOT NULL, saved INTEGER NOT NULL DEFAULT 0)''')
+
+
 # Persisted schema versions must not shift when a migration is removed.
 MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals,
               notes_session_per_database, structured_reasons, reviews_with_inputs, compare_invitation, learning_events, lambda connection: None,
-              card_impressions, plain_learning_events)
+              card_impressions, plain_learning_events, ranking_hypotheses)
 
 
 def migrate(connection):

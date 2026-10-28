@@ -14,12 +14,16 @@ from features import Features, extracted_preferences  # noqa: E402
 from record import validate_extraction  # noqa: E402
 
 
+class MissingCachedPhotos(ValueError):
+    """The cache no longer contains all of the named photos or sheets."""
+
+
 def cached_files(root, manifest_file, names):
     paths = [(manifest_file.parent / name).resolve() for name in names]
     if any(not path.is_relative_to(root.resolve()) for path in paths):
         raise ValueError('Cached photo paths must stay inside the supplied cache.')
     if any(not path.is_file() for path in paths):
-        raise ValueError('A cached photo or sheet is missing.')
+        raise MissingCachedPhotos('A cached photo or sheet is missing.')
     return paths
 
 

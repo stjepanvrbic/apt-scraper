@@ -46,12 +46,14 @@ export type Review = { attempts: number; updated_at: string } & (
   { state: 'done'; result: ReviewResult }
 );
 export type RerankSummary = {
+  labels?: number;
   id: number; finished_at: string; ranked: number; waiting_for_features: number; favorites: number;
   held_out: { id: string; title: string; rank: number }[];
   held_out_median: number | null; held_out_mean: number | null;
   exploration: string[]; findings: string[]; stale: string[]; review: Review | null; seconds?: number;
 };
-export type RerankState = { running: boolean; last_rerank: RerankSummary | null };
+export type Hypothesis = { id: string; phrase: string; kind: 'textual' | 'visual'; direction: 'like' | 'dislike' | null };
+export type RerankState = { running: boolean; last_rerank: RerankSummary | null; hypotheses?: Hypothesis[] };
 
 export const price = (listing: ListingSummary) => listing.price === null ? listing.price_note ?? 'Price not listed' : new Intl.NumberFormat(undefined, {
   ...(listing.currency ? { style: 'currency', currency: listing.currency } : {}), maximumFractionDigits: 0,

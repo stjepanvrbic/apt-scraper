@@ -139,11 +139,11 @@ def price_text(listing):
     return ' '.join(str(part) for part in (listing['price'], listing.get('currency'), listing.get('rental_period') and f'a {listing["rental_period"]}') if part)
 
 
-def listing_fields(listing, limit):
+def listing_fields(listing, limit=None):
     """What a listing site says about the listing, as data for a model. It enters a prompt only JSON-encoded, so no line
     of a title or description can pass for a line of the instructions around it."""
     description = listing.get('description') or None
-    if description and len(description) > limit:
+    if description and limit is not None and len(description) > limit:
         description = description[:limit] + ' [shortened]'
     return {'title': listing.get('title'), 'address': listing.get('address'), 'price': price_text(listing), 'rooms': listing.get('rooms'),
             'size': listing.get('size'), 'amenities': listing.get('amenities') or [], 'description': description}

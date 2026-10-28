@@ -196,6 +196,9 @@ class CompareInvitationTests(FeaturesTestCase):
         with closing(sqlite3.connect(self.store.path)) as connection, connection:
             connection.execute('DROP TABLE compare_invitation')
             connection.execute('DROP TABLE learning_events')
+            connection.execute('DROP TABLE hypothesis_judgments')
+            connection.execute('DROP TABLE hypotheses')
+            connection.execute('DROP TABLE hypothesis_passes')
             connection.execute('DROP TABLE implicit_signals')
             implicit_signals(connection)
             connection.execute(f'PRAGMA user_version = {MIGRATIONS.index(compare_invitation)}')
