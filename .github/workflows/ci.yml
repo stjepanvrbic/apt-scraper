@@ -95,7 +95,9 @@ jobs:
           for job in contact search features review encoder; do
             printf '%s\n' "$jobs" | grep -E "apt-scraper-$job.*\[active\]"
           done
-          hermes -p apt-scraper plugins list --plain | tee /dev/stderr | grep claude-subscription-directsdk
+          plugins=$(hermes -p apt-scraper plugins list --plain)
+          printf '%s\n' "$plugins"
+          printf '%s\n' "$plugins" | grep claude-subscription-directsdk
           hermes -p apt-scraper skills list || echo "skills list exited with $?"
           hermes_home=$HOME/.hermes
           if [ -n "${LOCALAPPDATA:-}" ]; then hermes_home=$LOCALAPPDATA/hermes; fi
