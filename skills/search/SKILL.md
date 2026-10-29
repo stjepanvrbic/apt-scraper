@@ -50,7 +50,7 @@ If no job has that id, the profile was not installed by the install line. Tell t
 - A site the search has no reader for: tell the user the search cannot read this site yet, and offer to replace it with a site it can read.
 - An area the site does not know: ask the user to name the area the way the site does, then save the criteria through the interview skill.
 - A site whose pages changed shape, a listing page that could not be read, or a run that failed: the message says what failed. Tell the user that the search skips it and that apt-scraper needs an update if it repeats.
-- The search environment is missing or could not be rebuilt: tell the user to run the install line again; the next search run builds it.
+- The search environment is missing or could not be rebuilt: the next search run builds it again, and the problem text says why the build failed.
 
 ## Reporting
 

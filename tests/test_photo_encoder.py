@@ -255,13 +255,19 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(self.launch(['install'], opener=lambda url: io.BytesIO(b'other!!'))[0], encoder_run.MODEL_FAILED)
 
     def test_the_cron_run_never_fails_and_records_its_problem(self):
+        code, lines = self.launch([], opener=lambda url: io.BytesIO(b'other!!'))
+        self.assertEqual((code, lines[-1]), (0, '{"wakeAgent": false}'))
+        self.assertIn('could not be set up', self.status()['problem'])
         code, lines = self.launch([])
         self.assertEqual((code, lines[-1]), (0, '{"wakeAgent": false}'))
-        self.assertIn('Rerun the apt-scraper installer', self.status()['problem'])
-        self.launch(['install'])
-        code, lines = self.launch([])
-        self.assertEqual((code, lines), (0, ['{"wakeAgent": false}']))
         self.assertEqual(self.status(), {**self.status(), 'problem': None, 'last': {'embedded': 3}})
+
+    def test_the_first_run_builds_the_environment_and_downloads_the_tower_itself(self):
+        code, lines = self.launch([])
+        self.assertEqual((code, lines[-1]), (0, '{"wakeAgent": false}'))
+        self.assertTrue(assets.ready(self.manifest, self.home / 'workspace' / 'encoder' / 'model'))
+        self.assertEqual([command[1:3] for command in self.calls][:2], [['-m', 'venv'], ['-m', 'pip']])
+        self.assertEqual(self.status()['last'], {'embedded': 3})
 
     def test_a_model_that_failed_its_quality_measurements_is_never_built_or_downloaded(self):
         (self.home / 'model.json').write_text(json.dumps({**self.manifest, 'quality': {'passed': False}}))

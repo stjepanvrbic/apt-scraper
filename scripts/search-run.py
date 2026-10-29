@@ -2,11 +2,12 @@
 
 Commands:
   search-run.py           one search pass, as the cron job runs it
-  search-run.py install   build the search's Python environment. The installers run this with Hermes's Python.
+  search-run.py install   build the search's Python environment by hand, with Hermes's Python.
 
 The search needs curl_cffi, which Hermes's Python lacks, so it runs in its own environment under
 HERMES_HOME/workspace/search/environment, built from the hash-pinned wheels in the search skill's
-requirements.txt. The cron run rebuilds it only when Hermes's Python or the requirements changed.
+requirements.txt. The first eligible cron run builds it, and later runs rebuild it only when Hermes's Python or
+the requirements changed.
 
 Hermes wakes the model whenever a cron script fails (cron/scheduler_prompt.py, "Script Error"). So the cron
 run never fails: it records any problem for search.py status and ends with {"wakeAgent": false}.
@@ -67,13 +68,12 @@ def search_once(home, directory, run):
         print(NO_WAKE)
         return
     problem = None
-    if not environment_python(directory).exists():
-        problem = 'The search environment is missing. Rerun the apt-scraper installer.'
-    elif not current(directory):
+    # The first eligible run builds the environment; later runs rebuild it when Hermes's Python or the requirements changed.
+    if not environment_python(directory).exists() or not current(directory):
         try:
             build(directory, run)
         except (subprocess.CalledProcessError, OSError) as error:
-            problem = f'The search environment could not be rebuilt for Python {sys.version.split()[0]}: {error}. Rerun the apt-scraper installer.'
+            problem = f'The search environment could not be built for Python {sys.version.split()[0]}: {error}'
     if problem is None:
         result = run([str(environment_python(directory)), str(SEARCH), 'run'], env=isolated(), stderr=subprocess.PIPE, text=True,
                      encoding='utf-8', errors='replace')

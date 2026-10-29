@@ -113,12 +113,21 @@ class LauncherTests(unittest.TestCase):
         self.launch()
         self.assertEqual([command[-1] for command in self.commands], ['run'])
 
-    def test_a_missing_environment_is_recorded_for_status_without_waking_the_model(self):
+    def test_the_first_eligible_run_builds_the_missing_environment_and_searches(self):
         self.complete_interview()
         code, lines = self.launch()
-        self.assertEqual((code, self.commands), (0, []))
+        self.assertEqual(code, 0)
+        self.assertEqual([command[1:3] for command in self.commands][:2], [['-m', 'venv'], ['-m', 'pip']])
+        self.assertEqual([command[-1] for command in self.commands][-1:], ['run'])
+        self.assertIsNone(self.problem())
+
+    def test_a_build_that_fails_is_recorded_for_status_without_waking_the_model(self):
+        self.complete_interview()
+        self.pip_fails = True
+        code, lines = self.launch()
+        self.assertEqual(code, 0)
         self.assertEqual(lines[-1], '{"wakeAgent": false}')
-        self.assertIn('Rerun the apt-scraper installer', self.problem())
+        self.assertIn('could not be built', self.problem())
 
     def test_the_environment_is_rebuilt_once_when_hermes_python_changes(self):
         self.launch('install')
@@ -137,7 +146,7 @@ class LauncherTests(unittest.TestCase):
             self.requirements.write_text('curl-cffi==0.17.0 --hash=sha256:def\n', encoding='utf-8')
             code, lines = self.launch()
         self.assertEqual((code, lines[-1]), (0, '{"wakeAgent": false}'))
-        self.assertIn('Rerun the apt-scraper installer', self.problem())
+        self.assertIn('could not be built', self.problem())
 
     def test_the_search_report_passes_through_and_a_failed_search_is_recorded_without_waking_the_model(self):
         self.launch('install')

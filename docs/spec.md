@@ -109,7 +109,7 @@ A Hermes Agent profile, its one-line install and a local gallery app that find, 
 
 ## Acceptance
 
-- Installer: a fresh Windows machine and a fresh Mac each finish the one-line install with the test message passing and the dashboard's chat for `apt-scraper` open in the browser.
+- Install: a fresh Windows machine, a fresh Mac and a fresh Linux machine each finish the one-line install with the profile installed, its five scheduled jobs active, the subscription plugin, the Google Workspace skill, the computer-use driver and the gateway service in place, which CI checks on each push; after `claude auth login`, `hermes -p apt-scraper dashboard` opens the chat and the agent answers.
 - Search: of the matching listings a manual search of the listing sites finds that were posted more than a day earlier, the agent has already found at least 90%.
 - Interview: a first interview stores places and the location priorities.
 - Listing features: every unique photo of a test listing has a room type in its feature record, the agent's main conversation holds no image, and searching the unchanged listing again makes no extraction.

@@ -163,15 +163,19 @@ Your questions reach the user here while the gallery is closed, and their replie
    hermes -p apt-scraper config set TELEGRAM_HOME_CHANNEL "<the ID>"
    ```
 
-7. Open the dashboard's Channels page. The user opened the dashboard with `hermes -p apt-scraper dashboard`, on port 9119 unless they chose another. Check that Hermes answers there:
+7. Open the dashboard's Channels page. The dashboard is Hermes's own, `hermes -p apt-scraper dashboard`, on port 9119 unless the user chose another. Check that Hermes answers there:
 
    ```bash
-   curl -s --max-time 2 -w '
-%{http_code}
-' http://127.0.0.1:9119/api/health
+   curl -s --max-time 2 -w '\n%{http_code}\n' http://127.0.0.1:9119/api/health
    ```
 
-   Hermes answers only when the last line is `200` and the reply above it is JSON with `"ok": true` and a `version`. Any other program on that port answers differently. If anything else answers, or nothing does, ask the user which address their browser shows for the dashboard and use that. Then open `<the address>/channels?profile=apt-scraper` with `browser_navigate`.
+   Hermes answers only when the last line is `200` and the reply above it is JSON with `"ok": true` and a `version`. Any other program on that port answers differently. If nothing answers, start the dashboard yourself, without a window and without opening a browser, and check again after a few seconds:
+
+   ```bash
+   nohup hermes -p apt-scraper dashboard --no-open --skip-build </dev/null >/dev/null 2>&1 &
+   ```
+
+   If something else answers, or Hermes still does not, ask the user which address their browser shows for the dashboard and use that. Then open `<the address>/channels?profile=apt-scraper` with `browser_navigate`.
 
    On the Telegram card press **Manual setup**. Never press **Create with QR**: it creates the bot through a Nous-hosted service. The form shows the ID from step 6 under **Allowed Telegram user IDs**. Take a snapshot, then ask the user to click the **Telegram bot token** field in your window and paste the token from step 3. The field shows dots, and you never type into it. Leave **Webhook secret** empty and press **Save & enable**. The running gateway connects the bot within seconds, without a restart, and the Telegram card shows its state.
 8. Run `check gateway`. Ask the user to confirm the test message arrived in the bot chat.
