@@ -1,5 +1,5 @@
-# Runs the whole check suite, tests/run.sh or tests/run.ps1, on a fresh Linux, macOS and Windows machine.
-# The same scripts run in Windows Sandbox on the owner's PC through tests/sandbox.ps1.
+# Runs the whole check suite, tests/run.sh or tests/run.ps1, on a fresh Linux, macOS and Windows machine, and the
+# real install line, install.sh or install.ps1, on another fresh machine of each, with the checkout as the profile.
 name: CI
 
 on:
@@ -55,3 +55,37 @@ jobs:
             gallery/test-results
             ${{ runner.temp }}/apt-scraper-tests/pytest.xml
           if-no-files-found: ignore
+
+  install:
+    name: install on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Install
+        if: runner.os != 'Windows'
+        shell: bash
+        # The runner has no terminal, so the Claude login and the macOS permission dialogs are skipped.
+        run: ./install.sh "$PWD" < /dev/null
+      - name: Install
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .\install.ps1 -Source "$PWD"
+      - name: What the install left behind
+        shell: bash
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          hermes --version
+          hermes -p apt-scraper cron list
+          hermes -p apt-scraper cron list | grep -c apt-scraper- | grep -qx 5
+          ! hermes -p apt-scraper cron list | grep -i paused
+          hermes -p apt-scraper plugins list | grep claude-subscription-directsdk
+          hermes -p apt-scraper skills list | grep google-workspace
+          hermes -p apt-scraper computer-use status
+          hermes gateway status

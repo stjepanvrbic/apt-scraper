@@ -21,6 +21,7 @@ apt-scraper is a Hermes profile and nothing more. The user installs it with one 
 - [x] The bootstraps, the uninstallers, the dashboard launchers (`dashboard.vbs`, the LaunchAgent and the app bundle), the Start menu and login entries, their tests and the Windows Sandbox scripts are deleted. Uninstall is `hermes profile delete` plus two folders, documented in README.
 - [x] Every test runs on every platform; `tests/skips.py` fails any skip.
 - [ ] CI is green on Linux, macOS and Windows.
+- [ ] CI also runs the install line itself on a fresh machine of each platform, with the checkout as the profile source, and checks what it left behind. The Claude login and the macOS permission dialogs are skipped without a terminal, and the install says what to run.
 - [x] README, the spec, the agent instructions and the skills say the new install, open and uninstall, and nothing mentions the deleted machinery.
 
 ## Spec
@@ -33,7 +34,7 @@ docs/spec.md, Installation and setup.
 - **Layout.** `profile/` moved to the root: `SOUL.md`, `config.yaml`, `cron/`, `scripts/`, `skills/`, `distribution.yaml`. The manifest's `distribution_owned` allowlist keeps `docs/`, `tests/`, `gallery/` and the install scripts out of the installed profile.
 - **Install scripts.** Two files of about twenty lines that only call installers and `hermes`. The macOS line is `bash <(curl ...)`, so the script's standard input stays the terminal and `claude auth login` reads the keyboard without the terminal-device workaround of ticket 0056. The Windows line is `iex (irm ...)` in the user's own PowerShell.
 - **Setup.** The account connections and the interview were already the agent's job on first chat and stay so. The scheduled jobs' Python environments are built by their own first run, as before.
-- **Checks.** `tests/run.sh` and `tests/run.ps1` lose the installer prerequisites and the sandbox guard; CI's three jobs stay the one place test runs happen.
+- **Checks.** `tests/run.sh` and `tests/run.ps1` lose the installer prerequisites and the sandbox guard; CI stays the one place test runs happen. An `install` job per platform runs the real install line against the checkout (`install.sh <path>`, `install.ps1 -Source <path>`) with no terminal, then asserts the five jobs are listed and none is paused, the plugin and skill are installed, the driver reports its status and the gateway service exists. This is the test the old installer tests, all fakes, never were.
 
 ## Deviations
 
