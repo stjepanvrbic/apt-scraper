@@ -54,7 +54,7 @@ Windows:
 powershell -ExecutionPolicy Bypass -File .\tests\run.ps1
 ```
 
-GitHub Actions runs the same scripts on a fresh Linux, macOS and Windows machine for every push and pull request, and runs the install line itself on another fresh machine of each, with the checkout as the profile, then checks what it left behind: the five scheduled jobs running, the plugin, the skill, the computer-use driver and the gateway service. The Claude login and the macOS permission dialogs need a person, so the install skips them when it has no terminal and says what to run.
+GitHub Actions runs the same scripts on a fresh Linux, macOS and Windows machine for every push, and runs the install line itself on another fresh machine of each, with the checkout as the profile, then checks what it left behind: the five scheduled jobs running, the plugin, the skill, the computer-use driver and the gateway service. The Claude login and the macOS permission dialogs need a person, so the install skips them when it has no terminal and says what to run.
 
 ## Run
 

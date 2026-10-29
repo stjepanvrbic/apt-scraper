@@ -2,10 +2,9 @@
 # real install line, install.sh or install.ps1, on another fresh machine of each, with the checkout as the profile.
 name: CI
 
+# Every push, which covers every pull request's branch too; a pull_request trigger as well would run each push twice.
 on:
   push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 # The checks only read the repository.
@@ -96,5 +95,5 @@ jobs:
           hermes_home=$HOME/.hermes
           if [ -n "${LOCALAPPDATA:-}" ]; then hermes_home=$LOCALAPPDATA/hermes; fi
           ls "$hermes_home/profiles/apt-scraper/skills/productivity/google-workspace"
-          hermes -p apt-scraper computer-use status || echo "computer-use status exited with $?"
-          hermes gateway status || echo "gateway status exited with $?"
+          hermes -p apt-scraper computer-use status
+          hermes gateway status
