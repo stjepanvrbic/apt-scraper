@@ -23,8 +23,8 @@ from typing import TypedDict, cast
 
 sys.path.insert(0, str(Path(os.environ['HERMES_HOME']) / 'skills' / 'productivity' / 'google-workspace' / 'scripts'))
 
-from google_api import build_service  # noqa: E402  # pyright: ignore[reportMissingModuleSource]  # the connector's script, present where Hermes runs
-from googleapiclient.errors import HttpError  # noqa: E402  # pyright: ignore[reportMissingModuleSource]  # the connector's client, present where Hermes runs
+from google_api import build_service  # noqa: E402
+from googleapiclient.errors import HttpError  # noqa: E402
 
 CALENDAR = 'primary'
 DUPLICATE = 409

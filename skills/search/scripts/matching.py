@@ -110,12 +110,12 @@ def criterion_phrases(criteria: Criteria) -> list[str]:
     phrases = ['In one of these areas: ' + '; '.join(location)] if location else []
     price, size, rooms = criteria.get('price', {}), criteria.get('size', {}), criteria.get('rooms', {})
     if span(price):
-        period = price['period']  # pyright: ignore[reportTypedDictNotRequiredAccess]  # the store saves a price limit only with its currency and period
-        currency = price['currency']  # pyright: ignore[reportTypedDictNotRequiredAccess]  # the store saves a price limit only with its currency and period
+        # The store saves a price limit only with its currency and period.
+        period, currency = price.get('period'), price.get('currency')
         phrases.append(f'Price {span(price)} {currency} ' + ('in total' if period == 'total' else f'a {period}'))
     if span(size):
-        unit = size['unit']  # pyright: ignore[reportTypedDictNotRequiredAccess]  # the store saves a size limit only with its unit
-        phrases.append(f'Size {span(size)} {unit}')
+        # The store saves a size limit only with its unit.
+        phrases.append(f'Size {span(size)} {size.get("unit")}')
     if span(rooms):
         phrases.append(f'Rooms {span(rooms)}')
     move_in = criteria.get('move_in')

@@ -3,7 +3,9 @@ import io
 import json
 import sys
 import unittest
+import urllib.request
 import zipfile
+from collections.abc import Iterable
 from pathlib import Path
 from unittest import mock
 from urllib.parse import parse_qs, urlsplit
@@ -11,19 +13,19 @@ from urllib.parse import parse_qs, urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
 
 import geodata  # noqa: E402
-from geodata import (NOMINATIM, NOMINATIM_INTERVAL_SECONDS, USER_AGENT, SourceUnavailable, fetch_stations, found_place, geocode,  # noqa: E402
-                     rail_route_type, rapid_transit_stations, search_place)
+from geodata import (NOMINATIM, NOMINATIM_INTERVAL_SECONDS, USER_AGENT, Location, Opener, Response, SourceUnavailable,  # noqa: E402
+                     fetch_stations, found_place, geocode, rail_route_type, rapid_transit_stations, search_place)
 
 WILLIS_TOWER = [{'place_id': 1, 'lat': '41.8788764', 'lon': '-87.6359149', 'display_name': 'Willis Tower, 233 South Wacker Drive, Chicago'}]
 
 
-def table(rows):
+def table(rows: Iterable[Iterable[str]]) -> str:
     buffer = io.StringIO()
     csv.writer(buffer, lineterminator='\n').writerows(rows)
     return buffer.getvalue()
 
 
-def feed_stops(latitude):
+def feed_stops(latitude: str) -> str:
     """A stops.txt whose stations have the given latitude."""
     return table([['stop_id', 'stop_name', 'stop_lat', 'stop_lon', 'location_type', 'parent_station'],
                   ['40570', 'California', latitude, '-87.69689', '1', ''], ['40590', 'Damen', latitude, '-87.677437', '1', ''],
@@ -33,10 +35,10 @@ def feed_stops(latitude):
                   ['7001', 'Tram stop', latitude, '-87.63', '', '']])
 
 
-def feed(**overrides):
+def feed(**overrides: str) -> bytes:
     """A small GTFS feed of one rail line with platforms under two stations and one platform without a station, a bus
     route whose stops are not rapid transit, and a station only the bus serves."""
-    files = {
+    files: dict[str, str] = {
         'routes.txt': table([['route_id', 'route_short_name', 'route_type'], ['Blue', '', '1'], ['56', '56', '3'], ['Tram', '', '900']]),
         'trips.txt': table([['route_id', 'service_id', 'trip_id'], ['Blue', 'weekday', 'blue-1'], ['Blue', 'weekday', 'blue-2'],
                             ['56', 'weekday', 'bus-1'], ['Tram', 'weekday', 'tram-1']]),
@@ -71,54 +73,62 @@ class Answer(io.BytesIO):
     """An HTTP answer as urlopen returns it, a context manager over the body."""
 
 
-def answering(body, requests=None):
-    def opener(url):
+def answering(body: bytes, requests: list[str] | None = None) -> Opener:
+    def opener(url: str) -> Answer:
         if requests is not None:
             requests.append(url)
         return Answer(body)
     return opener
 
 
+def unreachable(url: str) -> Response:
+    raise OSError(f'Network is unreachable: {url}')
+
+
 class GeocodingTests(unittest.TestCase):
-    def test_the_first_result_gives_the_coordinates_and_the_name_nominatim_found(self):
+    def test_the_first_result_gives_the_coordinates_and_the_name_nominatim_found(self) -> None:
         self.assertEqual(found_place(WILLIS_TOWER), {'latitude': 41.8788764, 'longitude': -87.6359149,
                                                      'found': 'Willis Tower, 233 South Wacker Drive, Chicago'})
 
-    def test_no_result_is_a_place_not_found(self):
+    def test_no_result_is_a_place_not_found(self) -> None:
         self.assertIsNone(found_place([]))
 
-    def test_an_answer_unlike_the_documented_one_is_the_service_failing_not_the_place(self):
+    def test_an_answer_unlike_the_documented_one_is_the_service_failing_not_the_place(self) -> None:
         for answer in ({'error': 'Unable to geocode'}, [{'display_name': 'No coordinates'}], [{'lat': 'north', 'lon': '1', 'display_name': 'X'}],
                        [{'lat': '91', 'lon': '1', 'display_name': 'X'}], [{'lat': 'nan', 'lon': '1', 'display_name': 'X'}]):
             with self.subTest(answer=answer), self.assertRaises(SourceUnavailable):
-                found_place(answer)
+                _ = found_place(answer)
 
-    def test_a_search_asks_for_the_one_best_result_of_the_address_as_the_user_said_it(self):
-        requests = []
-        self.assertEqual(search_place('233 S Wacker Dr, Chicago, IL', answering(json.dumps(WILLIS_TOWER).encode(), requests))['latitude'], 41.8788764)
+    def test_a_search_asks_for_the_one_best_result_of_the_address_as_the_user_said_it(self) -> None:
+        requests: list[str] = []
+        place = search_place('233 S Wacker Dr, Chicago, IL', answering(json.dumps(WILLIS_TOWER).encode(), requests))
+        self.assertEqual(place['latitude'] if place else None, 41.8788764)
         url = urlsplit(requests[0])
         self.assertEqual(f'{url.scheme}://{url.netloc}{url.path}', NOMINATIM)
         self.assertEqual(parse_qs(url.query), {'q': ['233 S Wacker Dr, Chicago, IL'], 'format': ['jsonv2'], 'limit': ['1']})
 
-    def test_an_unreachable_or_garbled_service_is_reported_as_unavailable(self):
-        def unreachable(url):
-            raise OSError('Network is unreachable')
+    def test_an_unreachable_or_garbled_service_is_reported_as_unavailable(self) -> None:
         for opener in (unreachable, answering(b'<html>Bandwidth limit exceeded</html>')):
             with self.subTest(opener=opener), self.assertRaises(SourceUnavailable):
-                search_place('Loop, Chicago', opener)
+                _ = search_place('Loop, Chicago', opener)
 
-    def test_requests_name_this_application_and_never_the_users_contact_details(self):
-        with mock.patch.object(geodata.urllib.request, 'urlopen') as urlopen:
-            geodata.open_url(NOMINATIM)
-        request = urlopen.call_args.args[0]
+    def test_requests_name_this_application_and_never_the_users_contact_details(self) -> None:
+        calls: list[tuple[urllib.request.Request, float]] = []
+
+        def urlopen(request: urllib.request.Request, timeout: float) -> Answer:
+            calls.append((request, timeout))
+            return Answer(b'[]')
+        with mock.patch.object(urllib.request, 'urlopen', urlopen):
+            _ = geodata.open_url(NOMINATIM)
+        [(request, _)] = calls
         self.assertEqual(request.get_header('User-agent'), USER_AGENT)
         self.assertIn('apt-scraper', USER_AGENT)
         self.assertNotIn('@', USER_AGENT)
 
-    def test_addresses_are_searched_one_at_a_time_a_second_apart_and_the_ones_not_found_are_named(self):
-        events = []
+    def test_addresses_are_searched_one_at_a_time_a_second_apart_and_the_ones_not_found_are_named(self) -> None:
+        events: list[tuple[str, str | float]] = []
 
-        def search(address):
+        def search(address: str) -> Location | None:
             events.append(('search', address))
             return None if address == 'Nowhere' else {'latitude': 1.0, 'longitude': 2.0, 'found': address}
         found, missing, unavailable = geocode(['Work address', 'Nowhere', 'Gym address'], search, lambda seconds: events.append(('sleep', seconds)))
@@ -127,12 +137,12 @@ class GeocodingTests(unittest.TestCase):
         self.assertEqual(NOMINATIM_INTERVAL_SECONDS, 1.0)
         self.assertEqual(sorted(found), ['Gym address', 'Work address'])
         self.assertEqual((missing, unavailable), (['Nowhere'], None))
-        self.assertEqual(geocode([], search, lambda seconds: self.fail('slept without a request')), ({}, [], None))
+        self.assertEqual(geocode([], search, lambda seconds: self.fail(f'slept {seconds} seconds without a request')), ({}, [], None))
 
-    def test_a_service_failing_partway_stops_the_lookups_and_keeps_what_was_found(self):
+    def test_a_service_failing_partway_stops_the_lookups_and_keeps_what_was_found(self) -> None:
         failure = SourceUnavailable('Nominatim could not be reached: timed out')
 
-        def search(address):
+        def search(address: str) -> Location:
             if address == 'Gym address':
                 raise failure
             return {'latitude': 1.0, 'longitude': 2.0, 'found': address}
@@ -141,7 +151,7 @@ class GeocodingTests(unittest.TestCase):
 
 
 class StationTests(unittest.TestCase):
-    def test_stations_are_the_stops_rail_routes_serve_counted_at_their_parent_station(self):
+    def test_stations_are_the_stops_rail_routes_serve_counted_at_their_parent_station(self) -> None:
         with zipfile.ZipFile(io.BytesIO(feed())) as archive:
             stations = rapid_transit_stations(archive)
         self.assertEqual(stations, [
@@ -151,33 +161,31 @@ class StationTests(unittest.TestCase):
             {'id': '7001', 'name': 'Tram stop', 'latitude': 41.88, 'longitude': -87.63},
         ])
 
-    def test_blank_and_short_stop_time_rows_are_skipped(self):
+    def test_blank_and_short_stop_time_rows_are_skipped(self) -> None:
         stop_times = table([['trip_id', 'arrival_time', 'departure_time', 'stop_id', 'stop_sequence'],
                             ['blue-1', '08:00:00', '08:00:00', '30001', '1'], ['blue-1'], [], ['blue-2', '08:10:00', '08:10:00', '30004', '1']])
         with zipfile.ZipFile(io.BytesIO(feed(**{'stop_times.txt': stop_times + '\r\n\r\n'}))) as archive:
             self.assertEqual([station['name'] for station in rapid_transit_stations(archive)], ['Western', 'California'])
 
-    def test_rail_metro_light_rail_and_monorail_count_and_buses_ferries_and_lifts_do_not(self):
+    def test_rail_metro_light_rail_and_monorail_count_and_buses_ferries_and_lifts_do_not(self) -> None:
         self.assertEqual([value for value in ('0', '1', '2', '3', '4', '5', '6', '7', '11', '12') if rail_route_type(value)], ['0', '1', '2', '12'])
         self.assertEqual([value for value in ('100', '109', '400', '401', '700', '702', '715', '900', '1000', '') if rail_route_type(value)],
                          ['100', '109', '400', '401', '900'])
 
-    def test_a_feed_is_downloaded_whole_and_read_for_its_stations(self):
-        requests = []
+    def test_a_feed_is_downloaded_whole_and_read_for_its_stations(self) -> None:
+        requests: list[str] = []
         stations = fetch_stations('https://transit.example/gtfs.zip', answering(feed(), requests))
         self.assertEqual(requests, ['https://transit.example/gtfs.zip'])
         self.assertEqual(len(stations), 4)
 
-    def test_a_download_that_fails_or_is_not_a_gtfs_feed_is_reported(self):
-        def unreachable(url):
-            raise OSError('timed out')
+    def test_a_download_that_fails_or_is_not_a_gtfs_feed_is_reported(self) -> None:
         for opener in (unreachable, answering(b'<html>Not found</html>'), answering(feed(**{'stop_times.txt': 'trip_id,arrival_time\n'})),
                        answering(feed(**{'stops.txt': 'stop_id,stop_name\n'})), answering(feed(**{'stop_times.txt': ''})),
                        answering(feed(**{'stops.txt': feed_stops(latitude='nan')})), answering(feed(**{'stops.txt': feed_stops(latitude='97.5')})),
                        answering(feed(**{'stops.txt': 'stop_id,"stop_name\n'})), answering(feed(**{'stops.txt': feed_stops(latitude='')}))):
             with self.subTest(opener=opener), self.assertRaisesRegex(SourceUnavailable, 'transit.example'):
-                fetch_stations('https://transit.example/gtfs.zip', opener)
+                _ = fetch_stations('https://transit.example/gtfs.zip', opener)
 
 
 if __name__ == '__main__':
-    unittest.main()
+    _ = unittest.main()

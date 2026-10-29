@@ -161,8 +161,9 @@ async def run_turn(store: ChatStore, message_id: int, text: str | None, controls
             self.content += text or ''
             self.schedule()
 
-        def on_tool_progress(self, event_type: str, tool_name: str | None = None, preview: str | None = None,
-                             args: object = None, **values: object) -> None:
+        def on_tool_progress(self, event_type: str, tool_name: str | None = None, _preview: str | None = None,
+                             args: object = None, /, **values: object) -> None:
+            # The preview is the tool's arguments shortened for a terminal; the gallery shows the arguments themselves.
             tool_call_id = values.get('tool_call_id')
             identity = tool_call_id if isinstance(tool_call_id, str) and tool_call_id else tool_name
             if event_type == 'tool.started':

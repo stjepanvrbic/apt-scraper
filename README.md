@@ -42,7 +42,7 @@ To install from a clone of your own, point Hermes at it:
 hermes profile install /path/to/your/clone --force --yes
 ```
 
-The checks run in a fresh virtual environment through one script per platform, which installs `tests/requirements.txt` and runs Ruff, the Python suite with zero skips, then the gallery's lint, build and Playwright suite. macOS or Linux:
+The checks run in a fresh virtual environment through one script per platform, which installs `tests/requirements.txt` and runs Ruff, basedpyright, the Python suite with zero skips, then the gallery's lint, build and Playwright suite. macOS or Linux:
 
 ```bash
 tests/run.sh

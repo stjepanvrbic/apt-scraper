@@ -26,14 +26,202 @@ Everything here is a pure function of its inputs, which ListingStore.ranking_inp
 
 import math
 import random
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field as dataclass_field
 from functools import cached_property
 from math import sumprod as dot
-from operator import mul
 from statistics import fmean, median, pstdev
+from typing import Literal, NotRequired, Self, TypedDict
 
-from code_features import distance_km
-from record import CATEGORIES, RATINGS
+from code_features import CodeFeatures, Coordinates, distance_km
+from record import CATEGORIES, NOT_SHOWN, RATINGS, Extraction, Judgment, NotShown, Rating
+from shapes import Settings, is_array, is_object
+
+Direction = Literal['like', 'dislike']
+Sentiment = Literal['positive', 'negative', 'mixed', 'neutral']
+CodeNumber = Literal['monthly_price', 'size_sqft', 'price_per_sqft', 'bedrooms', 'bathrooms', 'photo_count']
+Category = Literal['floor', 'style', 'outdoor_space', 'building_type']
+CATEGORY_NAMES: tuple[Category, ...] = ('floor', 'style', 'outdoor_space', 'building_type')
+Pair = tuple[str, str]
+Label = tuple[int, float]
+Vector = list[float]
+Matrix = list[list[float]]
+Hyperparameters = tuple[float, float]
+PhotoMatches = tuple[tuple[tuple[float, str], ...], ...]
+"""For one room column, each listing's two best favorites as (value, id), fewer when fewer favorites have the room."""
+
+
+class FeatureReading(TypedDict):
+    """One feature a preference reading names, with the direction a listing should move on it."""
+    feature: str
+    direction: Direction
+
+
+class NoteReading(TypedDict):
+    sentiment: Sentiment
+    likes: list[str]
+    dislikes: list[str]
+
+
+class Visit(TypedDict):
+    """A completed gallery visit of one listing, with the time it was open, as ranking_inputs sums the signals."""
+    listing_id: str
+    visit_id: str
+    duration_ms: int
+
+
+class Impression(TypedDict):
+    """A listing shown at a rank in the visit in which another was favorited (ListingStore.favorite_impressions)."""
+    listing_id: str
+    fingerprint: str
+    visit_id: str
+    shown_rank: int
+    occurred_at: str
+
+
+class PhotoInputs(TypedDict):
+    """The photo encoder's features (ListingStore.photo_inputs): each listing's probe matches by probe, by room each
+    listing's best-match similarity to each favorite, and the probe of each live hypothesis by phrase."""
+    model: str
+    probes: dict[str, dict[str, float]]
+    similarity: dict[str, dict[str, dict[str, float]]]
+    hypotheses: dict[str, str]
+
+
+class RankingListing(TypedDict):
+    """A listing as ListingStore.ranking_inputs gives it to the model."""
+    id: str
+    fingerprint: str
+    title: str | None
+    address: str | None
+    rankable: bool
+    record: Extraction | None
+    judgments: dict[str, Judgment]
+    hypotheses: NotRequired[dict[str, Judgment]]
+    code: CodeFeatures
+    areas: list[str] | None
+    given_up: bool
+    rank: NotRequired[int | None]
+    favorite: bool
+    dismissed: bool
+    contact: bool
+    user_notes: bool
+    paired: bool
+
+
+class RankingInputs(TypedDict):
+    """Everything a rerank reads, as ListingStore.ranking_inputs builds it and learning.encode keeps it."""
+    listings: list[RankingListing]
+    settings: Settings
+    preference_readings: dict[tuple[Direction, str], list[FeatureReading]]
+    note_readings: dict[int, NoteReading]
+    sentiments: dict[str, Sentiment]
+    pairs: list[Pair]
+    tags: NotRequired[list[str]]
+    implicit_visits: NotRequired[list[Visit]]
+    as_of_day: NotRequired[float]
+    label_days: NotRequired[dict[str, float]]
+    pair_days: NotRequired[list[float]]
+    photos: NotRequired[PhotoInputs]
+    impressions: NotRequired[list[Impression]]
+
+
+class Contribution(TypedDict):
+    feature: str
+    value: str | None
+    contribution: float
+
+
+class SimilarFavorite(TypedDict):
+    id: str
+    title: str
+
+
+class Explanation(TypedDict):
+    score: float
+    contributions: list[Contribution]
+    similar_favorite: SimilarFavorite | None
+
+
+FeatureReason = TypedDict('FeatureReason', {'for': list[str], 'against': list[str]})
+
+
+class ReasonText(TypedDict):
+    """The part of a reason a review wrote in its own words."""
+    text: str
+
+
+class Reason(TypedDict):
+    code_only: bool
+    features: FeatureReason | ReasonText
+    similar_favorite: str | None
+
+
+class RankedListing(TypedDict):
+    fingerprint: str
+    rank: int
+    reason: Reason
+    explanation: Explanation
+    exploration: bool
+
+
+class UnrankedListing(TypedDict):
+    fingerprint: str
+
+
+class HeldOutScores(TypedDict):
+    """The scores of the fit without one favorite: its own and every ranked listing's in rank order."""
+    own: float
+    scores: list[float]
+
+
+class RankingCheck(TypedDict):
+    order: list[str]
+    exploration: list[str]
+    scores: list[float]
+    held_out: dict[str, HeldOutScores]
+
+
+class HeldOutRank(TypedDict):
+    id: str
+    title: str
+    rank: int
+
+
+class HeldOutSummary(TypedDict):
+    """The median and mean of the favorites' held-out ranks, None without favorites."""
+    median: float | None
+    mean: float | None
+
+
+class RankingSummary(TypedDict):
+    ranked: int
+    waiting_for_features: int
+    labels: int
+    favorites: int
+    held_out: list[HeldOutRank]
+    held_out_median: float | None
+    held_out_mean: float | None
+    exploration: list[str]
+    seed: int
+    prior_scale: float
+    unlabeled_weight: float
+    weights: dict[str, float]
+    findings: list[str]
+
+
+class RankingResult(TypedDict):
+    ranked: dict[str, RankedListing]
+    unranked: dict[str, UnrankedListing]
+    check: RankingCheck
+    summary: RankingSummary
+
+
+class Question(TypedDict):
+    listings: list[str]
+    probability_first_above: float
+    variance: float
+
 
 STATED_WEIGHT = 1.0
 NOTE_WEIGHT = 0.5
@@ -58,9 +246,9 @@ REASON_UP = 3
 REASON_DOWN = 2
 REASON_THRESHOLD = 0.05
 SINGLE_LABEL_WEIGHT = 0.25
-SENTIMENTS = ('positive', 'negative', 'mixed', 'neutral')
-DIRECTIONS = ('like', 'dislike')
-CODE_NUMBERS = {
+SENTIMENTS: tuple[Sentiment, ...] = ('positive', 'negative', 'mixed', 'neutral')
+DIRECTIONS: tuple[Direction, ...] = ('like', 'dislike')
+CODE_NUMBERS: dict[str, tuple[CodeNumber, Callable[[float], float]]] = {
     'price': ('monthly_price', math.log),
     'size': ('size_sqft', math.log),
     'price_per_sqft': ('price_per_sqft', float),
@@ -83,23 +271,24 @@ CATEGORY_WORDS = {'floor': '{} floor', 'style': '{} style', 'outdoor_space': 'ou
 ROOM_WORDS = {'kitchen': 'kitchen', 'bathroom': 'bathroom', 'living': 'living room', 'bedroom': 'bedroom'}
 
 
-def sigmoid(value):
+def sigmoid(value: float) -> float:
     if value >= 0:
         return 1 / (1 + math.exp(-value))
     exponential = math.exp(value)
     return exponential / (1 + exponential)
 
 
-def softplus(value):
+def softplus(value: float) -> float:
     return max(value, 0) + math.log1p(math.exp(-abs(value)))
 
 
-def cholesky(matrix):
+def cholesky(matrix: Sequence[Sequence[float]]) -> Matrix:
     """The rows of the lower triangular L with L L^T = matrix, for a symmetric positive definite matrix, each up to its
     diagonal."""
-    lower, prefixes = [], []
+    lower: Matrix = []
+    prefixes: Matrix = []
     for row, values in enumerate(matrix):
-        current = []
+        current: Vector = []
         for column in range(row):
             current.append((values[column] - dot(current, prefixes[column])) / lower[column][column])
         prefixes.append(current[:])
@@ -112,34 +301,34 @@ def cholesky(matrix):
 class Factor:
     """A Cholesky factor of a precision matrix: the rows of L up to the diagonal, and the columns of L below the
     diagonal in reverse order, for the backward solve."""
-    lower: list
-    reversed_tails: list
+    lower: Matrix
+    reversed_tails: Matrix
 
     @classmethod
-    def of(cls, matrix):
+    def of(cls, matrix: Sequence[Sequence[float]]) -> Self:
         lower = cholesky(matrix)
         size = len(lower)
         return cls(lower, [[lower[row][column] for row in range(size - 1, column, -1)] for column in range(size)])
 
-    def forward(self, vector):
+    def forward(self, vector: Sequence[float]) -> Vector:
         """L^-1 vector."""
-        result = []
+        result: Vector = []
         for index, row in enumerate(self.prefixes):
             result.append((vector[index] - dot(row, result)) / self.lower[index][index])
         return result
 
     @cached_property
-    def prefixes(self):
+    def prefixes(self) -> Matrix:
         return [row[:-1] for row in self.lower]
 
-    def backward(self, vector):
+    def backward(self, vector: Sequence[float]) -> Vector:
         """L^-T vector."""
-        reversed_result = []
+        reversed_result: Vector = []
         for index in range(len(vector) - 1, -1, -1):
             reversed_result.append((vector[index] - dot(self.reversed_tails[index], reversed_result)) / self.lower[index][index])
         return reversed_result[::-1]
 
-    def solve(self, vector):
+    def solve(self, vector: Sequence[float]) -> Vector:
         return self.backward(self.forward(vector))
 
 
@@ -156,12 +345,12 @@ class Column:
 class Row:
     """One row of the likelihood: head is the intercept's coefficient followed by the dense columns' values, positions
     and values the nonzero values of the sparse columns, each by its position among the sparse columns, in order."""
-    head: list
-    positions: tuple
-    values: tuple
+    head: Vector
+    positions: tuple[int, ...]
+    values: tuple[float, ...]
 
     @property
-    def sparse(self):
+    def sparse(self) -> Iterator[tuple[int, float]]:
         return zip(self.positions, self.values)
 
 
@@ -170,34 +359,34 @@ class Design:
     """The model's view of the listings it learns from or ranks, sorted by id. The dense columns come first, then the
     sparse ones. rows[i][j] is listing i's centered and scaled value of columns[j], 0 where the listing does not state
     it, likelihood_rows[i] the same listing as the likelihood sees it, and raw[i] its stated values by column name."""
-    ids: tuple
-    listings: dict
-    columns: tuple
+    ids: tuple[str, ...]
+    listings: dict[str, RankingListing]
+    columns: tuple[Column, ...]
     dense_count: int
-    rows: tuple
-    likelihood_rows: tuple
-    raw: tuple
-    prior_mean: tuple
-    favorites: tuple
-    coordinates: dict
-    kernels: dict
-    nearness_sums: tuple
-    photo_matches: dict = dataclass_field(default_factory=dict)
+    rows: tuple[Vector, ...]
+    likelihood_rows: tuple[Row, ...]
+    raw: tuple[dict[str, float], ...]
+    prior_mean: tuple[float, ...]
+    favorites: tuple[str, ...]
+    coordinates: dict[str, Coordinates]
+    kernels: dict[str, tuple[float, ...]]
+    nearness_sums: tuple[tuple[float, int], ...]
+    photo_matches: dict[str, PhotoMatches] = dataclass_field(default_factory=dict)
 
-    def index(self, name):
+    def index(self, name: str) -> int | None:
         return next((position for position, column in enumerate(self.columns) if column.name == name), None)
 
     @cached_property
-    def rows_without(self):
+    def rows_without(self) -> dict[str, Sequence[Row]]:
         """The likelihood's listing rows with the columns that depend on the favorites, the nearness and the photo
         matches, computed without each favorite, by favorite."""
         nearness = self.index('near_favorites')
-        matches = [(self.index(name), best) for name, best in self.photo_matches.items() if self.index(name) is not None]
+        matches = [(position, best) for name, best in self.photo_matches.items() if (position := self.index(name)) is not None]
         if nearness is None and not matches:
             return {favorite: self.likelihood_rows for favorite in self.favorites}
-        rows_without = {}
+        rows_without: dict[str, Sequence[Row]] = {}
         for favorite in self.favorites:
-            changes = {}
+            changes: dict[int, dict[int, float]] = {}
             if nearness is not None:
                 center, scale = self.columns[nearness].mean, self.columns[nearness].scale
                 for index, value in enumerate(self.kernels.get(favorite, ())):
@@ -220,10 +409,10 @@ class Design:
         return rows_without
 
     @cached_property
-    def rematched(self):
+    def rematched(self) -> dict[str, set[str]]:
         """For each favorite, the listings whose best photo match in some room is that favorite, so that leaving it out
         gives them another value."""
-        result = {favorite: set() for favorite in self.favorites}
+        result: dict[str, set[str]] = {favorite: set() for favorite in self.favorites}
         for name, best in self.photo_matches.items():
             if self.index(name) is not None:
                 for index, pairs in enumerate(best):
@@ -237,20 +426,20 @@ class Observations:
     """The rows the likelihood sees: one per labeled or weakly negative listing and one per pairwise answer, with its
     label and weight. listings[k] is the listing of row k, None for a pair, and pairs[k] the pair of row k. holders
     has, for each sparse column that some row has, the rows that have it and their values."""
-    rows: list
-    labels: list
-    weights: list
-    listings: list
-    pairs: list
-    holders: dict
+    rows: list[Row]
+    labels: list[int]
+    weights: list[float]
+    listings: list[str | None]
+    pairs: list[Pair | None]
+    holders: dict[int, tuple[list[int], list[float]]]
 
     @cached_property
-    def head_columns(self):
+    def head_columns(self) -> Matrix:
         return [list(column) for column in zip(*(row.head for row in self.rows))]
 
 
-def observed(rows, labels, weights, listings, pairs):
-    holders = {}
+def observed(rows: list[Row], labels: list[int], weights: list[float], listings: list[str | None], pairs: list[Pair | None]) -> Observations:
+    holders: dict[int, tuple[list[int], list[float]]] = {}
     for index, row in enumerate(rows):
         for position, value in row.sparse:
             holder_rows, values = holders.setdefault(position, ([], []))
@@ -261,26 +450,34 @@ def observed(rows, labels, weights, listings, pairs):
 
 @dataclass(frozen=True)
 class Fit:
-    weights: list
+    weights: Vector
     factor: Factor
-    curvature: list
+    curvature: Vector
 
 
-def rating_words(name):
+def rating_words(name: str) -> str:
     return name.replace('_', ' ')
 
 
-def stated_phrases(settings):
+def stated_phrases(settings: Settings) -> list[tuple[Direction, str]]:
     preferences = settings.get('preferences', {})
-    return [(kind, phrase) for kind, key in (('like', 'likes'), ('dislike', 'dislikes')) for phrase in preferences.get(key, [])]
+    return [*(('like', phrase) for phrase in preferences.get('likes', [])), *(('dislike', phrase) for phrase in preferences.get('dislikes', []))]
 
 
-def expressed(readings, kind, phrase):
+def expressed(readings: Mapping[tuple[Direction, str], Sequence[FeatureReading]], kind: Direction, phrase: str) -> bool:
     """Whether the reading of a stated preference names record features, so it needs no judgment per listing."""
     return bool(readings.get((kind, phrase)))
 
 
-def reading_vocabulary(tags, areas, places=()):
+def text_array(value: object) -> list[str] | None:
+    """The strings of a JSON array of strings, or None when value is not one."""
+    if not is_array(value):
+        return None
+    texts = [item for item in value if isinstance(item, str)]
+    return texts if len(texts) == len(value) else None
+
+
+def reading_vocabulary(tags: Iterable[str], areas: Iterable[str], places: Iterable[str] = ()) -> dict[str, str]:
     """Every feature a reading of a note or a stated preference may name, with what a like of it means."""
     vocabulary = {f'rating:{name}': f'toward {high} (5), away from {low} (1)' for name, (low, high) in RATINGS.items()}
     vocabulary.update({f'{name}:{value}': f'{name.replace("_", " ")} is {value}' for name, values in CATEGORIES.items() for value in values})
@@ -295,46 +492,51 @@ def reading_vocabulary(tags, areas, places=()):
     return vocabulary
 
 
-def validate_preference_reading(features, vocabulary):
+def validate_preference_reading(features: object, vocabulary: Mapping[str, str]) -> list[FeatureReading]:
     """A preference reading: the record features the preference names, each with the direction a listing should
     move on it, or none when no feature expresses it."""
-    if not isinstance(features, list):
+    if not is_array(features):
         raise ValueError('features must be an array of {"feature", "direction"}, empty when no feature expresses the preference.')
-    named = {}
+    named: dict[str, Direction] = {}
     for item in features:
-        if not isinstance(item, dict) or set(item) != {'feature', 'direction'}:
+        if not is_object(item) or set(item) != {'feature', 'direction'}:
             raise ValueError('Each feature of a reading is {"feature", "direction"}.')
-        if item['feature'] not in vocabulary:
-            raise ValueError(f'"{item["feature"]}" is not a feature. Name features from the vocabulary.')
-        if item['direction'] not in DIRECTIONS:
-            raise ValueError(f'The direction of {item["feature"]} is like or dislike.')
-        if named.setdefault(item['feature'], item['direction']) != item['direction']:
-            raise ValueError(f'{item["feature"]} is named twice with different directions.')
+        feature, direction = item['feature'], item['direction']
+        if not isinstance(feature, str) or feature not in vocabulary:
+            raise ValueError(f'"{feature}" is not a feature. Name features from the vocabulary.')
+        if direction not in DIRECTIONS:
+            raise ValueError(f'The direction of {feature} is like or dislike.')
+        if named.setdefault(feature, direction) != direction:
+            raise ValueError(f'{feature} is named twice with different directions.')
     return [{'feature': feature, 'direction': direction} for feature, direction in named.items()]
 
 
-def validate_note_reading(reading, vocabulary):
+def validate_note_reading(reading: object, vocabulary: Mapping[str, str]) -> NoteReading:
     """A note reading: the note's sentiment about its listing and the features it praises and criticizes."""
-    if not isinstance(reading, dict) or set(reading) != {'sentiment', 'likes', 'dislikes'}:
+    if not is_object(reading) or set(reading) != {'sentiment', 'likes', 'dislikes'}:
         raise ValueError('A note reading is {"sentiment", "likes", "dislikes"}.')
-    if reading['sentiment'] not in SENTIMENTS:
+    sentiment = reading['sentiment']
+    if sentiment not in SENTIMENTS:
         raise ValueError(f'sentiment is {", ".join(SENTIMENTS)}.')
+    named: dict[str, list[str]] = {}
     for key in ('likes', 'dislikes'):
-        if not isinstance(reading[key], list) or not all(isinstance(name, str) for name in reading[key]):
+        names = text_array(reading[key])
+        if names is None:
             raise ValueError(f'{key} must be an array of feature names.')
-        unknown = [name for name in reading[key] if name not in vocabulary]
+        unknown = [name for name in names if name not in vocabulary]
         if unknown:
             raise ValueError(f'{", ".join(unknown)} {"is" if len(unknown) == 1 else "are"} not in the vocabulary.')
-    if set(reading['likes']) & set(reading['dislikes']):
+        named[key] = names
+    if set(named['likes']) & set(named['dislikes']):
         raise ValueError('A feature is either liked or disliked in one note.')
-    return {'sentiment': reading['sentiment'], 'likes': list(dict.fromkeys(reading['likes'])), 'dislikes': list(dict.fromkeys(reading['dislikes']))}
+    return {'sentiment': sentiment, 'likes': list(dict.fromkeys(named['likes'])), 'dislikes': list(dict.fromkeys(named['dislikes']))}
 
 
-def kernel(first, second):
+def kernel(first: Coordinates, second: Coordinates) -> float:
     return math.exp(-(distance_km(first, second) / LOCATION_BANDWIDTH_KM) ** 2 / 2)
 
 
-def nearness_kernels(ids, coordinates, favorites):
+def nearness_kernels(ids: Sequence[str], coordinates: Mapping[str, Coordinates], favorites: Iterable[str]) -> dict[str, tuple[float, ...]]:
     """For each favorite with coordinates, its kernel at each listing's location, 0 at its own and at a listing
     without coordinates. A listing's nearness to the favorites is the mean kernel of the favorites other than itself,
     a smooth density rather than area counts, because area boundaries split homes a short walk apart (Zillow,
@@ -345,7 +547,8 @@ def nearness_kernels(ids, coordinates, favorites):
             for favorite in favorites if favorite in coordinates}
 
 
-def photo_values(inputs, ids, favorites, means):
+def photo_values(inputs: RankingInputs, ids: Sequence[str], favorites: Sequence[str],
+                 means: Mapping[str, float]) -> tuple[list[dict[str, float]], dict[str, PhotoMatches]]:
     """The photo encoder's columns, when ranking_inputs supplies its features: for each probe a reading or a note
     names, and for each hypothesis a probe scores, the match of the listing's best photo; and for each room, the best
     match of the listing's photos of that room with those of the most similar favorite other than itself. Returns each
@@ -354,60 +557,64 @@ def photo_values(inputs, ids, favorites, means):
     if not photos:
         return [{} for _ in ids], {}
     named = sorted({name.removeprefix('photo:') for name in means if name.startswith('photo:')})
-    matches = {}
-    for room, values in sorted(photos['similarity'].items()):
+    matches: dict[str, PhotoMatches] = {}
+    for room, by_listing in sorted(photos['similarity'].items()):
         matches[f'looks_like:{room}'] = tuple(
-            tuple(sorted(((value, favorite) for favorite, value in values.get(identifier, {}).items()
+            tuple(sorted(((value, favorite) for favorite, value in by_listing.get(identifier, {}).items()
                           if favorite in favorites and favorite != identifier), key=lambda item: (-item[0], item[1]))[:2])
             for identifier in ids)
-    result = []
+    result: list[dict[str, float]] = []
     for index, identifier in enumerate(ids):
-        values = {}
-        scores = photos['probes'].get(identifier)
-        if scores:
-            values.update({f'photo:{probe}': scores[probe] for probe in named if probe in scores})
-            values.update({f'hypothesis:{phrase}': scores[probe] for phrase, probe in photos['hypotheses'].items() if probe in scores})
+        values: dict[str, float] = {}
+        probed = photos['probes'].get(identifier)
+        if probed:
+            values.update({f'photo:{probe}': probed[probe] for probe in named if probe in probed})
+            values.update({f'hypothesis:{phrase}': probed[probe] for phrase, probe in photos['hypotheses'].items() if probe in probed})
         values.update({name: best[index][0][0] for name, best in matches.items() if best[index]})
         result.append(values)
     return result, matches
 
 
-def raw_values(listing, phrases, areas, density):
+def raw_values(listing: RankingListing, phrases: Iterable[tuple[Direction, str]], areas: Iterable[str],
+               density: float | None) -> dict[str, float | tuple[int, float]]:
     """The listing's stated value of each column it has, by column name, before centering. Ratings are shrunk toward
     the mean by their confidence later, so they are kept as (value, confidence)."""
-    values = {}
-    record = listing['record']
+    values: dict[str, float | tuple[int, float]] = {}
+    record, code = listing['record'], listing['code']
     if record is not None:
         for name in RATINGS:
             rating = record['ratings'][name]
-            values[f'rating_not_shown:{name}'] = float(rating == 'not shown')
-            if rating != 'not shown':
+            values[f'rating_not_shown:{name}'] = float(rating == NOT_SHOWN)
+            if rating != NOT_SHOWN:
                 values[f'rating:{name}'] = (rating['value'], rating['confidence'])
-        for name, choices in CATEGORIES.items():
-            if record[name] != 'not shown':
-                values.update({f'{name}:{value}': float(record[name] == value) for value in choices})
+        for name in CATEGORY_NAMES:
+            stated = record[name]
+            if stated != NOT_SHOWN:
+                values.update({f'{name}:{value}': float(stated == value) for value in CATEGORIES[name]})
         for flag, value in record['flags'].items():
             if value is not None:
                 values[f'flag:{flag}'] = float(value)
         for tag in {*record['traits'], *record['concerns']}:
             values[f'tag:{tag}'] = 1.0
-    level = UNIT_LEVELS.get(listing['code'].get('unit_level') or (record['unit_level']['value'] if record else '') or '')
+    level = UNIT_LEVELS.get(code.get('unit_level') or (record['unit_level']['value'] if record else '') or '')
     if level:
         values.update({f'unit_level:{value}': float(level == value) for value in ('garden', 'ground', 'middle', 'top')})
     for name, (field, transform) in CODE_NUMBERS.items():
-        value = listing['code'].get(field)
+        value = code[field] if field in code else None
         if value is not None and (value > 0 or transform is float):
             values[name] = transform(value)
     if listing['areas'] is not None:
         values.update({f'area:{area}': float(area in listing['areas']) for area in areas})
     if density is not None:
         values['near_favorites'] = density
-    if listing['code'].get('station_distance_km') is not None:
-        values['station_distance'] = listing['code']['station_distance_km']
-    for place, distance in (listing['code'].get('place_distances_km') or {}).items():
+    station_distance = code.get('station_distance_km')
+    if station_distance is not None:
+        values['station_distance'] = station_distance
+    for place, distance in (code.get('place_distances_km') or {}).items():
         values[f'place:{place}'] = distance
     for _, phrase in phrases:
-        verdict = (listing['judgments'].get(phrase) or {}).get('verdict')
+        judgment = listing['judgments'].get(phrase)
+        verdict = judgment['verdict'] if judgment else None
         if verdict in ('has', 'rules out'):
             values[f'preference:{phrase}'] = float(verdict == 'has')
     for phrase, judgment in listing.get('hypotheses', {}).items():
@@ -416,11 +623,11 @@ def raw_values(listing, phrases, areas, density):
     return values
 
 
-def prior_means(inputs, phrases):
+def prior_means(inputs: RankingInputs, phrases: Iterable[tuple[Direction, str]]) -> dict[str, float]:
     """The starting weight of each feature the stated preferences and the note readings name, by column name."""
-    means = {}
+    means: dict[str, float] = {}
 
-    def add(name, amount):
+    def add(name: str, amount: float) -> None:
         means[name] = max(-PRIOR_MEAN_LIMIT, min(PRIOR_MEAN_LIMIT, means.get(name, 0.0) + amount))
 
     readings = inputs['preference_readings']
@@ -449,15 +656,23 @@ def prior_means(inputs, phrases):
     return means
 
 
-def in_fit(listing):
+def in_fit(listing: RankingListing) -> bool:
     return (listing['record'] is not None or listing['given_up']) and (listing['rankable'] or labeled(listing))
 
 
-def labeled(listing):
+def labeled(listing: RankingListing) -> bool:
     return bool(listing['favorite'] or listing['dismissed'] or listing['contact'] or listing['user_notes'] or listing['paired'])
 
 
-def design(inputs):
+def shrunk(name: str, value: float | tuple[int, float], averages: Mapping[str, float]) -> float:
+    """A stated rating (value, confidence) shrunk toward the column's mean by its confidence; any other value as it is."""
+    if isinstance(value, tuple):
+        rating, confidence = value
+        return averages[name] + confidence * (rating - averages[name])
+    return value
+
+
+def design(inputs: RankingInputs) -> Design:
     """The columns and rows of every listing the model learns from or ranks: those with a feature record of their
     current content, or given up by extraction, that are ranked or labeled."""
     listings = {listing['id']: listing for listing in sorted(inputs['listings'], key=lambda listing: listing['id']) if in_fit(listing)}
@@ -465,39 +680,36 @@ def design(inputs):
     settings = inputs['settings']
     areas = list(settings.get('criteria', {}).get('location', []))
     readings = inputs['preference_readings']
-    phrases = [(kind, phrase) for kind, phrase in stated_phrases(settings) if not expressed(readings, kind, phrase)]
-    coordinates = {identifier: (listing['code']['latitude'], listing['code']['longitude']) for identifier, listing in listings.items()
-                   if listing['code'].get('latitude') is not None and listing['code'].get('longitude') is not None}
+    phrases: list[tuple[Direction, str]] = [(kind, phrase) for kind, phrase in stated_phrases(settings) if not expressed(readings, kind, phrase)]
+    coordinates = {identifier: (latitude, longitude) for identifier, listing in listings.items()
+                   if (latitude := listing['code'].get('latitude')) is not None and (longitude := listing['code'].get('longitude')) is not None}
     favorites = tuple(identifier for identifier in ids if listings[identifier]['favorite'] and not listings[identifier]['dismissed'])
     kernels = nearness_kernels(ids, coordinates, favorites)
     nearness_sums = tuple((sum(values[index] for favorite, values in kernels.items() if favorite != identifier),
                            sum(favorite != identifier for favorite in kernels)) for index, identifier in enumerate(ids))
     means = prior_means(inputs, phrases)
     photo, photo_matches = photo_values(inputs, ids, favorites, means)
-    raw = [raw_values(listings[identifier], phrases, areas, total / count if count and identifier in coordinates else None) | values
-           for identifier, (total, count), values in zip(ids, nearness_sums, photo)]
-    probed = {f'hypothesis:{phrase}' for phrase in (inputs.get('photos') or {}).get('hypotheses', {})}
-    tag_counts = {}
-    for values in raw:
+    stated = [raw_values(listings[identifier], phrases, areas, total / count if count and identifier in coordinates else None) | values
+              for identifier, (total, count), values in zip(ids, nearness_sums, photo)]
+    photos = inputs.get('photos')
+    probed = {f'hypothesis:{phrase}' for phrase in photos['hypotheses']} if photos else set[str]()
+    tag_counts: dict[str, int] = {}
+    for values in stated:
         for name in values:
             if name.startswith('tag:'):
                 tag_counts[name] = tag_counts.get(name, 0) + 1
-    names = sorted({name for values in raw for name in values
+    names = sorted({name for values in stated for name in values
                     if not name.startswith('tag:') or tag_counts[name] >= MIN_TAG_LISTINGS or name in means})
-    for identifier, values in zip(ids, raw):
+    for identifier, values in zip(ids, stated):
         if listings[identifier]['record'] is not None:
             for name in names:
                 if name.startswith('tag:'):
-                    values.setdefault(name, 0.0)
-    for name in names:
-        if name.startswith('rating:'):
-            known = [values[name][0] for values in raw if name in values]
-            average = fmean(known)
-            for values in raw:
-                if name in values:
-                    value, confidence = values[name]
-                    values[name] = average + confidence * (value - average)
-    columns, matrix = [], []
+                    _ = values.setdefault(name, 0.0)
+    averages = {name: fmean(value[0] for values in stated if isinstance(value := values.get(name), tuple))
+                for name in names if name.startswith('rating:')}
+    raw = [{name: shrunk(name, value, averages) for name, value in values.items()} for values in stated]
+    columns: list[Column] = []
+    matrix: Matrix = []
     for name in sorted(names, key=lambda name: (sparse_column(name) and name not in probed, name)):
         known = [values[name] for values in raw if name in values]
         numeric = (name.startswith(('rating:', 'place:', 'photo:', 'looks_like:')) or name in probed
@@ -509,7 +721,7 @@ def design(inputs):
         scale = 2 * spread if numeric else 1.0
         columns.append(Column(name, numeric, sparse_column(name) and name not in probed, average, scale))
         matrix.append([(values[name] - average) / scale if name in values else 0.0 for values in raw])
-    rows = tuple(list(row) for row in zip(*matrix)) if matrix else tuple([] for _ in ids)
+    rows: tuple[Vector, ...] = tuple(list(row) for row in zip(*matrix)) if matrix else tuple([] for _ in ids)
     dense_count = sum(not column.sparse for column in columns)
     likelihood_rows = tuple(sparse_row([1.0, *row[:dense_count]], {position: value + column.mean for position, (column, value)
                                                                    in enumerate(zip(columns[dense_count:], row[dense_count:]))})
@@ -518,16 +730,16 @@ def design(inputs):
                   tuple(means.get(column.name, 0.0) for column in columns), favorites, coordinates, kernels, nearness_sums, photo_matches)
 
 
-def sparse_row(head, sparse):
+def sparse_row(head: Vector, sparse: Mapping[int, float]) -> Row:
     nonzero = sorted((position, value) for position, value in sparse.items() if value)
     return Row(head, tuple(position for position, _ in nonzero), tuple(value for _, value in nonzero))
 
 
-def sparse_column(name):
+def sparse_column(name: str) -> bool:
     return name.startswith(('tag:', 'rating_not_shown:', 'hypothesis:'))
 
 
-def label(listing, sentiment):
+def label(listing: RankingListing, sentiment: Sentiment | None) -> Label | None:
     """(label, weight) of a listing from the user's actions, or None when it has none. An explicit action outranks a
     note's sentiment."""
     if listing['dismissed']:
@@ -543,7 +755,8 @@ def label(listing, sentiment):
     return None
 
 
-def observations(model_design, inputs, unlabeled_weight, rows=None, leave_out=None, *, weak_labels=None):
+def observations(model_design: Design, inputs: RankingInputs, unlabeled_weight: float, rows: Sequence[Row] | None = None,
+                 leave_out: str | None = None, *, weak_labels: Mapping[str, Label] | None = None) -> Observations:
     """The likelihood's rows: each listing's label, or a weak negative for a ranked listing without one, and each
     pairwise answer. leave_out is a listing whose labels and answers are left out, so it counts as a listing without
     a label, rows the listing rows to use."""
@@ -573,13 +786,13 @@ def observations(model_design, inputs, unlabeled_weight, rows=None, leave_out=No
     return observed(result.rows, result.labels, result.weights, result.listings, result.pairs)
 
 
-def held_out_observations(model_design, data, favorite, own_weight):
+def held_out_observations(model_design: Design, data: Observations, favorite: str, own_weight: float) -> Observations:
     """The full fit's rows with the favorite's own row a negative of own_weight, its answers weighing nothing and the
     favorites' nearness computed without it. The sparse values do not change, so the rows keep their holders."""
     rows = model_design.rows_without[favorite]
     position = {identifier: index for index, identifier in enumerate(model_design.ids)}
     changed = rows is not model_design.likelihood_rows
-    result = [rows[position[listing]] if listing is not None else difference(rows[position[pair[0]]], rows[position[pair[1]]]) if changed else row
+    result = [rows[position[listing]] if listing is not None else difference(rows[position[pair[0]]], rows[position[pair[1]]]) if changed and pair else row
               for row, listing, pair in zip(data.rows, data.listings, data.pairs)]
     labels = [0 if listing == favorite else value for value, listing in zip(data.labels, data.listings)]
     weights = [own_weight if listing == favorite else 0.0 if pair and favorite in pair else weight
@@ -587,14 +800,14 @@ def held_out_observations(model_design, data, favorite, own_weight):
     return Observations(result, labels, weights, data.listings, data.pairs, data.holders)
 
 
-def difference(first, second):
+def difference(first: Row, second: Row) -> Row:
     sparse = dict(first.sparse)
     for position, value in second.sparse:
         sparse[position] = sparse.get(position, 0.0) - value
     return sparse_row([0.0, *(left - right for left, right in zip(first.head[1:], second.head[1:]))], sparse)
 
 
-def expand(row, size):
+def expand(row: Row, size: int) -> Vector:
     """The row as a full vector of the weights' length."""
     vector = row.head + [0.0] * (size - len(row.head))
     for position, value in row.sparse:
@@ -602,47 +815,48 @@ def expand(row, size):
     return vector
 
 
-def prior(model_design, scale):
+def prior(model_design: Design, scale: float) -> tuple[Vector, Vector]:
     return [0.0, *model_design.prior_mean], [INTERCEPT_PRECISION, *[
         1 / (min(scale, 0.5) if column.name.startswith('hypothesis:') else scale) ** 2 for column in model_design.columns]]
 
 
-def linear(row, head, sparse):
-    return dot(row.head, head) + dot(row.values, map(sparse.__getitem__, row.positions))
+def linear(row: Row, head: Sequence[float], sparse: Sequence[float]) -> float:
+    return dot(row.head, head) + dot(row.values, (sparse[position] for position in row.positions))
 
 
-def values_of(data, weights, dense_count):
+def values_of(data: Observations, weights: Sequence[float], dense_count: int) -> Vector:
     head, sparse = weights[:dense_count + 1], weights[dense_count + 1:]
     return [linear(row, head, sparse) for row in data.rows]
 
 
-def objective(data, weights, mean, precision, dense_count):
+def objective(data: Observations, weights: Sequence[float], mean: Sequence[float], precision: Sequence[float], dense_count: int) -> float:
     likelihood = sum(weight * (softplus(value) - label * value)
                      for weight, label, value in zip(data.weights, data.labels, values_of(data, weights, dense_count)))
     return likelihood + sum(scale * (weight - center) ** 2 for weight, center, scale in zip(weights, mean, precision)) / 2
 
 
-def gradient(data, weights, mean, precision, dense_count):
+def gradient(data: Observations, weights: Sequence[float], mean: Sequence[float], precision: Sequence[float],
+             dense_count: int) -> tuple[Vector, Vector]:
     """The gradient of the negative log posterior and each row's curvature weight."""
     probabilities = [sigmoid(value) for value in values_of(data, weights, dense_count)]
     residuals = [weight * (probability - label) for weight, probability, label in zip(data.weights, probabilities, data.labels)]
     result = [dot(column, residuals) for column in data.head_columns] or [0.0] * (dense_count + 1)
     sparse = [0.0] * (len(weights) - dense_count - 1)
     for position, (rows, values) in data.holders.items():
-        sparse[position] = dot(values, map(residuals.__getitem__, rows))
+        sparse[position] = dot(values, (residuals[index] for index in rows))
     result += sparse
     return ([value + scale * (weight - center) for value, weight, center, scale in zip(result, weights, mean, precision)],
             [weight * probability * (1 - probability) for weight, probability in zip(data.weights, probabilities)])
 
 
-def hessian(data, curvature, precision, dense_count):
+def hessian(data: Observations, curvature: Sequence[float], precision: Sequence[float], dense_count: int) -> Matrix:
     """The Hessian of the negative log posterior: the head block from the head columns, the sparse columns' blocks
     from the rows that have them."""
     size = len(precision)
     head = dense_count + 1
     matrix = [[0.0] * size for _ in range(size)]
     columns = data.head_columns
-    weighted = [list(map(mul, column, curvature)) for column in columns]
+    weighted = [[value * weight for value, weight in zip(column, curvature)] for column in columns]
     for row in range(len(columns)):
         for column in range(row + 1):
             matrix[row][column] = matrix[column][row] = dot(weighted[row], columns[column])
@@ -666,13 +880,15 @@ def hessian(data, curvature, precision, dense_count):
     return matrix
 
 
-def fit(data, mean, precision, dense_count, start=None, *, settle=True):
+def fit(data: Observations, mean: Sequence[float], precision: Sequence[float], dense_count: int, start: Sequence[float] | None = None,
+        *, settle: bool = True) -> Fit:
     """The posterior mode, and the Cholesky factor of the Hessian there, or without settle the Hessian of the last
     Newton iteration. Newton iterations with step halving run until a step is below CHORD_START, then the last
     Hessian serves the remaining steps."""
     weights = list(mean) if start is None else list(start)
     current = objective(data, weights, mean, precision, dense_count)
-    factor, factor_curvature = None, None
+    factor: Factor | None = None
+    factor_curvature: Vector | None = None
     while True:
         direction, curvature = gradient(data, weights, mean, precision, dense_count)
         if factor is None:
@@ -695,19 +911,20 @@ def fit(data, mean, precision, dense_count, start=None, *, settle=True):
             factor, factor_curvature = None, None
 
 
-def settled(data, weights, mean, precision, dense_count):
+def settled(data: Observations, weights: Vector, mean: Sequence[float], precision: Sequence[float], dense_count: int) -> Fit:
     """The fit at weights with the Cholesky factor of the Hessian there."""
     _, curvature = gradient(data, weights, mean, precision, dense_count)
     return Fit(weights, Factor.of(hessian(data, curvature, precision, dense_count)), curvature)
 
 
-def scores(rows, weights, dense_count):
+def scores(rows: Iterable[Row], weights: Sequence[float], dense_count: int) -> Vector:
     """Each listing's score up to one constant shared by all listings, which leaves their order as it is."""
     head, sparse = [0.0, *weights[1:dense_count + 1]], weights[dense_count + 1:]
     return [linear(row, head, sparse) for row in rows]
 
 
-def held_out_fit(model_design, full, data, unlabeled_weight, mean, precision, favorite, *, converge=True):
+def held_out_fit(model_design: Design, full: Fit, data: Observations, unlabeled_weight: float, mean: Sequence[float],
+                 precision: Sequence[float], favorite: str, *, converge: bool = True) -> tuple[Sequence[Row], Vector]:
     """The fit without one favorite's labels and answers, warm-started from the full fit, in which the favorite counts
     as a listing without a label does: a weak negative when it is ranked. A held-out favorite stands for an unseen
     listing, and with its row dropped instead, a model with a weight of its own for each listing would leave that
@@ -728,11 +945,11 @@ def held_out_fit(model_design, full, data, unlabeled_weight, mean, precision, fa
     removed = [index for index, (listing, pair) in enumerate(zip(data.listings, data.pairs)) if listing == favorite or (pair and favorite in pair)]
     vectors = [expand(data.rows[index], len(mean)) for index in removed]
     curvature = [full.curvature[index] for index in removed]
-    rematched = model_design.rematched.get(favorite, ()) if converge else ()
+    rematched: set[str] = model_design.rematched.get(favorite, set()) if converge else set()
     if rematched:
         at = {identifier: index for index, identifier in enumerate(model_design.ids)}
         for index, listing in enumerate(data.listings):
-            if listing in rematched and index not in removed and data.weights[index] >= 1:
+            if listing is not None and listing in rematched and index not in removed and data.weights[index] >= 1:
                 vectors += [expand(data.rows[index], len(mean)), expand(rows[at[listing]], len(mean))]
                 curvature += [full.curvature[index], -full.curvature[index]]
     solved = [full.factor.solve(vector) for vector in vectors]
@@ -740,7 +957,7 @@ def held_out_fit(model_design, full, data, unlabeled_weight, mean, precision, fa
     inverse = invert([[(1.0 if row == column else 0.0) - curvature[row] * dot(vectors[row], solved[column]) for column in range(len(vectors))]
                       for row in range(len(vectors))])
 
-    def solve(vector):
+    def solve(vector: Sequence[float]) -> Vector:
         step = full.factor.solve(vector)
         correction = [dot(row, [weight * dot(update, step) for weight, update in zip(curvature, vectors)]) for row in inverse]
         return [value + dot(column, correction) for value, column in zip(step, solved_columns)]
@@ -760,7 +977,7 @@ def held_out_fit(model_design, full, data, unlabeled_weight, mean, precision, fa
     probability = sigmoid(settled_score)
     weak_curvature = weak * probability * (1 - probability)
 
-    def relabeled_solve(vector):
+    def relabeled_solve(vector: Sequence[float]) -> Vector:
         step = solve(vector)
         coefficient = weak_curvature * dot(own, step) / (1 + weak_curvature * leverage)
         return [value - coefficient * change for value, change in zip(step, lever)]
@@ -774,7 +991,7 @@ def held_out_fit(model_design, full, data, unlabeled_weight, mean, precision, fa
     return rows, fit(relabeled, mean, precision, dense_count, weights).weights
 
 
-def weak_negative_score(start, weighted_leverage):
+def weak_negative_score(start: float, weighted_leverage: float) -> float:
     """The score z = start - weighted_leverage * sigmoid(z) of a row that joins the fit as a negative, from its score
     start without it and its leverage times its weight, while the rest of the posterior stays quadratic. The root lies
     between start - weighted_leverage and start, because the sigmoid lies between 0 and 1. Newton's method can cycle
@@ -799,7 +1016,7 @@ def weak_negative_score(start, weighted_leverage):
         score = candidate
 
 
-def invert(matrix):
+def invert(matrix: Sequence[Sequence[float]]) -> Matrix:
     """The inverse of a small square matrix by Gauss-Jordan elimination with partial pivoting."""
     size = len(matrix)
     augmented = [list(row) + [1.0 if row_index == column else 0.0 for column in range(size)] for row_index, row in enumerate(matrix)]
@@ -815,21 +1032,22 @@ def invert(matrix):
     return [row[size:] for row in augmented]
 
 
-def held_out_scores(model_design, full, data, unlabeled_weight, mean, precision, *, converge=True):
+def held_out_scores(model_design: Design, full: Fit, data: Observations, unlabeled_weight: float, mean: Sequence[float],
+                    precision: Sequence[float], *, converge: bool = True) -> dict[str, Vector]:
     """Each listing's score when the model is fitted without one favorite's labels, by favorite."""
-    result = {}
+    result: dict[str, Vector] = {}
     for favorite in model_design.favorites:
         rows, weights = held_out_fit(model_design, full, data, unlabeled_weight, mean, precision, favorite, converge=converge)
         result[favorite] = scores(rows, weights, model_design.dense_count)
     return result
 
 
-def held_out_ranks(model_design, held_out):
+def held_out_ranks(model_design: Design, held_out: Mapping[str, Sequence[float]]) -> dict[str, int]:
     """Each favorite's rank among the ranked listings that are not favorites, from the scores of the fit without it."""
     favorites = set(model_design.favorites)
     others = [index for index, identifier in enumerate(model_design.ids)
               if identifier not in favorites and model_design.listings[identifier]['rankable']]
-    ranks = {}
+    ranks: dict[str, int] = {}
     for favorite, values in held_out.items():
         own = values[model_design.ids.index(favorite)]
         ranks[favorite] = 1 + sum(values[index] > own for index in others)
@@ -845,7 +1063,7 @@ class Model:
     scale: float
     unlabeled_weight: float
     observations: Observations
-    prior: tuple
+    prior: tuple[Vector, Vector]
 
 
 @dataclass(frozen=True)
@@ -853,25 +1071,30 @@ class Check:
     """The leave-one-out check of a model: each listing's score in the fit without one favorite's labels, by
     favorite."""
     design: Design
-    scores: dict
+    scores: dict[str, Vector]
 
     @cached_property
-    def ranks(self):
+    def ranks(self) -> dict[str, int]:
         return held_out_ranks(self.design, self.scores)
 
 
-def leave_one_out(model):
+def leave_one_out(model: Model) -> Check:
     """The converged leave-one-out check of a fitted model."""
     mean, precision = model.prior
     return Check(model.design, held_out_scores(model.design, model.fit, model.observations, model.unlabeled_weight, mean, precision))
 
 
-def summary_of(held_out):
+def summary_of(held_out: Mapping[str, float]) -> HeldOutSummary:
     values = list(held_out.values())
     return {'median': median(values) if values else None, 'mean': fmean(values) if values else None}
 
 
-def fit_model(inputs, hyperparameters=None, *, weak_labels=None, warm_start=None):
+Candidate = tuple[Vector, Vector, Observations, Fit]
+"""A fit at one (prior scale, weak-negative weight): the prior's mean and precision, the rows it was fitted on and the fit."""
+
+
+def fit_model(inputs: RankingInputs, hyperparameters: Hyperparameters | None = None, *, weak_labels: Mapping[str, Label] | None = None,
+              warm_start: Model | None = None) -> Model:
     """The fitted scoring model with the given (prior scale, weak-negative weight). Without them, once there are
     TUNING_FAVORITES favorites, the leave-one-out check chooses them: first the weak-negative weight among
     UNLABELED_WEIGHTS at the first of PRIOR_SCALES, then the prior scale among PRIOR_SCALES at that weight, each time
@@ -881,36 +1104,46 @@ def fit_model(inputs, hyperparameters=None, *, weak_labels=None, warm_start=None
     model_design = warm_start.design if warm_start else design(inputs)
     dense_count = model_design.dense_count
     tuning = hyperparameters is None and len(model_design.favorites) >= TUNING_FAVORITES
-    fits, start = {}, [warm_start.fit.weights if warm_start else None]
+    fits: dict[Hyperparameters, Candidate] = {}
+    checks: dict[Hyperparameters, float] = {}
+    start: list[Vector | None] = [warm_start.fit.weights if warm_start else None]
 
-    def candidate(scale, unlabeled_weight):
+    def candidate(scale: float, unlabeled_weight: float) -> Candidate:
         if (scale, unlabeled_weight) not in fits:
             mean, precision = prior(model_design, scale)
             data = observations(model_design, inputs, unlabeled_weight, weak_labels=weak_labels)
             full = fit(data, mean, precision, dense_count, start[0], settle=not tuning)
             start[0] = full.weights
-            check = summary_of(held_out_ranks(model_design, held_out_scores(model_design, full, data, unlabeled_weight, mean, precision, converge=False)))['mean'] if tuning else None
-            fits[scale, unlabeled_weight] = (check, mean, precision, data, full)
+            if tuning:
+                checks[scale, unlabeled_weight] = fmean(held_out_ranks(model_design, held_out_scores(
+                    model_design, full, data, unlabeled_weight, mean, precision, converge=False)).values())
+            fits[scale, unlabeled_weight] = (mean, precision, data, full)
         return fits[scale, unlabeled_weight]
 
+    def checked(scale: float, unlabeled_weight: float) -> float:
+        """The approximate check's mean held-out rank at these hyperparameters, fitting them first when needed."""
+        _ = candidate(scale, unlabeled_weight)
+        return checks[scale, unlabeled_weight]
+
     if tuning:
-        unlabeled_weight = min(UNLABELED_WEIGHTS, key=lambda weight: candidate(PRIOR_SCALES[0], weight)[0])
-        scale = min(PRIOR_SCALES, key=lambda value: candidate(value, unlabeled_weight)[0])
+        unlabeled_weight = min(UNLABELED_WEIGHTS, key=lambda weight: checked(PRIOR_SCALES[0], weight))
+        scale = min(PRIOR_SCALES, key=lambda value: checked(value, unlabeled_weight))
     else:
         scale, unlabeled_weight = hyperparameters or DEFAULT_HYPERPARAMETERS
-    _, mean, precision, data, full = candidate(scale, unlabeled_weight)
+    mean, precision, data, full = candidate(scale, unlabeled_weight)
     if tuning:
         full = settled(data, full.weights, mean, precision, dense_count)
     return Model(model_design, full, scale, unlabeled_weight, data, (mean, precision))
 
 
-def display(model_design, index, name):
+def display(model_design: Design, index: int, name: str) -> str | None:
     """How the listing's record states the value of a column, in words, or None when it does not state it."""
     if name.startswith('composite:'):
         record = model_design.listings[model_design.ids[index]]['record']
+        ratings: dict[str, Rating | NotShown] = record['ratings'] if record else {}
         composite = name.split(':', 1)[1]
-        known = [(component, record['ratings'][component]['value']) for component in COMPOSITES[composite]
-                 if record and record['ratings'][component] != 'not shown']
+        known = [(component, rating['value']) for component in COMPOSITES[composite]
+                 if (rating := ratings.get(component, NOT_SHOWN)) != NOT_SHOWN]
         if not known:
             return None
         average = fmean(value for _, value in known)
@@ -925,7 +1158,8 @@ def display(model_design, index, name):
         return None
     kind, _, key = name.partition(':')
     if kind == 'rating':
-        return f'{rating_words(key)} {record["ratings"][key]["value"]} of 5'
+        rating = record['ratings'][key] if record else NOT_SHOWN
+        return f'{rating_words(key)} {rating["value"]} of 5' if rating != NOT_SHOWN else None
     if kind == 'rating_not_shown':
         return f'{rating_words(key)} not shown' if raw[name] else None
     if kind in CATEGORIES:
@@ -943,14 +1177,14 @@ def display(model_design, index, name):
         return f'in {key}' if raw[name] else f'outside {key}'
     if kind == 'preference':
         return f'has "{key}"' if raw[name] else f'rules out "{key}"'
-    column = model_design.columns[model_design.index(name)] if kind in ('hypothesis', 'photo', 'looks_like') else None
-    if kind == 'hypothesis' and column.numeric:
-        return f'photos {"look like" if raw[name] >= column.mean else "unlike"} "{key}" (model\'s guess)'
-    if kind == 'hypothesis':
-        return f'{"has" if raw[name] else "rules out"} "{key}" (model\'s guess)'
-    if kind == 'photo':
-        return f'photos {"look like" if raw[name] >= column.mean else "unlike"} "{key}"'
-    if kind == 'looks_like':
+    if kind in ('hypothesis', 'photo', 'looks_like'):
+        column = next(column for column in model_design.columns if column.name == name)
+        if kind == 'hypothesis' and column.numeric:
+            return f'photos {"look like" if raw[name] >= column.mean else "unlike"} "{key}" (model\'s guess)'
+        if kind == 'hypothesis':
+            return f'{"has" if raw[name] else "rules out"} "{key}" (model\'s guess)'
+        if kind == 'photo':
+            return f'photos {"look like" if raw[name] >= column.mean else "unlike"} "{key}"'
         if raw[name] < column.mean:
             return f'{ROOM_WORDS[key]} unlike your favorites'
         return f'{ROOM_WORDS[key]} looks like your favorite {title(model_design.listings[model_design.photo_matches[name][index][0][1]])}'
@@ -961,35 +1195,40 @@ def display(model_design, index, name):
         return f'{min(distances):.1f} km from the nearest favorite' if distances else None
     if name == 'station_distance':
         station = code['nearest_station']
+        if station is None:
+            return None
         return f'{raw[name]:.1f} km to {station if station.casefold().endswith("station") else f"{station} station"}'
     if kind == 'place':
         return f'{raw[name]:.1f} km from {key}'
     currency = f' {code["currency"]}' if code.get('currency') else ''
-    return {
-        'price': lambda: f'{code["monthly_price"]:,.0f}{currency} a month',
-        'size': lambda: f'{code["size_sqft"]:,.0f} sq ft',
-        'price_per_sqft': lambda: f'{code["price_per_sqft"]:,.2f}{currency} per sq ft',
-        'bedrooms': lambda: counted(code['bedrooms'], 'bedroom'),
-        'bathrooms': lambda: counted(code['bathrooms'], 'bathroom'),
-        'photos': lambda: counted(code['photo_count'], 'photo'),
-    }[name]()
+    number = {'price': code['monthly_price'], 'size': code['size_sqft'], 'price_per_sqft': code['price_per_sqft'],
+              'bedrooms': code['bedrooms'], 'bathrooms': code['bathrooms'], 'photos': code['photo_count']}[name]
+    if number is None:
+        return None
+    if name == 'price':
+        return f'{number:,.0f}{currency} a month'
+    if name == 'size':
+        return f'{number:,.0f} sq ft'
+    if name == 'price_per_sqft':
+        return f'{number:,.2f}{currency} per sq ft'
+    return counted(number, {'bedrooms': 'bedroom', 'bathrooms': 'bathroom', 'photos': 'photo'}[name])
 
 
-def counted(number, noun):
+def counted(number: float, noun: str) -> str:
     return f'{number:g} {noun}{"" if number == 1 else "s"}'
 
 
-def title(listing):
+def title(listing: RankingListing) -> str:
     return (listing['title'] or listing['address'] or listing['id'])[:80]
 
 
-def weighted_rows(model_design, weights):
+def weighted_rows(model_design: Design, weights: Sequence[float]) -> list[Vector]:
     """Each listing's contributions, column by column."""
     features = weights[1:]
-    return [list(map(mul, row, features)) for row in model_design.rows]
+    return [[value * weight for value, weight in zip(row, features)] for row in model_design.rows]
 
 
-def most_similar_favorite(model_design, contributed, index):
+def most_similar_favorite(model_design: Design, contributed: Sequence[Vector], index: int) -> str | None:
     """The favorite nearest the listing under the learned weights: the one whose contributions differ least."""
     identifier = model_design.ids[index]
     candidates = [model_design.ids.index(favorite) for favorite in model_design.favorites if favorite != identifier]
@@ -999,7 +1238,7 @@ def most_similar_favorite(model_design, contributed, index):
     return model_design.ids[nearest]
 
 
-def explanation(model_design, contributed, index):
+def explanation(model_design: Design, contributed: Sequence[Vector], index: int) -> Explanation:
     """The full explanation of a listing's score: every feature's contribution, largest first, which add up to the
     score, and the most similar favorite."""
     parts = [(column.name, value) for column, value in zip(model_design.columns, contributed[index])]
@@ -1012,22 +1251,23 @@ def explanation(model_design, contributed, index):
     }
 
 
-def feature_reason(contributions):
+def feature_reason(contributions: Iterable[Contribution]) -> FeatureReason:
     """The part of a reason that names the features that moved the score most, as the listing's record states them:
     the values of the largest contributions for the listing and of the largest against it, each list largest first."""
-    cited = [part for part in contributions if part['value'] is not None and abs(part['contribution']) >= REASON_THRESHOLD]
-    return {'for': [part['value'] for part in cited if part['contribution'] > 0][:REASON_UP],
-            'against': [part['value'] for part in cited if part['contribution'] < 0][:REASON_DOWN]}
+    cited = [(value, part['contribution']) for part in contributions
+             if (value := part['value']) is not None and abs(part['contribution']) >= REASON_THRESHOLD]
+    return {'for': [value for value, contribution in cited if contribution > 0][:REASON_UP],
+            'against': [value for value, contribution in cited if contribution < 0][:REASON_DOWN]}
 
 
-def compose_reason(features, *, code_only, similar_favorite):
+def compose_reason(features: FeatureReason | ReasonText, *, code_only: bool, similar_favorite: SimilarFavorite | None) -> Reason:
     """A listing's reason, in parts the gallery and the agent render: whether it is ranked from code features only, the
     part that names its features, either feature_reason's lists or {'text': ...} a review wrote, and the title of its
     most similar favorite. An exploration listing's mark is its own."""
     return {'code_only': code_only, 'features': features, 'similar_favorite': similar_favorite['title'] if similar_favorite else None}
 
 
-def reason(model_design, details, index):
+def reason(model_design: Design, details: Explanation, index: int) -> Reason:
     """The reason naming the features that moved the score most, as the listing's record states them, and the most
     similar favorite."""
     return compose_reason(feature_reason(details['contributions']),
@@ -1035,14 +1275,14 @@ def reason(model_design, details, index):
                           similar_favorite=details['similar_favorite'])
 
 
-def explore(model_design, fit_result, order, seed):
+def explore(model_design: Design, fit_result: Fit, order: Sequence[int], seed: int) -> list[int]:
     """Up to one listing for each of EXPLORATION_RANKS, by posterior sampling: each draw of the weights from the Laplace
     posterior picks the unlabeled ranked listing outside the mean's top that scores highest under it and is not drawn
     yet. Fewer such listings give fewer exploration listings."""
     keep = TOP - len(EXPLORATION_RANKS)
     candidates = [index for index in order[keep:] if not labeled(model_design.listings[model_design.ids[index]])]
     generator = random.Random(seed)
-    chosen = []
+    chosen: list[int] = []
     for _ in EXPLORATION_RANKS:
         remaining = [index for index in candidates if index not in chosen]
         if not remaining:
@@ -1053,13 +1293,13 @@ def explore(model_design, fit_result, order, seed):
     return chosen
 
 
-def ranked_order(model_design, weights):
+def ranked_order(model_design: Design, weights: Sequence[float]) -> list[int]:
     rankable = [index for index, identifier in enumerate(model_design.ids) if model_design.listings[identifier]['rankable']]
     values = scores(model_design.likelihood_rows, weights, model_design.dense_count)
     return sorted(rankable, key=lambda index: (-values[index], model_design.ids[index]))
 
 
-def rank_listings(inputs, seed, *, model=None):
+def rank_listings(inputs: RankingInputs, seed: int, *, model: Model | None = None) -> RankingResult:
     """The rerank's result: each ranked listing's rank, reason, explanation and exploration mark, the reason each
     other listing shown in Rankings is not ranked, and the summary with each favorite's held-out rank from the
     leave-one-out check. model, when supplied, is already fitted to these inputs."""
@@ -1072,16 +1312,18 @@ def rank_listings(inputs, seed, *, model=None):
     for slot, index in zip(EXPLORATION_RANKS, exploring):
         rest.insert(slot - 1, index)
     contributed = weighted_rows(model_design, weights)
-    ranked = {}
+    ranked: dict[str, RankedListing] = {}
     for position, index in enumerate(rest, 1):
         identifier = model_design.ids[index]
         details = explanation(model_design, contributed, index)
         ranked[identifier] = {'fingerprint': model_design.listings[identifier]['fingerprint'], 'rank': position,
                               'reason': reason(model_design, details, index),
                               'explanation': details, 'exploration': index in exploring}
-    unranked = {listing['id']: {'fingerprint': listing['fingerprint']}
-                for listing in inputs['listings'] if listing['rankable'] and listing['id'] not in ranked}
-    held_out = [{'id': identifier, 'title': title(model_design.listings[identifier]), 'rank': rank} for identifier, rank in check.ranks.items()]
+    unranked: dict[str, UnrankedListing] = {listing['id']: {'fingerprint': listing['fingerprint']}
+                                            for listing in inputs['listings'] if listing['rankable'] and listing['id'] not in ranked}
+    held_out: list[HeldOutRank] = [{'id': identifier, 'title': title(model_design.listings[identifier]), 'rank': rank}
+                                   for identifier, rank in check.ranks.items()]
+    check_summary = summary_of(check.ranks)
     values = scores(model_design.likelihood_rows, weights, model_design.dense_count)
     position = {identifier: index for index, identifier in enumerate(model_design.ids)}
     return {'ranked': ranked, 'unranked': unranked, 'check': {
@@ -1092,7 +1334,8 @@ def rank_listings(inputs, seed, *, model=None):
     }, 'summary': {
         'ranked': len(ranked), 'waiting_for_features': len(unranked),
         'labels': len(inputs['pairs']) + sum(label(listing, inputs['sentiments'].get(listing['id'])) is not None for listing in inputs['listings']),
-        'favorites': len(model_design.favorites), 'held_out': held_out, **{f'held_out_{key}': value for key, value in summary_of(check.ranks).items()},
+        'favorites': len(model_design.favorites), 'held_out': held_out,
+        'held_out_median': check_summary['median'], 'held_out_mean': check_summary['mean'],
         'exploration': [model_design.ids[index] for index in exploring], 'seed': seed,
         'prior_scale': model.scale, 'unlabeled_weight': model.unlabeled_weight,
         'weights': {column.name: weight for column, weight in zip(model_design.columns, weights[1:])},
@@ -1100,10 +1343,10 @@ def rank_listings(inputs, seed, *, model=None):
     }}
 
 
-def state_findings(model_design, weights):
+def state_findings(model_design: Design, weights: Sequence[float]) -> list[str]:
     """What looks wrong in the fitted model that code can tell: a large weight on a present-or-absent feature that a
     single labeled listing carries, because one label is not evidence of a taste."""
-    findings = []
+    findings: list[str] = []
     for column, weight in zip(model_design.columns, weights[1:]):
         if column.numeric or abs(weight) < SINGLE_LABEL_WEIGHT:
             continue
@@ -1111,11 +1354,11 @@ def state_findings(model_design, weights):
                     if labeled(model_design.listings[identifier]) and model_design.raw[index].get(column.name) == 1.0]
         if len(carriers) == 1:
             findings.append(f'The weight of {column.name} ({weight:+.2f}) rests on a single labeled listing, '
-                            f'{title(model_design.listings[carriers[0]])}.')
+                            + f'{title(model_design.listings[carriers[0]])}.')
     return findings
 
 
-def questions(inputs, hyperparameters, count, answered):
+def questions(inputs: RankingInputs, hyperparameters: Hyperparameters | None, count: int, answered: Iterable[Iterable[str]]) -> list[Question]:
     """Up to count pairwise questions: pairs among the QUESTION_CANDIDATES best ranked listings with the largest
     posterior variance of their feature difference,
     each listing in at most one question, without pairs already answered either way."""
@@ -1123,24 +1366,25 @@ def questions(inputs, hyperparameters, count, answered):
     return select_questions(model, count, answered)
 
 
-def select_questions(model, count, answered):
+def select_questions(model: Model, count: int, answered: Iterable[Iterable[str]]) -> list[Question]:
     """Select disjoint informative pairs from a fitted model or its prior."""
     model_design, fit_result = model.design, model.fit
     order = ranked_order(model_design, fit_result.weights)[:QUESTION_CANDIDATES]
     values = scores(model_design.likelihood_rows, fit_result.weights, model_design.dense_count)
     spread = {index: fit_result.factor.forward([0.0, *model_design.rows[index]]) for index in order}
-    answered = {frozenset(pair) for pair in answered}
-    pairs = []
+    asked = {frozenset(pair) for pair in answered}
+    pairs: list[tuple[float, str, str, float]] = []
     for position, first in enumerate(order):
         for second in order[position + 1:]:
-            if frozenset((model_design.ids[first], model_design.ids[second])) in answered:
+            if frozenset((model_design.ids[first], model_design.ids[second])) in asked:
                 continue
             deviation = math.sqrt(sum((left - right) ** 2 for left, right in zip(spread[first], spread[second])))
             if deviation <= 1e-12:
                 continue
             probability = 0.5 * (1 + math.erf((values[first] - values[second]) / (deviation * math.sqrt(2))))
             pairs.append((-deviation ** 2, model_design.ids[first], model_design.ids[second], probability))
-    chosen, used = [], set()
+    chosen: list[Question] = []
+    used: set[str] = set()
     for negative_variance, first, second, probability in sorted(pairs):
         if len(chosen) == count:
             break

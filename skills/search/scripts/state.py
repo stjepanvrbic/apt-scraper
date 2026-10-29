@@ -4,7 +4,7 @@ problem the cron script found before the search could run."""
 
 import json
 import sqlite3
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -80,7 +80,7 @@ class SearchState:
                 _ = connection.execute(statement)
 
     @contextmanager
-    def connect(self) -> Iterator[sqlite3.Connection]:
+    def connect(self) -> Generator[sqlite3.Connection]:
         connection = sqlite3.connect(self.path, timeout=10)
         connection.row_factory = sqlite3.Row
         try:
@@ -124,7 +124,7 @@ class SearchState:
         with self.connect() as connection:
             row = cast(sqlite3.Row | None, connection.execute('SELECT count FROM blocks WHERE site = ?', (site,)).fetchone())
             count = (cast(int, row['count']) if row else 0) + 1
-            until = now + min(FIRST_BLOCK * 2 ** (count - 1), LONGEST_BLOCK)
+            until = now + min(FIRST_BLOCK * (1 << (count - 1)), LONGEST_BLOCK)
             _ = connection.execute('INSERT INTO blocks VALUES (?, ?, ?) ON CONFLICT(site) DO UPDATE SET count = excluded.count, until = excluded.until',
                                    (site, count, until.isoformat()))
             return until

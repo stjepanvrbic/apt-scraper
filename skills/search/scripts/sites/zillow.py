@@ -99,12 +99,17 @@ class Remaining:
     last: int
 
 
-class Card(TypedDict):
+class ListingPage(TypedDict):
+    """What the reader needs to read a listing's page: where it is and, for one unit of a building, which unit."""
     id: str
     url: str
     building: bool
     zpid: str | None
     available_on: str | None
+
+
+class Card(ListingPage):
+    """A listing page as a results page showed it, with a signature of what the card showed."""
     signature: str
 
 
@@ -259,7 +264,7 @@ def filters(criteria: Criteria) -> Filters:
 
 def searches(criteria: Criteria, client: Fetcher, regions: dict[str, object]) -> list[Search]:
     found: list[Search] = []
-    for area in criteria['location']:
+    for area in criteria.get('location', []):
         if area not in regions:
             regions[area] = resolve(area, client)
         found.append({'area': area, 'region': cast(Region, regions[area]), 'filters': filters(criteria)})
@@ -404,7 +409,7 @@ def building_amenities(building: dict[str, object]) -> list[str]:
     for group in map(obj, arr(obj(structured.get('buildingAmenities')).get('amenityGroups'))):
         amenities += arr(group.get('amenities'))
     for section in ('unitFeatures', 'policies', 'specialFeatures'):
-        value = structured.get(section) or {}
+        value = structured.get(section)
         if is_array(value):
             amenities += value
             continue
@@ -461,7 +466,7 @@ def offer_line(offer: Offer) -> str:
     return f'{rooms(offer["beds"], offer["baths"])}, {size}: {price}, available {offer["available_on"] or "now"} ({offer["label"] or "unit"})'
 
 
-def read_building(card: Card, building: dict[str, object]) -> tuple[SiteListing, Facts]:
+def read_building(card: ListingPage, building: dict[str, object]) -> tuple[SiteListing, Facts]:
     available = offers(building)
     selected: list[Offer] = available if card['building'] else [offer for offer in available if card['zpid'] in (offer['zpid'], offer['plan'])]
     if not selected:
@@ -502,7 +507,7 @@ def home_amenities(facts: dict[str, object]) -> list[str]:
     return unique(amenities)
 
 
-def read_home(card: Card, home: dict[str, object]) -> tuple[SiteListing, Facts]:
+def read_home(card: ListingPage, home: dict[str, object]) -> tuple[SiteListing, Facts]:
     if home.get('homeStatus') != 'FOR_RENT':
         raise Gone(card['url'])
     facts = obj(home.get('resoFacts'))
@@ -522,7 +527,7 @@ def read_home(card: Card, home: dict[str, object]) -> tuple[SiteListing, Facts]:
     return listing, {'currency': listing['currency'], **coordinates(home), 'stories': count(facts.get('storiesTotal')), 'units': [unit]}
 
 
-def read(card: Card, client: Fetcher) -> tuple[SiteListing, Facts]:
+def read(card: ListingPage, client: Fetcher) -> tuple[SiteListing, Facts]:
     page = fetch(client, card['url'])
     try:
         props = obj(member(page_data(page, card['url']), 'props', 'pageProps', 'componentProps'))

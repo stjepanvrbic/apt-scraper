@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Protocol, TypedDict, cast
 from urllib.error import URLError
@@ -15,6 +16,11 @@ class GalleryServer(Protocol):
     """The running gallery server as make_server returns it."""
     server_port: int
     access_token: str
+
+
+class Body(Protocol):
+    """The body of an HTTP answer, as urlopen's response reads it."""
+    def read(self) -> bytes: ...
 
 
 class Connection(TypedDict):
@@ -88,8 +94,8 @@ def forget_connection(database: str | Path, port: int, token: str) -> None:
 def api_request(record: Connection, path: str, body: object = None) -> object:
     request = Request(record['url'] + path, headers={'Authorization': 'Bearer ' + record['token'], 'Content-Type': 'application/json'},
                       data=json.dumps(body).encode() if body is not None else None)
-    with urlopen(request, timeout=3) as response:
-        return cast(object, json.load(response))
+    with cast(AbstractContextManager[Body], urlopen(request, timeout=3)) as response:
+        return cast(object, json.loads(response.read()))
 
 
 def health(record: Connection) -> Health | None:
