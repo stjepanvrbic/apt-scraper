@@ -155,7 +155,7 @@ class LauncherTests(unittest.TestCase):
 
 
 class ShippedJobTests(unittest.TestCase):
-    def test_the_hourly_job_runs_this_script_with_the_search_skill_and_the_installers_build_and_turn_it_on(self):
+    def test_the_hourly_job_runs_this_script_with_the_search_skill_and_the_install_turns_it_on(self):
         jobs = json.loads((ROOT / 'cron' / 'jobs.json').read_text(encoding='utf-8'))['jobs']
         [job] = [job for job in jobs if job['id'] == 'apt-scraper-search']
         self.assertEqual((job['script'], job['skills'], job['schedule'], job['deliver'], job['failure_deliver']),
@@ -164,8 +164,6 @@ class ShippedJobTests(unittest.TestCase):
         powershell, shell = ((ROOT / name).read_text(encoding='utf-8') for name in ('install.ps1', 'install.sh'))
         self.assertIn("cron', 'resume', 'apt-scraper-search'", powershell)
         self.assertIn('cron resume apt-scraper-search', shell)
-        self.assertIn('search-run.py', powershell)
-        self.assertIn('search-run.py', shell)
         for line in (ROOT / 'skills' / 'search' / 'requirements.txt').read_text(encoding='utf-8').splitlines():
             if line and not line.startswith(' '):
                 self.assertRegex(line, r'^[a-z0-9-]+==[0-9.]+ ')

@@ -584,7 +584,7 @@ class CommandTests(ReviewTestCase):
 
 
 class ShippedJobTests(unittest.TestCase):
-    def test_the_profile_ships_the_review_job_and_the_installers_turn_it_on(self):
+    def test_the_profile_ships_the_review_job_and_the_install_turns_it_on(self):
         jobs = {job['id']: job for job in json.loads((ROOT / 'cron/jobs.json').read_text(encoding='utf-8'))['jobs']}
         job = jobs['apt-scraper-review']
         self.assertEqual((job['skills'], job['schedule'], job['deliver']), (['ranking'], 'every 1m', 'local'))

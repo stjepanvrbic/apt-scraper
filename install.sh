@@ -15,7 +15,11 @@ hermes -p "$profile" plugins install claude-subscription-directsdk --force --ena
 hermes -p "$profile" skills install google-workspace --yes
 hermes -p "$profile" computer-use install --upgrade
 if [ "$(uname -s)" = Darwin ]; then hermes -p "$profile" computer-use permissions grant; fi
-for job in contact search features review encoder; do hermes -p "$profile" cron resume "$profile-$job"; done
+hermes -p "$profile" cron resume apt-scraper-contact
+hermes -p "$profile" cron resume apt-scraper-search
+hermes -p "$profile" cron resume apt-scraper-features
+hermes -p "$profile" cron resume apt-scraper-review
+hermes -p "$profile" cron resume apt-scraper-encoder
 hermes gateway install --if-missing --start-now --start-on-login
 
 echo "Installed. Open the chat with: hermes -p $profile dashboard"

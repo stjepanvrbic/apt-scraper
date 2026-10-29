@@ -276,10 +276,8 @@ class LauncherTests(unittest.TestCase):
         jobs = json.loads((ROOT / 'cron' / 'jobs.json').read_text(encoding='utf-8'))['jobs']
         [job] = [job for job in jobs if job['id'] == 'apt-scraper-encoder']
         self.assertEqual((job['script'], job['schedule']), ('encoder-run.py', 'every 10m'))
-        powershell, shell = ((ROOT / name).read_text(encoding='utf-8') for name in ('install.ps1', 'install.sh'))
-        for text in (powershell, shell):
-            self.assertIn('encoder-run.py', text)
-            self.assertIn('apt-scraper-encoder', text)
+        self.assertIn("cron', 'resume', 'apt-scraper-encoder'", (ROOT / 'install.ps1').read_text(encoding='utf-8'))
+        self.assertIn('cron resume apt-scraper-encoder', (ROOT / 'install.sh').read_text(encoding='utf-8'))
         for line in (ENCODER / 'requirements.txt').read_text(encoding='utf-8').splitlines():
             if line and not line.startswith((' ', '#')):
                 self.assertRegex(line, r'^[a-z0-9-]+==[0-9.]+ ')

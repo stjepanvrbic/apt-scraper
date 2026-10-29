@@ -19,7 +19,11 @@ Invoke-Step hermes, 'profile', 'install', 'github.com/stjepanvrbic/apt-scraper',
 Invoke-Step hermes, '-p', $name, 'plugins', 'install', 'claude-subscription-directsdk', '--force', '--enable'
 Invoke-Step hermes, '-p', $name, 'skills', 'install', 'google-workspace', '--yes'
 Invoke-Step hermes, '-p', $name, 'computer-use', 'install', '--upgrade'
-foreach ($job in 'contact', 'search', 'features', 'review', 'encoder') { Invoke-Step hermes, '-p', $name, 'cron', 'resume', "$name-$job" }
+Invoke-Step hermes, '-p', $name, 'cron', 'resume', 'apt-scraper-contact'
+Invoke-Step hermes, '-p', $name, 'cron', 'resume', 'apt-scraper-search'
+Invoke-Step hermes, '-p', $name, 'cron', 'resume', 'apt-scraper-features'
+Invoke-Step hermes, '-p', $name, 'cron', 'resume', 'apt-scraper-review'
+Invoke-Step hermes, '-p', $name, 'cron', 'resume', 'apt-scraper-encoder'
 Invoke-Step hermes, 'gateway', 'install', '--if-missing', '--start-now', '--start-on-login'
 
 Write-Host "Installed. Open the chat with: hermes -p $name dashboard" -ForegroundColor Green
