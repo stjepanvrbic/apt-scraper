@@ -111,7 +111,9 @@ class RerankServerTests(GalleryServerCase):
         fill(self.store, 300, 50)
         budget = cpu_budget()
         started = time.perf_counter()
-        summary = self.request('/api/rerank', {}, timeout=budget)
+        # The budget is CPU time; a wall-clock timeout with a margin lets a slow run fail on the assertion, which
+        # reports the measured values, instead of on the socket.
+        summary = self.request('/api/rerank', {}, timeout=max(10, 3 * budget))
         items = self.request('/api/listings')['items']
         elapsed = time.perf_counter() - started
         self.assertEqual((summary['ranked'], len(summary['held_out'])), (300, 50))

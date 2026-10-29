@@ -32,7 +32,7 @@ To run the agent on another provider Hermes supports, run `hermes -p apt-scraper
 hermes profile delete apt-scraper --yes
 ```
 
-Then remove the listing store and the gallery's saved connections: `%LOCALAPPDATA%pt-scraper` and `.secretspt-scraper` in your user folder on Windows, `~/Library/Application Support/apt-scraper` and `~/.secrets/apt-scraper` on macOS. Hermes, the gateway service and Claude Code stay; `hermes gateway uninstall` and `hermes uninstall` remove Hermes.
+Then remove the listing store and the gallery's saved connections: `%LOCALAPPDATA%\apt-scraper` and `.secrets\apt-scraper` in your user folder on Windows, `~/Library/Application Support/apt-scraper` and `~/.secrets/apt-scraper` on macOS. Hermes, the gateway service and Claude Code stay; `hermes gateway uninstall` and `hermes uninstall` remove Hermes.
 
 ### Development
 
@@ -51,7 +51,7 @@ tests/run.sh
 Windows:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .	estsun.ps1
+powershell -ExecutionPolicy Bypass -File .\tests\run.ps1
 ```
 
 GitHub Actions runs the same scripts on a fresh Linux, macOS and Windows machine for every push and pull request.
