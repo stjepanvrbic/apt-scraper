@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest import mock
 from urllib.parse import parse_qs, urlsplit
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
 
 import geodata  # noqa: E402
 from geodata import (NOMINATIM, NOMINATIM_INTERVAL_SECONDS, USER_AGENT, SourceUnavailable, fetch_stations, found_place, geocode,  # noqa: E402

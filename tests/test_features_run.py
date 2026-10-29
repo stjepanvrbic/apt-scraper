@@ -13,7 +13,7 @@ from unittest import mock
 
 from PIL import Image
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/listing-features/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/listing-features/scripts'))
 
 from test_feature_record import extraction  # noqa: E402
 from test_gallery_store import ListingStore, listing  # noqa: E402
@@ -26,7 +26,7 @@ from geodata import SourceUnavailable  # noqa: E402
 from scoring import design, observations, reading_vocabulary  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / 'profile/skills/listing-features/scripts/features.py'
+SCRIPT = ROOT / 'skills/listing-features/scripts/features.py'
 NOW = datetime(2026, 10, 25, 12, 0, tzinfo=timezone.utc)
 TAG_SHAPE = r"\A[a-z0-9][a-z0-9 '&/-]{0,38}[a-z0-9]\Z"
 SETTINGS = {
@@ -973,13 +973,13 @@ class ReadingTests(FeaturesTestCase):
 
 class ShippedJobTests(unittest.TestCase):
     def test_the_profile_ships_the_features_job_with_its_script_and_tools(self):
-        jobs = {job['id']: job for job in json.loads((ROOT / 'profile/cron/jobs.json').read_text(encoding='utf-8'))['jobs']}
+        jobs = {job['id']: job for job in json.loads((ROOT / 'cron/jobs.json').read_text(encoding='utf-8'))['jobs']}
         job = jobs['apt-scraper-features']
         self.assertEqual(job['skills'], ['listing-features'])
-        self.assertTrue((ROOT / 'profile/scripts' / job['script']).exists())
+        self.assertTrue((ROOT / 'scripts' / job['script']).exists())
 
     def test_the_features_session_has_the_file_vision_and_delegation_tools_and_no_terminal(self):
-        job = next(job for job in json.loads((ROOT / 'profile/cron/jobs.json').read_text(encoding='utf-8'))['jobs'] if job['id'] == 'apt-scraper-features')
+        job = next(job for job in json.loads((ROOT / 'cron/jobs.json').read_text(encoding='utf-8'))['jobs'] if job['id'] == 'apt-scraper-features')
         self.assertEqual(job['enabled_toolsets'], ['file', 'vision', 'delegation', 'no_mcp'])
         for template in (features.EXTRACTION_TEMPLATE, features.JUDGMENT_TEMPLATE, features.READING_TEMPLATE):
             self.assertNotIn('terminal', template.read_text(encoding='utf-8'))

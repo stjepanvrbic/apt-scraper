@@ -213,6 +213,6 @@ class CompareInvitationTests(FeaturesTestCase):
         self.assertFalse(self.asks())
 
     def test_installed_job_does_not_delegate_the_invitation(self):
-        job = next(job for job in json.loads((ROOT / 'profile/cron/jobs.json').read_text())['jobs']
+        job = next(job for job in json.loads((ROOT / 'cron/jobs.json').read_text())['jobs']
                    if job['id'] == 'apt-scraper-features')
         self.assertNotIn('compare', job['prompt'].lower())

@@ -1,25 +1,13 @@
 # Runs every check on Windows in a fresh virtual environment: Ruff, the Python suite with zero skips, then the
-# gallery's lint, build, build-output check and Playwright suite. Written for Windows PowerShell 5.1, which the
-# installer tests run the PowerShell scripts in.
-# Needs Python 3.14, Git for Windows (its bash and perl run the macOS installer tests) and Node 24. CI runs it on
-# a fresh machine; on a developer's PC, tests/sandbox.ps1 runs it in Windows Sandbox.
-#   tests\run.ps1 [-Work <directory>] [-Python <interpreter command>] [-Bare]
-# -Python defaults to the python on PATH. Outside CI and the sandbox the script stops and points at
-# tests\sandbox.ps1: a run on a developer's PC depends on what the PC has installed, and every PowerShell the
-# tests start opens a console window of its own when the run has no console. -Bare runs it anyway.
+# gallery's lint, build, build-output check and Playwright suite. Needs Python 3.14 and Node 24. CI runs it on a
+# fresh machine.
+#   tests\run.ps1 [-Work <directory>] [-Python <interpreter command>]
 param(
     [string]$Work = (Join-Path $env:TEMP 'apt-scraper-tests'),
-    [string]$Python = '',
-    [switch]$Bare
+    [string]$Python = 'python'
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-if (-not ($Bare -or $env:CI -or $env:APT_SCRAPER_SANDBOX)) {
-    Write-Host 'This PC is neither CI nor a Windows Sandbox. Run the checks in a sandbox:' -ForegroundColor Red
-    Write-Host '  powershell -ExecutionPolicy Bypass -File tests\sandbox.ps1'
-    Write-Host 'or pass -Bare to run them here anyway.'
-    exit 2
-}
 
 function Write-Step([string]$Message) { Write-Host ''; Write-Host "==> $Message" -ForegroundColor Cyan }
 function Invoke-Checked([string]$Command) {
@@ -27,14 +15,6 @@ function Invoke-Checked([string]$Command) {
     Invoke-Expression $Command
     if ($LASTEXITCODE -ne 0) { throw "Failed with exit code ${LASTEXITCODE}: $Command" }
 }
-
-if (-not $Python) { $Python = 'python' }
-# Git for Windows's own bash and perl, ahead of System32, whose bash.exe starts WSL. Its usr\bin, not its bin:
-# bin\bash.exe is a wrapper that puts Git's mingw64\bin and usr\bin ahead of everything on PATH, so the real git
-# and claude would beat the fakes the tests put first.
-$gitExecutable = (Get-Command git -ErrorAction Stop).Source
-$gitRoot = Split-Path -Parent (Split-Path -Parent $gitExecutable)
-$env:PATH = (Join-Path $gitRoot 'usr\bin') + ';' + $env:PATH
 
 Write-Step "Virtual environment in $Work\venv"
 New-Item -ItemType Directory -Force $Work | Out-Null
@@ -58,11 +38,11 @@ Invoke-Checked 'npm ci --no-audit --no-fund'
 Invoke-Checked 'npm run lint'
 Invoke-Checked 'npm run build'
 # The committed assets must be the build of the committed source: no changed file, and no new one.
-$assetChanges = git -C $root status --porcelain -- profile/skills/gallery/web
+$assetChanges = git -C $root status --porcelain -- skills/gallery/web
 if ($LASTEXITCODE -ne 0) { throw "git status failed with exit code $LASTEXITCODE" }
 if ($assetChanges) {
     $assetChanges | ForEach-Object { Write-Host $_ }
-    throw 'The gallery build differs from the committed assets in profile/skills/gallery/web. Build and commit them.'
+    throw 'The gallery build differs from the committed assets in skills/gallery/web. Build and commit them.'
 }
 
 Write-Step 'Gallery: Playwright'

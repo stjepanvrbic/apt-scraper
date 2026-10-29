@@ -6,101 +6,59 @@ An apartment-hunting agent built on [Hermes Agent](https://hermes-agent.nousrese
 
 ## Install
 
-You need Windows 10 1809 or later, or macOS 13 or later on Apple Silicon, and a Claude Pro or Max subscription or an account with another provider Hermes supports. Paste one line into a terminal.
+You need Windows 10 1809 or later, or macOS 13 or later on Apple Silicon, and a Claude Pro or Max subscription. Paste one line into a terminal.
 
 Windows, in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/stjepanvrbic/apt-scraper/main/bootstrap.ps1 | iex
+iex (irm https://raw.githubusercontent.com/stjepanvrbic/apt-scraper/main/install.ps1)
 ```
 
 macOS, in Terminal:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/stjepanvrbic/apt-scraper/main/bootstrap.sh | bash
+bash <(curl -fsSL https://raw.githubusercontent.com/stjepanvrbic/apt-scraper/main/install.sh)
 ```
 
-The line installs Git if it is missing, with winget on Windows. It then downloads apt-scraper to `%LOCALAPPDATA%\apt-scraper\repo` on Windows or `~/Library/Application Support/apt-scraper/repo` on macOS and runs the installer from there. On a Mac without the Xcode command line tools, which include Git, the line opens their installer: press Install in the dialog, and the line continues once they are installed. The line works only while this repository is public on GitHub.
-
-The installer first asks whether to use your Claude Pro or Max subscription. Press Enter for yes, the recommended choice. Answer `n` to run the agent on any provider Hermes supports: the installer then skips Claude Code and the subscription plugin and opens Hermes's own provider and model menu, where you pick a provider, log in or paste its API key, and pick a model. Only Claude models have been measured for reading and ranking listings; other providers work but are not measured yet. The question comes on every run, so answer `n` again when you update to stay on your provider. An install without a terminal to ask on uses the Claude subscription.
-
-The installer:
-
-1. installs or updates Claude Code, and opens the Claude login if you are logged out, when you use the Claude subscription,
-2. installs Hermes Agent with its computer-use driver, or updates an older Hermes,
-3. installs `profile/` as the Hermes profile `apt-scraper`, with Hermes's Google Workspace skill,
-4. installs the Claude subscription provider plugin into that profile, or opens Hermes's provider and model menu if you answered `n`,
-5. prepares the computer-use driver, and on macOS asks for Accessibility and Screen Recording access. It also sets up the photo encoder, which reads listing photos locally for the ranking, but only when the shipped encoder has passed its quality measurements: the current one has not, so nothing is downloaded for it ([the ranking guide](docs/ranking.md#the-photo-encoder) says more),
-6. installs the Hermes gateway as a service that starts when you log in. It runs the search and your conversations with the agent. Windows may ask for administrator approval,
-7. sends one test message through your subscription or the provider you picked,
-8. makes the Hermes web dashboard start when you log in, and adds an apt-scraper shortcut: in the Start menu on Windows, in Applications on macOS,
-9. starts the dashboard and opens its chat in your browser. The first start builds the dashboard and takes a few minutes.
+The line is a short list of commands, and nothing else: it runs [Hermes Agent's installer](https://hermes-agent.nousresearch.com/) if `hermes` is missing, [Claude Code's installer](https://code.claude.com/docs) and the Claude login if `claude` is missing or logged out, then installs this repository as the Hermes profile `apt-scraper` with `hermes profile install`, adds the Claude subscription provider plugin, Hermes's Google Workspace skill and the computer-use driver, resumes the profile's scheduled jobs, and installs the Hermes gateway as a service that starts when you log in. On macOS it also asks for the Accessibility and Screen Recording permissions the computer-use driver needs, and on Windows adding the gateway service may ask for administrator approval. Then it prints how to open the chat.
 
 To update, paste the same line again. Your settings, memories, sessions and credentials stay in place.
 
+To run the agent on another provider Hermes supports, run `hermes -p apt-scraper model` after the install and pick it in Hermes's menu. Only Claude models have been measured for reading and ranking listings.
+
 ### Uninstall
 
-Paste one line into a terminal. Windows, in PowerShell:
-
-```powershell
-irm https://raw.githubusercontent.com/stjepanvrbic/apt-scraper/main/uninstall.ps1 | iex
-```
-
-macOS, in Terminal:
-
 ```bash
-curl -fsSL https://raw.githubusercontent.com/stjepanvrbic/apt-scraper/main/uninstall.sh | bash
+hermes profile delete apt-scraper --yes
 ```
 
-The line first lists what it removes, then removes it without asking anything: the running dashboard, gallery and account setup browser window, the dashboard's login entry and the apt-scraper shortcut, the Hermes profile `apt-scraper` with your search, scheduled jobs, Google token, connection results, setup browser profile and Python environment, and the apt-scraper folder in `%LOCALAPPDATA%` or `~/Library/Application Support` with the listing store and the downloaded copy of apt-scraper, and the gallery's saved connections in `.secrets\apt-scraper` in your user folder on Windows or `~/.secrets/apt-scraper` on macOS. The rest of `.secrets` stays. A later install starts fresh. Running it again changes nothing.
-
-Hermes, the Hermes gateway service and Claude Code stay, because you may use them for other things. The line ends with how to remove them: `hermes gateway uninstall` and `hermes uninstall` for Hermes, and Claude Code's own uninstall. To remove the Hermes gateway service and Hermes as well, Windows, in PowerShell:
-
-```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/stjepanvrbic/apt-scraper/main/uninstall.ps1))) -Everything
-```
-
-macOS, in Terminal:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/stjepanvrbic/apt-scraper/main/uninstall.sh | bash -s -- --everything
-```
-
-Hermes then keeps its own settings and data in `%LOCALAPPDATA%\hermes` or `~/.hermes`. On Windows, removing the gateway's Scheduled Task asks for administrator approval. Claude Code is never removed, because it holds your Claude login.
+Then remove the listing store and the gallery's saved connections: `%LOCALAPPDATA%pt-scraper` and `.secretspt-scraper` in your user folder on Windows, `~/Library/Application Support/apt-scraper` and `~/.secrets/apt-scraper` on macOS. Hermes, the gateway service and Claude Code stay; `hermes gateway uninstall` and `hermes uninstall` remove Hermes.
 
 ### Development
 
-To install from a clone of your own, run the installer from its root. Windows, in PowerShell:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
-
-macOS:
+To install from a clone of your own, point Hermes at it:
 
 ```bash
-./install.sh
+hermes profile install /path/to/your/clone --force --yes
 ```
 
-Run it again after pulling changes.
-
-The checks run in a fresh virtual environment through one script per platform, which installs `tests/requirements.txt` and runs Ruff, the Python suite, then the gallery's lint, build and Playwright suite. macOS or Linux:
+The checks run in a fresh virtual environment through one script per platform, which installs `tests/requirements.txt` and runs Ruff, the Python suite with zero skips, then the gallery's lint, build and Playwright suite. macOS or Linux:
 
 ```bash
 tests/run.sh
 ```
 
-Windows, in a Windows Sandbox that starts with nothing but Windows, so the result depends on nothing installed on the PC:
+Windows:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tests\sandbox.ps1
+powershell -ExecutionPolicy Bypass -File .	estsun.ps1
 ```
 
 GitHub Actions runs the same scripts on a fresh Linux, macOS and Windows machine for every push and pull request.
 
 ## Run
 
-You talk to the agent in the chat of the Hermes web dashboard, which the installer opens in your browser. Say hello to start. The dashboard runs in the background, without a window, and starts again when you log in. To open its chat again, choose apt-scraper in the Start menu on Windows, or open apt-scraper in Applications on macOS. If the dashboard is not running, the shortcut starts it first.
+You talk to the agent in the chat of the Hermes web dashboard. Open it with `hermes -p apt-scraper dashboard`; the first start builds the dashboard and takes a few minutes. Say hello to start. The gateway runs in the background and starts again when you log in, so the search and your conversations keep going while the dashboard is closed.
 
 Ask the agent to open the apartment gallery. It opens a local browser app with listings, favorites and notes. Until search results exist, it opens a separate sample gallery. See [the gallery guide](docs/gallery.md) for direct launch commands, development and the shared listing store.
 

@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
 
 from record import CATEGORIES, FLAGS, RATINGS  # noqa: E402
 from review import checked_text, citable_values  # noqa: E402

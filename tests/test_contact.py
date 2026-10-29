@@ -16,8 +16,8 @@ from test_gallery_store import ListingStore, listing
 from store import viewing_time
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTACT = ROOT / 'profile' / 'skills' / 'contact' / 'scripts' / 'contact.py'
-GATE = ROOT / 'profile' / 'scripts' / 'contact-due.py'
+CONTACT = ROOT / 'skills' / 'contact' / 'scripts' / 'contact.py'
+GATE = ROOT / 'scripts' / 'contact-due.py'
 
 FAKE_GOOGLE_API = '''
 import json, os, sys
@@ -937,18 +937,18 @@ class GateTests(ContactTest):
 
 class ShippedJobTests(unittest.TestCase):
     def test_a_contact_form_checks_that_no_account_setup_uses_the_users_browser_before_its_first_browser_action(self):
-        skill = (ROOT / 'profile' / 'skills' / 'contact' / 'SKILL.md').read_text(encoding='utf-8')
+        skill = (ROOT / 'skills' / 'contact' / 'SKILL.md').read_text(encoding='utf-8')
         forms = skill[skill.index('### Contact forms'):skill.index('### Replies')]
         first_step = forms[forms.index('\n1. '):forms.index('\n2. ')]
         self.assertLess(first_step.index('connections.py" browser status'), first_step.index('open the form'))
         self.assertIn('stop for this listing without `fail` or `done`', first_step)
 
     def test_job_runs_the_shipped_gate_with_the_contact_skill_and_delivers_nothing(self):
-        jobs = json.loads((ROOT / 'profile' / 'cron' / 'jobs.json').read_text(encoding='utf-8'))['jobs']
+        jobs = json.loads((ROOT / 'cron' / 'jobs.json').read_text(encoding='utf-8'))['jobs']
         [job] = [job for job in jobs if job['id'] == 'apt-scraper-contact']
-        self.assertTrue((ROOT / 'profile' / 'scripts' / job['script']).is_file())
+        self.assertTrue((ROOT / 'scripts' / job['script']).is_file())
         self.assertEqual(job['skills'], ['contact'])
-        self.assertTrue((ROOT / 'profile' / 'skills' / 'contact' / 'SKILL.md').is_file())
+        self.assertTrue((ROOT / 'skills' / 'contact' / 'SKILL.md').is_file())
         self.assertEqual(job['deliver'], 'local')
         for installer in ('install.ps1', 'install.sh'):
             self.assertIn("cron', 'resume', 'apt-scraper-contact'" if installer.endswith('ps1') else 'cron resume apt-scraper-contact',

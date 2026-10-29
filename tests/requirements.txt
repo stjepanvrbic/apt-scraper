@@ -1,6 +1,6 @@
 # The check suite's packages, installed into a fresh virtual environment by tests/run.sh and tests/run.ps1.
 # Python 3.14, which Hermes runs the profile's scripts with. numpy, Pillow and onnxruntime are the photo
-# encoder's packages, at the versions profile/skills/ranking/encoder/requirements.txt pins for the agent.
+# encoder's packages, at the versions skills/ranking/encoder/requirements.txt pins for the agent.
 pytest==9.0.3
 ruff==0.9.5
 numpy==2.5.4

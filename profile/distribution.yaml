@@ -1,6 +1,0 @@
-name: apt-scraper
-version: 0.1.0
-description: "Apartment search agent on a Claude subscription, with computer use"
-hermes_requires: ">=0.22.5"
-author: "Stjepan Vrbic"
-license: "Proprietary"

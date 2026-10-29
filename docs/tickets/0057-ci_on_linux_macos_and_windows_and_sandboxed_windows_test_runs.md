@@ -1,7 +1,7 @@
 ---
 title: CI on Linux, macOS and Windows, and sandboxed test runs on Windows
 type: Feature
-state: In Progress
+state: Done
 priority: 2
 assignee: agent
 milestone:
@@ -42,3 +42,9 @@ docs/spec.md, Installation and setup: the installer acceptance on a fresh Window
 - The sandbox's Windows lacks the VBScript engine, an optional capability on Windows 11, which the dashboard's login entry and Start menu shortcut need (`wscript.exe` running `dashboard.vbs`). The guest script asks for the capability before the run. Windows 11 still installs it by default, and Microsoft has announced its removal, so the product's dependence on it is a finding for a ticket of its own.
 
 ## Result
+
+The workflow and the two check scripts are in place and run on every push and pull request. The Windows Sandbox scripts and the installer tests they existed for were removed by ticket 0059, which also removed the installers: a sandboxed local run proved to have one purpose, testing 2,250 lines of installer tests, and ticket 0059 made CI the one place test runs happen. The product findings here, the Visual C++ runtime and the VBScript engine, are moot: the VBScript launcher is gone, and the photo encoder's environment is a scheduled job's own concern.
+
+## Comments
+
+- 2026-10-29: Closed in favor of ticket 0059's shape. Acceptance items about the sandbox are withdrawn with it.

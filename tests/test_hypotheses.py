@@ -7,7 +7,7 @@ from pathlib import Path
 from contextlib import closing, contextmanager
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/ranking/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/ranking/scripts'))
 
 from test_rerank import SETTINGS, StoreTestCase, cpu_budget, fill, least_cpu_seconds, speed_factor  # noqa: E402
 from rerank import rerank  # noqa: E402

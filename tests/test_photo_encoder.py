@@ -18,8 +18,8 @@ import numpy as np
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
-ENCODER = ROOT / 'profile/skills/ranking/encoder'
-sys.path[:0] = [str(ENCODER), str(ROOT / 'profile/skills/gallery/scripts'), str(ROOT / 'profile/skills/listing-features/scripts')]
+ENCODER = ROOT / 'skills/ranking/encoder'
+sys.path[:0] = [str(ENCODER), str(ROOT / 'skills/gallery/scripts'), str(ROOT / 'skills/listing-features/scripts')]
 
 import assets  # noqa: E402
 import encoder  # noqa: E402
@@ -29,7 +29,7 @@ from store import ListingStore  # noqa: E402
 from test_feature_record import extraction  # noqa: E402
 from test_gallery_store import listing  # noqa: E402
 
-specification = importlib.util.spec_from_file_location('encoder_run', ROOT / 'profile/scripts/encoder-run.py')
+specification = importlib.util.spec_from_file_location('encoder_run', ROOT / 'scripts/encoder-run.py')
 encoder_run = importlib.util.module_from_spec(specification)
 specification.loader.exec_module(encoder_run)
 TOWER = ROOT / 'tests/fixtures/tiny_tower.onnx'
@@ -273,7 +273,7 @@ class LauncherTests(unittest.TestCase):
         self.assertIn('did not pass', self.status()['off'])
 
     def test_the_shipped_job_runs_the_launcher_and_the_requirements_are_pinned(self):
-        jobs = json.loads((ROOT / 'profile' / 'cron' / 'jobs.json').read_text(encoding='utf-8'))['jobs']
+        jobs = json.loads((ROOT / 'cron' / 'jobs.json').read_text(encoding='utf-8'))['jobs']
         [job] = [job for job in jobs if job['id'] == 'apt-scraper-encoder']
         self.assertEqual((job['script'], job['schedule']), ('encoder-run.py', 'every 10m'))
         powershell, shell = ((ROOT / name).read_text(encoding='utf-8') for name in ('install.ps1', 'install.sh'))

@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/search/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/search/scripts'))
 
 from test_gallery_store import ListingStore  # noqa: E402
 from matching import evaluate  # noqa: E402
@@ -19,7 +19,7 @@ import search as search_script  # noqa: E402
 from search import Search, SearchState, describe  # noqa: E402
 from sites.errors import Blocked, Changed, Gone  # noqa: E402
 
-SCRIPT = Path(__file__).resolve().parents[1] / 'profile/skills/search/scripts/search.py'
+SCRIPT = Path(__file__).resolve().parents[1] / 'skills/search/scripts/search.py'
 NOW = datetime(2026, 10, 25, 12, 0, tzinfo=timezone.utc)
 SETTINGS = {
     'criteria': {
@@ -624,7 +624,7 @@ class SearchScriptTests(unittest.TestCase):
         self.assertEqual(job_file.read_text(encoding='utf-8'), '[]')
 
     def test_the_search_session_has_the_file_tools_and_no_terminal(self):
-        jobs = json.loads((SCRIPT.parents[4] / 'profile/cron/jobs.json').read_text(encoding='utf-8'))['jobs']
+        jobs = json.loads((SCRIPT.parents[3] / 'cron/jobs.json').read_text(encoding='utf-8'))['jobs']
         job = next(job for job in jobs if job['id'] == 'apt-scraper-search')
         self.assertEqual(job['enabled_toolsets'], ['file', 'no_mcp'])
         self.assertNotIn('terminal', search_script.JUDGMENT_TEMPLATE.read_text(encoding='utf-8'))

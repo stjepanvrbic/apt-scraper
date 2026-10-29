@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / 'profile/skills/ranking/encoder'), str(ROOT / 'tests')]
+sys.path[:0] = [str(ROOT / 'skills/ranking/encoder'), str(ROOT / 'tests')]
 
 
 def peak_resident_bytes():

@@ -19,7 +19,7 @@ from unittest import mock
 
 import psutil
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "profile" / "skills" / "account-connections" / "scripts"
+SCRIPTS = Path(__file__).resolve().parents[1] / "skills" / "account-connections" / "scripts"
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(SCRIPTS))
 

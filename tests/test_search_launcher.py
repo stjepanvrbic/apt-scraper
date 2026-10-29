@@ -11,13 +11,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/search/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/search/scripts'))
 
 from test_gallery_store import ListingStore  # noqa: E402
 from state import SearchState  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-LAUNCHER = ROOT / 'profile/scripts/search-run.py'
+LAUNCHER = ROOT / 'scripts/search-run.py'
 specification = importlib.util.spec_from_file_location('search_run', LAUNCHER)
 launcher = importlib.util.module_from_spec(specification)
 specification.loader.exec_module(launcher)
@@ -156,17 +156,17 @@ class LauncherTests(unittest.TestCase):
 
 class ShippedJobTests(unittest.TestCase):
     def test_the_hourly_job_runs_this_script_with_the_search_skill_and_the_installers_build_and_turn_it_on(self):
-        jobs = json.loads((ROOT / 'profile' / 'cron' / 'jobs.json').read_text(encoding='utf-8'))['jobs']
+        jobs = json.loads((ROOT / 'cron' / 'jobs.json').read_text(encoding='utf-8'))['jobs']
         [job] = [job for job in jobs if job['id'] == 'apt-scraper-search']
         self.assertEqual((job['script'], job['skills'], job['schedule'], job['deliver'], job['failure_deliver']),
                          ('search-run.py', ['search'], 'every 1h', 'local', 'origin'))
-        self.assertEqual(ROOT / 'profile' / 'scripts' / job['script'], LAUNCHER)
+        self.assertEqual(ROOT / 'scripts' / job['script'], LAUNCHER)
         powershell, shell = ((ROOT / name).read_text(encoding='utf-8') for name in ('install.ps1', 'install.sh'))
         self.assertIn("cron', 'resume', 'apt-scraper-search'", powershell)
         self.assertIn('cron resume apt-scraper-search', shell)
         self.assertIn('search-run.py', powershell)
         self.assertIn('search-run.py', shell)
-        for line in (ROOT / 'profile' / 'skills' / 'search' / 'requirements.txt').read_text(encoding='utf-8').splitlines():
+        for line in (ROOT / 'skills' / 'search' / 'requirements.txt').read_text(encoding='utf-8').splitlines():
             if line and not line.startswith(' '):
                 self.assertRegex(line, r'^[a-z0-9-]+==[0-9.]+ ')
 

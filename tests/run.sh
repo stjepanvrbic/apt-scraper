@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Runs every check on macOS or Linux in a fresh virtual environment: Ruff, the Python suite with no skip the
-# platform could run, then the gallery's lint, build, build-output check and Playwright suite.
-# Needs Python 3.14, Node 24 and, for the installer tests, bash and perl. CI runs it on fresh machines.
+# Runs every check on macOS or Linux in a fresh virtual environment: Ruff, the Python suite with zero skips, then
+# the gallery's lint, build, build-output check and Playwright suite. Needs Python 3.14 and Node 24. CI runs it
+# on fresh machines.
 #   tests/run.sh [--work <directory>]     the virtual environment and the test report go in --work, default a new
 #                                         directory under TMPDIR
 set -euo pipefail
@@ -40,10 +40,10 @@ npm ci --no-audit --no-fund
 npm run lint
 npm run build
 # The committed assets must be the build of the committed source: no changed file, and no new one.
-asset_changes=$(git -C "$ROOT" status --porcelain -- profile/skills/gallery/web)
+asset_changes=$(git -C "$ROOT" status --porcelain -- skills/gallery/web)
 if [ -n "$asset_changes" ]; then
-    git -C "$ROOT" status --short -- profile/skills/gallery/web >&2
-    echo 'The gallery build differs from the committed assets in profile/skills/gallery/web. Build and commit them.' >&2
+    git -C "$ROOT" status --short -- skills/gallery/web >&2
+    echo 'The gallery build differs from the committed assets in skills/gallery/web. Build and commit them.' >&2
     exit 1
 fi
 

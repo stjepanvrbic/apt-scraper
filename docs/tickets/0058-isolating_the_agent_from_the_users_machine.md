@@ -6,8 +6,8 @@ priority: 3
 assignee:
 milestone:
 parent:
-blocked_by: [0057]
-related: [0056, 0057]
+blocked_by: [0059]
+related: [0056, 0057, 0059]
 ---
 
 ## Question
@@ -33,6 +33,8 @@ Option 2, in that order:
 The failures seen so far were dependency drift and host differences that tests on a developer's PC hide (tickets 0056 and 0057), not the host itself. Controlled dependencies remove the drift; a container would remove it too, but at the price of a bigger install surface and bridges for everything the product does through the user's own browser, accounts and desktop.
 
 ## Consequences
+
+- The owner's reading of the same facts (2026-10-29): the failures were in machinery this repository built around Hermes, not in Hermes or in the agent, so the first consequence is ticket 0059, which deletes that machinery and leaves a Hermes profile installed by Hermes's own commands. The steps below apply to what remains.
 
 - Each numbered step becomes a work ticket when it is picked up; this ticket is their record of why.
 - The product keeps depending on the host, so host findings keep being product findings: the Visual C++ runtime that onnxruntime needs on a fresh Windows, and the VBScript engine the dashboard's Windows shortcuts need, both found by ticket 0057's sandbox, each need a ticket of their own.

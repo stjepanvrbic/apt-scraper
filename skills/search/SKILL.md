@@ -13,7 +13,7 @@ metadata:
 
 # Apartment search
 
-The search reads the user's listing sites every hour and keeps the listing store current: it adds new listings, updates changed ones and marks gone ones unavailable. It runs as the Hermes cron job `apt-scraper-search`, which the installer turns on. Runs before the interview is complete search nothing and make no model call. Once the search has run, it needs only the criteria and the listing sites, so questions the interview has left never stop it. Code does the fetching, reading, filtering and change detection. You only judge the must-haves (`criteria.other`) of a listing that is new or whose content changed, because they are free text.
+The search reads the user's listing sites every hour and keeps the listing store current: it adds new listings, updates changed ones and marks gone ones unavailable. It runs as the Hermes cron job `apt-scraper-search`, which the install line turns on. Runs before the interview is complete search nothing and make no model call. Once the search has run, it needs only the criteria and the listing sites, so questions the interview has left never stop it. Code does the fetching, reading, filtering and change detection. You only judge the must-haves (`criteria.other`) of a listing that is new or whose content changed, because they are free text.
 
 ## When to Use
 
@@ -39,7 +39,7 @@ When `status` says `running`, a run is under way: tell the user it started at `r
 
 Use the `cronjob_manage` tool. List the jobs and find the one with the id `apt-scraper-search`. If it is paused, resume it. Then run it, so the first listings come within minutes instead of at the next hourly run. It runs in the background and reports back when done. Tell the user in one sentence that the search runs every hour and new listings show in the gallery.
 
-If no job has that id, the profile was not installed by the apt-scraper installer. Tell the user to rerun it.
+If no job has that id, the profile was not installed by the install line. Tell the user to run it again.
 
 ## Problems `status` reports
 
@@ -50,7 +50,7 @@ If no job has that id, the profile was not installed by the apt-scraper installe
 - A site the search has no reader for: tell the user the search cannot read this site yet, and offer to replace it with a site it can read.
 - An area the site does not know: ask the user to name the area the way the site does, then save the criteria through the interview skill.
 - A site whose pages changed shape, a listing page that could not be read, or a run that failed: the message says what failed. Tell the user that the search skips it and that apt-scraper needs an update if it repeats.
-- The search environment is missing or could not be rebuilt: tell the user to rerun the apt-scraper installer, which builds it.
+- The search environment is missing or could not be rebuilt: tell the user to run the install line again; the next search run builds it.
 
 ## Reporting
 

@@ -2,7 +2,7 @@ import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/search/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/search/scripts'))
 
 from matching import INSIDE, OUTSIDE, PENDING, criterion_phrases, evaluate, unjudged  # noqa: E402
 

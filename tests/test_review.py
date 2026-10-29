@@ -11,8 +11,8 @@ from io import StringIO
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/ranking/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/ranking/scripts'))
 
 import ranking  # noqa: E402
 from rerank import REVIEW_ATTEMPTS, pending_review, rerank, save_review  # noqa: E402
@@ -548,7 +548,7 @@ class CommandTests(ReviewTestCase):
                               env={**os.environ, 'HERMES_HOME': str(self.home)})
 
     def run_gate(self):
-        return subprocess.run([sys.executable, str(ROOT / 'profile/scripts/review-run.py')], capture_output=True, text=True, timeout=120,
+        return subprocess.run([sys.executable, str(ROOT / 'scripts/review-run.py')], capture_output=True, text=True, timeout=120,
                               env={**os.environ, 'HERMES_HOME': str(self.home)})
 
     def gate_lines(self):
@@ -585,17 +585,17 @@ class CommandTests(ReviewTestCase):
 
 class ShippedJobTests(unittest.TestCase):
     def test_the_profile_ships_the_review_job_and_the_installers_turn_it_on(self):
-        jobs = {job['id']: job for job in json.loads((ROOT / 'profile/cron/jobs.json').read_text(encoding='utf-8'))['jobs']}
+        jobs = {job['id']: job for job in json.loads((ROOT / 'cron/jobs.json').read_text(encoding='utf-8'))['jobs']}
         job = jobs['apt-scraper-review']
         self.assertEqual((job['skills'], job['schedule'], job['deliver']), (['ranking'], 'every 1m', 'local'))
-        self.assertTrue((ROOT / 'profile/scripts' / job['script']).is_file())
+        self.assertTrue((ROOT / 'scripts' / job['script']).is_file())
         self.assertIn("cron', 'resume', 'apt-scraper-review'", (ROOT / 'install.ps1').read_text(encoding='utf-8'))
         self.assertIn('cron resume apt-scraper-review', (ROOT / 'install.sh').read_text(encoding='utf-8'))
 
     def test_the_review_session_has_the_file_tools_and_no_terminal(self):
-        job = next(job for job in json.loads((ROOT / 'profile/cron/jobs.json').read_text(encoding='utf-8'))['jobs'] if job['id'] == 'apt-scraper-review')
+        job = next(job for job in json.loads((ROOT / 'cron/jobs.json').read_text(encoding='utf-8'))['jobs'] if job['id'] == 'apt-scraper-review')
         self.assertEqual(job['enabled_toolsets'], ['file', 'no_mcp'])
-        self.assertNotIn('terminal', (ROOT / 'profile/skills/ranking/review.md').read_text(encoding='utf-8'))
+        self.assertNotIn('terminal', (ROOT / 'skills/ranking/review.md').read_text(encoding='utf-8'))
 
 
 class MigrationTests(unittest.TestCase):

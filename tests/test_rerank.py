@@ -11,7 +11,7 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
 
 from record import CATEGORIES, FLAGS, RATINGS, SEED_TAGS  # noqa: E402
 from rerank import pairwise_questions, rerank  # noqa: E402
@@ -21,7 +21,7 @@ from test_feature_record import extraction  # noqa: E402
 from test_gallery_store import listing  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / 'profile/skills/ranking/scripts/ranking.py'
+SCRIPT = ROOT / 'skills/ranking/scripts/ranking.py'
 SETTINGS = {
     'criteria': {'location': ['Logan Square', 'Avondale'], 'price': {'min': None, 'max': 3000, 'currency': 'USD', 'period': 'month'}},
     'preferences': {'likes': ['Lots of daylight'], 'dislikes': ['Carpet']},
@@ -328,7 +328,7 @@ class CommandTests(StoreTestCase):
         self.assertEqual(missing.returncode, 1)
 
     def test_no_cron_job_reranks(self):
-        jobs = json.loads((ROOT / 'profile/cron/jobs.json').read_text(encoding='utf-8'))['jobs']
+        jobs = json.loads((ROOT / 'cron/jobs.json').read_text(encoding='utf-8'))['jobs']
         self.assertNotIn('apt-scraper-ranking', [job['id'] for job in jobs])
         for job in jobs:
             self.assertNotIn('rerank', job['prompt'].lower())
