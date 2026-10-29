@@ -14,7 +14,7 @@ export default defineConfig({
     },
   }],
   build: {
-    outDir: '../profile/skills/gallery/web', emptyOutDir: true, license: { fileName: 'licenses.txt' },
+    outDir: '../skills/gallery/web', emptyOutDir: true, license: { fileName: 'licenses.txt' },
     rolldownOptions: { output: {
       entryFileNames: 'assets/gallery.js', chunkFileNames: 'assets/[name].js', assetFileNames: 'assets/[name][extname]',
     } },

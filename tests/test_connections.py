@@ -19,7 +19,7 @@ from unittest import mock
 
 import psutil
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "profile" / "skills" / "account-connections" / "scripts"
+SCRIPTS = Path(__file__).resolve().parents[1] / "skills" / "account-connections" / "scripts"
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(SCRIPTS))
 
@@ -69,7 +69,7 @@ print(json.dumps({"success": True}))
 """
 
 FAKE_BROWSER = """
-import http.server, json, os, sys
+import http.server, json, os, socketserver, sys
 arguments = sys.argv[1:]
 with open(os.environ["FAKE_LOG"], "a", encoding="utf-8") as log:
     log.write(json.dumps(["browser", *arguments]) + "\\n")
@@ -93,7 +93,14 @@ class Version(http.server.BaseHTTPRequestHandler):
         pass
 
 
-http.server.HTTPServer(("127.0.0.1", port), Version).serve_forever()
+class Server(http.server.HTTPServer):
+    def server_bind(self):
+        # Not HTTPServer's, whose reverse lookup of the address can take a minute on macOS.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[0], self.server_address[1]
+
+
+Server(("127.0.0.1", port), Version).serve_forever()
 """
 
 FAKE_IMSG = """

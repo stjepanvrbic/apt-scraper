@@ -15,6 +15,17 @@ ${code}
 `, resolve('../tests'), database], { encoding: 'utf8' }));
 }
 
+// The spec's two seconds are judged on the owner's PC; a slower machine, such as a shared CI runner, gets the budget
+// scaled by tests/test_rerank.py's speed_factor, the same calibration the Python suite's timing tests use.
+function speedFactor(): number {
+  return Number(execFileSync('python', ['-c', `
+import sys
+sys.path.insert(0, sys.argv[1])
+from test_rerank import speed_factor
+print(speed_factor())
+`, resolve('../tests')], { encoding: 'utf8' }));
+}
+
 function seed(database: string, count = 30, favorites = 5) {
   stored(database, `
 store.update_settings(**SETTINGS, judge=lambda criteria, features: 'inside')
@@ -55,8 +66,9 @@ test('Score and rerank applies real ranks and every favorite check within two se
   const completed = await (await response).json();
   await page.waitForFunction(() => performance.getEntriesByName('rerank-visible').length > 0);
   const elapsed = await page.evaluate(() => performance.getEntriesByName('rerank-visible')[0].duration);
-  console.info(`Rerank click to visible order and all 50 held-out ranks: ${elapsed.toFixed(0)}ms; server: ${completed.seconds}s`);
-  expect(elapsed).toBeLessThan(2000);
+  const factor = speedFactor();
+  console.info(`Rerank click to visible order and all 50 held-out ranks: ${elapsed.toFixed(0)}ms; server: ${completed.seconds}s; budget ${(2000 * factor).toFixed(0)}ms`);
+  expect(elapsed).toBeLessThan(2000 * factor);
   await expect(page.getByText('300 ranked', { exact: true })).toBeVisible();
   await expect(page.getByRole('article').first().getByText('#1 match', { exact: true })).toBeVisible();
   await expect(page.getByTestId('held-out-rank')).toHaveCount(50);

@@ -5,7 +5,7 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/ranking/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/ranking/scripts'))
 
 from test_scoring import inputs, neighborhood  # noqa: E402
 from ranking_priors import (AGE_FLOOR, aged, choose_half_life, composite_design, composite_reason, evidence,

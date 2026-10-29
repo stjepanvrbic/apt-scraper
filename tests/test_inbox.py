@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
 
 from inbox import apply, batches, correction, discard, inbox_directory, listing_key, load_batches, save_batches  # noqa: E402
 
@@ -69,7 +69,9 @@ class InboxTests(unittest.TestCase):
         self.write('record-b.json', '{"id": "x"}')
         saved, rejected = apply(self.inbox, {'record': lambda value: {'saved': {value['id']: 1}}})
         self.assertEqual(saved, {'record-b.json': {'saved': {'x': 1}}})
-        self.assertEqual(rejected, {'record-a.json': "TypeError: unhashable type: 'list'"})
+        self.assertEqual(list(rejected), ['record-a.json'])
+        # Python 3.14 says "cannot use 'list' as a dict key (unhashable type: 'list')", earlier ones only the tail.
+        self.assertRegex(rejected['record-a.json'], r"^TypeError: .*unhashable type: 'list'")
         rejected = apply(self.inbox, {'record': mock.Mock(side_effect=sqlite3.ProgrammingError('type not supported'))})[1]
         self.assertEqual(rejected, {'record-a.json': 'ProgrammingError: type not supported'})
 

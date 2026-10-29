@@ -11,13 +11,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/search/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/search/scripts'))
 
 from test_gallery_store import ListingStore  # noqa: E402
 from state import SearchState  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-LAUNCHER = ROOT / 'profile/scripts/search-run.py'
+LAUNCHER = ROOT / 'scripts/search-run.py'
 specification = importlib.util.spec_from_file_location('search_run', LAUNCHER)
 launcher = importlib.util.module_from_spec(specification)
 specification.loader.exec_module(launcher)
@@ -113,12 +113,21 @@ class LauncherTests(unittest.TestCase):
         self.launch()
         self.assertEqual([command[-1] for command in self.commands], ['run'])
 
-    def test_a_missing_environment_is_recorded_for_status_without_waking_the_model(self):
+    def test_the_first_eligible_run_builds_the_missing_environment_and_searches(self):
         self.complete_interview()
         code, lines = self.launch()
-        self.assertEqual((code, self.commands), (0, []))
+        self.assertEqual(code, 0)
+        self.assertEqual([command[1:3] for command in self.commands][:2], [['-m', 'venv'], ['-m', 'pip']])
+        self.assertEqual([command[-1] for command in self.commands][-1:], ['run'])
+        self.assertIsNone(self.problem())
+
+    def test_a_build_that_fails_is_recorded_for_status_without_waking_the_model(self):
+        self.complete_interview()
+        self.pip_fails = True
+        code, lines = self.launch()
+        self.assertEqual(code, 0)
         self.assertEqual(lines[-1], '{"wakeAgent": false}')
-        self.assertIn('Rerun the apt-scraper installer', self.problem())
+        self.assertIn('could not be built', self.problem())
 
     def test_the_environment_is_rebuilt_once_when_hermes_python_changes(self):
         self.launch('install')
@@ -137,7 +146,7 @@ class LauncherTests(unittest.TestCase):
             self.requirements.write_text('curl-cffi==0.17.0 --hash=sha256:def\n', encoding='utf-8')
             code, lines = self.launch()
         self.assertEqual((code, lines[-1]), (0, '{"wakeAgent": false}'))
-        self.assertIn('Rerun the apt-scraper installer', self.problem())
+        self.assertIn('could not be built', self.problem())
 
     def test_the_search_report_passes_through_and_a_failed_search_is_recorded_without_waking_the_model(self):
         self.launch('install')
@@ -155,18 +164,16 @@ class LauncherTests(unittest.TestCase):
 
 
 class ShippedJobTests(unittest.TestCase):
-    def test_the_hourly_job_runs_this_script_with_the_search_skill_and_the_installers_build_and_turn_it_on(self):
-        jobs = json.loads((ROOT / 'profile' / 'cron' / 'jobs.json').read_text(encoding='utf-8'))['jobs']
+    def test_the_hourly_job_runs_this_script_with_the_search_skill_and_the_install_turns_it_on(self):
+        jobs = json.loads((ROOT / 'cron' / 'jobs.json').read_text(encoding='utf-8'))['jobs']
         [job] = [job for job in jobs if job['id'] == 'apt-scraper-search']
         self.assertEqual((job['script'], job['skills'], job['schedule'], job['deliver'], job['failure_deliver']),
                          ('search-run.py', ['search'], 'every 1h', 'local', 'origin'))
-        self.assertEqual(ROOT / 'profile' / 'scripts' / job['script'], LAUNCHER)
+        self.assertEqual(ROOT / 'scripts' / job['script'], LAUNCHER)
         powershell, shell = ((ROOT / name).read_text(encoding='utf-8') for name in ('install.ps1', 'install.sh'))
         self.assertIn("cron', 'resume', 'apt-scraper-search'", powershell)
         self.assertIn('cron resume apt-scraper-search', shell)
-        self.assertIn('search-run.py', powershell)
-        self.assertIn('search-run.py', shell)
-        for line in (ROOT / 'profile' / 'skills' / 'search' / 'requirements.txt').read_text(encoding='utf-8').splitlines():
+        for line in (ROOT / 'skills' / 'search' / 'requirements.txt').read_text(encoding='utf-8').splitlines():
             if line and not line.startswith(' '):
                 self.assertRegex(line, r'^[a-z0-9-]+==[0-9.]+ ')
 

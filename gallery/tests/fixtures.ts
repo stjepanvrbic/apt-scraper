@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 
-const script = resolve('../profile/skills/gallery/scripts/gallery.py');
+const script = resolve('../skills/gallery/scripts/gallery.py');
 export const test = base.extend<{ gallery: { url: string; restart: () => Promise<string>; database: string } }>({
   gallery: async ({ browserName }, use) => {
     const directory = await mkdtemp(join(tmpdir(), `apt-gallery-${browserName}-`));

@@ -1,4 +1,4 @@
-"""Builds the photo encoder that ships: model.json and probes.npy in profile/skills/ranking/encoder. A developer tool,
+"""Builds the photo encoder that ships: model.json and probes.npy in skills/ranking/encoder. A developer tool,
 not shipped; it runs in the build environment of encoder_sweep.py, after the sweep chose the candidate.
 
   encoder_build.py <variant> <models-directory> <sweep-report.json> <output-directory>
@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'profile/skills/gallery/scripts'))
+sys.path.insert(0, str(ROOT / 'skills/gallery/scripts'))
 sys.path.insert(0, str(ROOT / 'tests'))
 
 from photo_catalog import GATE_PROBES, entries  # noqa: E402

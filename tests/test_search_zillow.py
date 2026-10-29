@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/search/scripts'))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/search/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
 
 from sites import site_for, site_named, zillow  # noqa: E402
 from sites.errors import Blocked, Changed, Gone  # noqa: E402

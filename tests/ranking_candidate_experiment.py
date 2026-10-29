@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from statistics import fmean
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/ranking/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/ranking/scripts'))
 
 from measurement import bootstrap, pair_accuracy, record_simulated_pair, simulation_start, store_report, utilities
 from learning import decode

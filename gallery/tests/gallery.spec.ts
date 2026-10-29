@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import AxeBuilder from '@axe-core/playwright';
 import { test } from './fixtures';
 
-const script = resolve('../profile/skills/gallery/scripts/gallery.py');
+const script = resolve('../skills/gallery/scripts/gallery.py');
 
 test('browse ordered tabs, complete listing details, photos and original source', async ({ page, gallery }) => {
   await page.goto(gallery.url);
@@ -71,7 +71,7 @@ test('contact requests, correspondence and viewings share the store', async ({ p
   await page.getByRole('tab', { name: 'Contacted', exact: true }).click();
   await expect(page.getByRole('article')).toHaveCount(1);
   execFileSync('python', [script, '--database', gallery.database, 'correspond', 'sample:lincoln', 'incoming', 'email', 'Friday at 3 pm works.', '--message-id', 'reply-1', '--thread-id', 'thread-1']);
-  execFileSync('python', ['-c', `import sys; sys.path.insert(0,sys.argv[1]); from store import ListingStore; store=ListingStore(sys.argv[2]); viewing=store.agree_viewing('sample:lincoln','2026-10-30T15:00:00-05:00','Meet in the lobby.'); assert store.record_booking(viewing,'2026-10-30T20:00:00+00:00','Meet in the lobby.','testevent1')`, resolve('../profile/skills/gallery/scripts'), gallery.database]);
+  execFileSync('python', ['-c', `import sys; sys.path.insert(0,sys.argv[1]); from store import ListingStore; store=ListingStore(sys.argv[2]); viewing=store.agree_viewing('sample:lincoln','2026-10-30T15:00:00-05:00','Meet in the lobby.'); assert store.record_booking(viewing,'2026-10-30T20:00:00+00:00','Meet in the lobby.','testevent1')`, resolve('../skills/gallery/scripts'), gallery.database]);
   await page.getByRole('button', { name: 'Refresh listings' }).click();
   await page.getByRole('button', { name: 'View Sunlit home in Lincoln Park', exact: true }).click();
   await expect(page.getByRole('dialog').getByText('Friday at 3 pm works.', { exact: true })).toBeVisible();
@@ -83,7 +83,7 @@ test('contact requests, correspondence and viewings share the store', async ({ p
 });
 
 test('a contacted listing outside the criteria leaves Rankings but stays in Contacted and Viewings and opens', async ({ page, gallery }) => {
-  execFileSync('python', ['-c', `import sys; sys.path.insert(0,sys.argv[1]); from store import ListingStore; store=ListingStore(sys.argv[2]); store.request_contact('sample:lincoln'); viewing=store.agree_viewing('sample:lincoln','2026-10-30T15:00:00-05:00','Meet in the lobby.'); assert store.record_booking(viewing,'2026-10-30T20:00:00+00:00','Meet in the lobby.','testevent1'); store.set_matches_criteria('sample:lincoln', False)`, resolve('../profile/skills/gallery/scripts'), gallery.database]);
+  execFileSync('python', ['-c', `import sys; sys.path.insert(0,sys.argv[1]); from store import ListingStore; store=ListingStore(sys.argv[2]); store.request_contact('sample:lincoln'); viewing=store.agree_viewing('sample:lincoln','2026-10-30T15:00:00-05:00','Meet in the lobby.'); assert store.record_booking(viewing,'2026-10-30T20:00:00+00:00','Meet in the lobby.','testevent1'); store.set_matches_criteria('sample:lincoln', False)`, resolve('../skills/gallery/scripts'), gallery.database]);
   await page.goto(gallery.url);
   await expect(page.getByRole('button', { name: 'View Sunlit home in Lincoln Park', exact: true })).toHaveCount(0);
   for (const tab of ['Contacted', 'Viewings']) {
@@ -96,7 +96,7 @@ test('a contacted listing outside the criteria leaves Rankings but stays in Cont
 });
 
 test('an agreed time shows in the listing and reaches Viewings once booked', async ({ page, gallery }) => {
-  const viewing = execFileSync('python', ['-c', `import sys; sys.path.insert(0,sys.argv[1]); from store import ListingStore; store=ListingStore(sys.argv[2]); store.request_contact('sample:lincoln'); print(store.agree_viewing('sample:lincoln','2026-10-31T11:00:00-05:00','Meet Anna in the lobby.'))`, resolve('../profile/skills/gallery/scripts'), gallery.database], { encoding: 'utf8' }).trim();
+  const viewing = execFileSync('python', ['-c', `import sys; sys.path.insert(0,sys.argv[1]); from store import ListingStore; store=ListingStore(sys.argv[2]); store.request_contact('sample:lincoln'); print(store.agree_viewing('sample:lincoln','2026-10-31T11:00:00-05:00','Meet Anna in the lobby.'))`, resolve('../skills/gallery/scripts'), gallery.database], { encoding: 'utf8' }).trim();
   await page.goto(gallery.url);
   await page.getByRole('button', { name: 'View Sunlit home in Lincoln Park', exact: true }).click();
   await expect(page.getByText('Agreed viewing, not yet in your calendar', { exact: true })).toBeVisible();
@@ -107,7 +107,7 @@ test('an agreed time shows in the listing and reaches Viewings once booked', asy
   await page.getByRole('button', { name: 'Close listing details' }).click();
   await page.getByRole('tab', { name: 'Viewings', exact: true }).click();
   await expect(page.getByRole('article')).toHaveCount(0);
-  execFileSync('python', ['-c', `import sys; sys.path.insert(0,sys.argv[1]); from store import ListingStore; assert ListingStore(sys.argv[2]).record_booking(sys.argv[3],'2026-10-31T16:00:00+00:00','Meet Anna in the lobby.',sys.argv[3].replace('-',''))`, resolve('../profile/skills/gallery/scripts'), gallery.database, viewing]);
+  execFileSync('python', ['-c', `import sys; sys.path.insert(0,sys.argv[1]); from store import ListingStore; assert ListingStore(sys.argv[2]).record_booking(sys.argv[3],'2026-10-31T16:00:00+00:00','Meet Anna in the lobby.',sys.argv[3].replace('-',''))`, resolve('../skills/gallery/scripts'), gallery.database, viewing]);
   await page.getByRole('button', { name: 'Refresh listings' }).click();
   await expect(page.getByRole('article')).toHaveCount(1);
   await expect(page.getByRole('article').getByText(/Oct 31/)).toBeVisible();
@@ -208,7 +208,7 @@ test('Notes uses a chat composer, streamed reply, tool timeline and choices', as
 test('cards show availability, rental period, author and correspondence without opening details', async ({ page, gallery }) => {
   await page.goto(gallery.url);
   await page.getByRole('button', { name: 'Favorite Sunlit home in Lincoln Park', exact: true }).click();
-  execFileSync('python', ['-c', `import sys,json; from pathlib import Path; sys.path.insert(0,sys.argv[1]); from store import ListingStore; store=ListingStore(sys.argv[2]); data=json.loads(Path(sys.argv[1]).parent.joinpath('sample.json').read_text())[0]; data.pop('rank'); data.pop('reason'); data.update(status='unavailable',rental_period='week'); store.upsert_listing(data); store.request_contact(data['id']); store.correspond(data['id'],'incoming','email','The viewing is confirmed.',external_message_id='reply-1'); store.add_note('Check the windows.',listing_id=data['id'],role='agent')`, resolve('../profile/skills/gallery/scripts'), gallery.database]);
+  execFileSync('python', ['-c', `import sys,json; from pathlib import Path; sys.path.insert(0,sys.argv[1]); from store import ListingStore; store=ListingStore(sys.argv[2]); data=json.loads(Path(sys.argv[1]).parent.joinpath('sample.json').read_text())[0]; data.pop('rank'); data.pop('reason'); data.update(status='unavailable',rental_period='week'); store.upsert_listing(data); store.request_contact(data['id']); store.correspond(data['id'],'incoming','email','The viewing is confirmed.',external_message_id='reply-1'); store.add_note('Check the windows.',listing_id=data['id'],role='agent')`, resolve('../skills/gallery/scripts'), gallery.database]);
   await page.getByRole('tab', { name: 'Favorites' }).click();
   await expect(page.getByRole('article').getByText('Unavailable', { exact: true })).toBeVisible();
   await expect(page.getByRole('article').getByText('/ week', { exact: true })).toBeVisible();
@@ -271,7 +271,7 @@ test('approval choices use human labels and send only the selected gateway value
 });
 
 test('partial unranked listings are visible and a failed contact can be retried', async ({ page, gallery }) => {
-  execFileSync('python', ['-c', `import sys; sys.path.insert(0,sys.argv[1]); from store import ListingStore; store=ListingStore(sys.argv[2]); store.upsert_listing({'id':'partial','title':'New match','price':'Price on request','sources':[{'label':'Source','url':'https://example.com/new'}]}); store.request_contact('partial'); store.set_contact('partial','failed',channel='email',error='Delivery failed.')`, resolve('../profile/skills/gallery/scripts'), gallery.database]);
+  execFileSync('python', ['-c', `import sys; sys.path.insert(0,sys.argv[1]); from store import ListingStore; store=ListingStore(sys.argv[2]); store.upsert_listing({'id':'partial','title':'New match','price':'Price on request','sources':[{'label':'Source','url':'https://example.com/new'}]}); store.request_contact('partial'); store.set_contact('partial','failed',channel='email',error='Delivery failed.')`, resolve('../skills/gallery/scripts'), gallery.database]);
   await page.goto(gallery.url);
   await expect(page.getByRole('heading', { name: 'Awaiting ranking', exact: true })).toBeVisible();
   await expect(page.getByRole('article').filter({ hasText: 'New match' }).getByText('Price on request', { exact: true })).toBeVisible();

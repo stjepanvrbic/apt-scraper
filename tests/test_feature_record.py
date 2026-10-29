@@ -3,7 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
 
 from record import CATEGORIES, FLAGS, RATINGS, SEED_TAGS, known_spelling, normalize_tag, validate_extraction, validate_judgments  # noqa: E402
 

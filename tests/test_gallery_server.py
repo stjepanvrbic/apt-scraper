@@ -29,10 +29,10 @@ class GalleryServerCase(unittest.TestCase):
         self.server.server_close()
         self.thread.join()
 
-    def request(self, path, body=None, headers=None):
+    def request(self, path, body=None, headers=None, timeout=3):
         request = Request(self.url + path, data=json.dumps(body).encode() if body is not None else None,
                           headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + self.server.access_token, **(headers or {})})
-        with urlopen(request, timeout=3) as response:
+        with urlopen(request, timeout=timeout) as response:
             return json.load(response)
 
     def raw_post(self, path, content, headers=None):

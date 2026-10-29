@@ -65,9 +65,14 @@ test('a visible card records an impression after one continuous second', async (
   expect(rows(gallery.database, "SELECT * FROM implicit_signals WHERE kind = 'impression'")).toHaveLength(0);
   await page.clock.runFor(200);
   await expect.poll(() => rows(gallery.database, "SELECT * FROM implicit_signals WHERE kind = 'impression'").length).toBeGreaterThan(0);
-  const count = rows(gallery.database, "SELECT * FROM implicit_signals WHERE kind = 'impression'").length;
+  // Every card that is half visible posts its own impression on its own timer, so the requests of the other cards
+  // may still be in flight when the first row lands: the count is taken once the network is quiet.
+  await page.waitForLoadState('networkidle');
+  const recorded = rows(gallery.database, "SELECT listing_id FROM implicit_signals WHERE kind = 'impression'");
+  expect(new Set(recorded.map((row: { listing_id: string }) => row.listing_id)).size).toBe(recorded.length);
   await page.clock.runFor(5000);
-  expect(rows(gallery.database, "SELECT * FROM implicit_signals WHERE kind = 'impression'")).toHaveLength(count);
+  await page.waitForLoadState('networkidle');
+  expect(rows(gallery.database, "SELECT * FROM implicit_signals WHERE kind = 'impression'")).toHaveLength(recorded.length);
 });
 
 test('favorite and dismiss offer an optional reason that becomes a normal user note', async ({ page, gallery }, testInfo) => {

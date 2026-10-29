@@ -2,14 +2,15 @@
 
 Commands:
   encoder-run.py           one pass, as the cron job runs it: embeds the photos of new listing contents for at most
-                           9 minutes and derives the ranking's photo columns (profile/skills/ranking/encoder/encoder.py)
-  encoder-run.py install   build the encoder's Python environment and download and verify its image tower. The
-                           installers run this with Hermes's Python.
+                           9 minutes and derives the ranking's photo columns (skills/ranking/encoder/encoder.py)
+  encoder-run.py install   build the encoder's Python environment and download and verify its image tower by hand,
+                           with Hermes's Python. The first cron run does the same.
 
 The encoder needs onnxruntime and numpy, which Hermes's Python lacks, so it runs in its own environment under
 HERMES_HOME/workspace/encoder/environment, built from the hash-pinned wheels in the encoder's requirements.txt. Its
 image tower is downloaded into HERMES_HOME/workspace/encoder/model and verified against the hashes model.json pins.
-The cron run rebuilds the environment only when Hermes's Python or the requirements changed. A model whose quality
+The first cron run builds and downloads; later runs rebuild the environment only when Hermes's Python or the
+requirements changed. A model whose quality
 measurements in model.json did not pass can never turn on, so neither command builds or downloads anything for it.
 
 Hermes wakes the model whenever a cron script fails (cron/scheduler_prompt.py, "Script Error"), and the encoder has
@@ -115,7 +116,7 @@ def install(home, run, opener):
     return 0
 
 
-def encode_once(home, run):
+def encode_once(home, run, opener):
     environment, model, status = paths(home)
     manifest = json.loads(MANIFEST.read_text(encoding='utf-8'))
     if reason := failed_gate(manifest):
@@ -123,15 +124,11 @@ def encode_once(home, run):
         print(NO_WAKE)
         return
     problem, summary = None, None
-    if not environment_python(environment).exists():
-        problem = 'The encoder environment is missing. Rerun the apt-scraper installer.'
-    elif not ready(manifest, model):
-        problem = 'The photo encoder is not downloaded. Rerun the apt-scraper installer.'
-    elif not current(environment):
-        try:
-            build(environment, run)
-        except (subprocess.CalledProcessError, OSError) as error:
-            problem = f'The encoder environment could not be rebuilt for Python {sys.version.split()[0]}: {error}. Rerun the apt-scraper installer.'
+    # The first run builds the environment and downloads the image tower, as `install` does by hand; later runs
+    # rebuild the environment when Hermes's Python or the requirements changed.
+    if not environment_python(environment).exists() or not ready(manifest, model) or not current(environment):
+        if (code := install(home, run, opener)) != 0:
+            problem = f"The photo encoder could not be set up (exit code {code}). Run encoder-run.py install with Hermes's Python to see why."
     if problem is None:
         result = run([str(environment_python(environment)), str(ENCODER / 'encoder.py'), 'run', str(model), '--budget', str(BUDGET_SECONDS)],
                      env=isolated(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
@@ -151,7 +148,7 @@ def main(arguments, run=subprocess.run, opener=urlopen):
     if arguments == ['install']:
         return install(home, run, opener)
     try:
-        encode_once(home, run)
+        encode_once(home, run, opener)
     except Exception as error:
         print(f'The encoder could not start: {type(error).__name__}: {error}')
         print(NO_WAKE)

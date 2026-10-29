@@ -9,8 +9,8 @@ import tempfile
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/ranking/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/ranking/scripts'))
 
 import store as store_module  # noqa: E402
 from blind_test import BlindTestUnavailable, blind_test, top  # noqa: E402
@@ -18,7 +18,7 @@ from hypotheses import checked_proposals, pending_judgments  # noqa: E402
 from photo_catalog import GATE_PROBES, MATCH_ROOMS, PROBE_PROMPTS, vocabulary  # noqa: E402
 from rerank import rerank  # noqa: E402
 from scoring import design, display, fit, fit_model, held_out_observations, leave_one_out, scores  # noqa: E402
-from test_rerank import StoreTestCase, fill, least_cpu_seconds  # noqa: E402
+from test_rerank import StoreTestCase, cpu_budget, fill, least_cpu_seconds, speed_factor  # noqa: E402
 
 MODEL = 'model-a'
 
@@ -316,7 +316,7 @@ class TimingTests(EncoderTestCase):
         self.assertTrue({'photo:carpet', 'photo:bright rooms', *(f'looks_like:{room}' for room in MATCH_ROOMS)} <= columns)
         seconds, summary = least_cpu_seconds(lambda: rerank(self.store, seed=1))
         self.assertEqual((summary['ranked'], len(summary['held_out'])), (300, 50))
-        self.assertLess(seconds, 2.0)
+        self.assertLess(seconds, cpu_budget(), speed_factor())
 
 
 assert set(GATE_PROBES) <= set(PROBE_PROMPTS)

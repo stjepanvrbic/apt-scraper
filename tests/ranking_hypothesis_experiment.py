@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from statistics import fmean, median
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/ranking/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/ranking/scripts'))
 
 from test_rerank import SETTINGS, fill
 from hypotheses import active, assess, pending_judgments, prepare, save, save_judgments

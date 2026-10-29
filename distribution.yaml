@@ -1,0 +1,15 @@
+name: apt-scraper
+version: 0.1.0
+description: "Apartment search agent on a Claude subscription, with computer use"
+hermes_requires: ">=0.22.5"
+author: "Stjepan Vrbic"
+license: "Proprietary"
+# What `hermes profile install` copies into the profile; the rest of the repository is documentation, tests and
+# the gallery's source.
+distribution_owned:
+  - SOUL.md
+  - config.yaml
+  - cron
+  - scripts
+  - skills
+  - distribution.yaml

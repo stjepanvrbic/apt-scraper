@@ -14,10 +14,10 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
 from launch import api_request
 
-SCRIPT = Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts/gallery.py'
+SCRIPT = Path(__file__).resolve().parents[1] / 'skills/gallery/scripts/gallery.py'
 
 
 def free_port():

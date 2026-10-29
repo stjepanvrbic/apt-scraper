@@ -7,7 +7,7 @@ from urllib.error import HTTPError
 from unittest.mock import patch
 
 from test_gallery_server import GalleryServerCase
-from test_rerank import SETTINGS, fill
+from test_rerank import SETTINGS, cpu_budget, fill, speed_factor
 from rerank import rerank, save_review
 from store import READ_ATTEMPTS, extraction_read
 from test_gallery_store import listing
@@ -109,13 +109,16 @@ class RerankServerTests(GalleryServerCase):
 
     def test_http_rerank_and_order_read_fit_the_two_second_budget(self):
         fill(self.store, 300, 50)
+        budget = cpu_budget()
         started = time.perf_counter()
-        summary = self.request('/api/rerank', {})
+        # The budget is CPU time; a wall-clock timeout with a margin lets a slow run fail on the assertion, which
+        # reports the measured values, instead of on the socket.
+        summary = self.request('/api/rerank', {}, timeout=max(10, 3 * budget))
         items = self.request('/api/listings')['items']
         elapsed = time.perf_counter() - started
         self.assertEqual((summary['ranked'], len(summary['held_out'])), (300, 50))
         self.assertEqual(items[0]['rank'], 1)
-        self.assertLess(elapsed, 2.0)
+        self.assertLess(elapsed, budget, speed_factor())
 
     def test_pending_reasons_follow_current_features_and_never_expose_an_old_explanation(self):
         identifiers = fill(self.store, 25, 3)

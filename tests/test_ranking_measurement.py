@@ -11,7 +11,7 @@ from unittest import mock
 from dataclasses import replace
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/ranking/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/ranking/scripts'))
 
 from test_rerank import StoreTestCase, fill  # noqa: E402
 from test_scoring import GARDEN, entry, garden_neighborhood, inputs, neighborhood  # noqa: E402

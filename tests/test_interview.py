@@ -15,7 +15,7 @@ from unittest.mock import patch
 from test_gallery_store import ListingStore, listing
 from store import CriteriaApplied, TimeZoneDataMissing
 
-SCRIPT = Path(__file__).resolve().parents[1] / 'profile/skills/interview/scripts/settings.py'
+SCRIPT = Path(__file__).resolve().parents[1] / 'skills/interview/scripts/settings.py'
 sys.path.insert(0, str(SCRIPT.parent))
 
 import geodata  # noqa: E402

@@ -1,3 +1,4 @@
+import functools
 import json
 import os
 import sqlite3
@@ -10,7 +11,7 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
 
 from record import CATEGORIES, FLAGS, RATINGS, SEED_TAGS  # noqa: E402
 from rerank import pairwise_questions, rerank  # noqa: E402
@@ -20,7 +21,7 @@ from test_feature_record import extraction  # noqa: E402
 from test_gallery_store import listing  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / 'profile/skills/ranking/scripts/ranking.py'
+SCRIPT = ROOT / 'skills/ranking/scripts/ranking.py'
 SETTINGS = {
     'criteria': {'location': ['Logan Square', 'Avondale'], 'price': {'min': None, 'max': 3000, 'currency': 'USD', 'period': 'month'}},
     'preferences': {'likes': ['Lots of daylight'], 'dislikes': ['Carpet']},
@@ -73,6 +74,32 @@ def least_cpu_seconds(call, runs=TIMING_RUNS):
         result = call()
         times.append(time.process_time() - started)
     return min(times), result
+
+
+# The spec's two seconds are judged on the owner's PC, where reference_work takes REFERENCE_SECONDS of CPU time
+# (Python 3.14, least of five runs). A slower machine, such as a shared CI runner or a sandbox, is given the
+# budget scaled by how much slower it runs the same work, timed once per process; a faster machine keeps the
+# spec's budget. The work is plain Python arithmetic, as the rerank's scoring is: a numpy workload would count
+# the threads of its BLAS, which the rerank never uses.
+REFERENCE_SECONDS = 0.35
+
+
+def reference_work():
+    total = 0.0
+    for value in range(8_000_000):
+        total += (value % 7) * 0.5 + value / (value + 1)
+    return total
+
+
+@functools.cache
+def speed_factor() -> float:
+    """How many times slower than the owner's PC this machine runs the reference work, at least 1."""
+    return max(1.0, least_cpu_seconds(reference_work, runs=5)[0] / REFERENCE_SECONDS)
+
+
+def cpu_budget(seconds: float = 2.0) -> float:
+    """The spec's budget of `seconds` on the owner's PC, scaled for this machine."""
+    return seconds * speed_factor()
 
 
 class StoreTestCase(unittest.TestCase):
@@ -171,7 +198,7 @@ class RerankTests(StoreTestCase):
         fill(self.store, 300, 50)
         seconds, summary = least_cpu_seconds(lambda: rerank(self.store, seed=1))
         self.assertEqual((summary['ranked'], len(summary['held_out'])), (300, 50))
-        self.assertLess(seconds, 2.0, summary)
+        self.assertLess(seconds, cpu_budget(), (speed_factor(), summary))
 
 
 class MigrationTests(unittest.TestCase):
@@ -301,7 +328,7 @@ class CommandTests(StoreTestCase):
         self.assertEqual(missing.returncode, 1)
 
     def test_no_cron_job_reranks(self):
-        jobs = json.loads((ROOT / 'profile/cron/jobs.json').read_text(encoding='utf-8'))['jobs']
+        jobs = json.loads((ROOT / 'cron/jobs.json').read_text(encoding='utf-8'))['jobs']
         self.assertNotIn('apt-scraper-ranking', [job['id'] for job in jobs])
         for job in jobs:
             self.assertNotIn('rerank', job['prompt'].lower())

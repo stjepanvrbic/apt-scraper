@@ -24,7 +24,7 @@ from pathlib import Path
 
 HOUSE_ROOMS = {'bathroom': 'bathroom', 'bedroom': 'bedroom', 'kitchen': 'kitchen', 'frontal': 'exterior'}
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
 from photo_catalog import GATE_PROBES, PROBE_PROMPTS as CATALOG_PROBES, ROOM_PROMPTS  # noqa: E402
 
 # Several phrasings per class, as shipped; a class scores by its best phrasing (max) or the mean of its unit text
@@ -142,7 +142,7 @@ def text(args):
 def preprocess(path, spec):
     """The shipped encoder's preprocessing, so the measured and the shipped inputs are one."""
     from PIL import Image, ImageOps
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/ranking/encoder'))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/ranking/encoder'))
     from encoder import preprocess as shipped
 
     with Image.open(path) as source:

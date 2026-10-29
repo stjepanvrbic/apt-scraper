@@ -7,9 +7,9 @@ from pathlib import Path
 from contextlib import closing, contextmanager
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/ranking/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/ranking/scripts'))
 
-from test_rerank import SETTINGS, StoreTestCase, fill, least_cpu_seconds  # noqa: E402
+from test_rerank import SETTINGS, StoreTestCase, cpu_budget, fill, least_cpu_seconds, speed_factor  # noqa: E402
 from rerank import rerank  # noqa: E402
 from hypotheses import prepare, save, save_judgments, pending_judgments, decide, active, assess  # noqa: E402
 from scoring import fit_model  # noqa: E402
@@ -342,7 +342,7 @@ class HypothesisTests(StoreTestCase):
         populate_benchmark(self.store)
         seconds, result = least_cpu_seconds(lambda: rerank(self.store, seed=1))
         self.assertEqual(sum(name.startswith('hypothesis:') for name in result['weights']), 6)
-        self.assertLess(seconds, 2.0)
+        self.assertLess(seconds, cpu_budget(), speed_factor())
 
     def test_a_predictive_fixture_hypothesis_survives_twenty_new_labels(self):
         from ranking_hypothesis_experiment import run
@@ -369,7 +369,7 @@ class CopyTests(StoreTestCase):
         connect = sqlite3.connect
         with mock.patch('store_copy.sqlite3.connect', wraps=connect) as opened:
             copy_database(self.store.path, destination)
-        self.assertEqual(opened.call_args_list, [mock.call(destination)])
+        self.assertEqual(opened.call_args_list, [mock.call(destination.resolve())])
         self.assertEqual(hashlib.sha256(self.store.path.read_bytes()).hexdigest(), before)
         with closing(sqlite3.connect(destination)) as copied:
             self.assertEqual(copied.execute('SELECT value FROM copy_marker').fetchone()[0], 'committed')

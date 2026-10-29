@@ -1,10 +1,10 @@
 # Apartment gallery
 
-Ask the agent, in the Hermes dashboard's chat, to open the gallery. After pulling changes, rerun the repository installer to update the gallery skill. Opening the gallery needs Python 3.12 or newer, which Hermes supplies. The Notes conversation also needs the Hermes runtime, so launch through Hermes to use it. Node is only needed to develop the frontend.
+Ask the agent, in the Hermes dashboard's chat, to open the gallery. After pulling changes, run the install line again to update the gallery skill. Opening the gallery needs Python 3.12 or newer, which Hermes supplies. The Notes conversation also needs the Hermes runtime, so launch through Hermes to use it. Node is only needed to develop the frontend.
 
 The six tabs are Rankings, Favorites, Compare, Contacted, Viewings and Notes. Open a listing to see its photos, details, sources, notes and contact history. Favorites and dismissals are saved immediately. Notes save when you press Save note. A failed save keeps the text so you can retry. Dismissed listings leave Rankings and Favorites. Their notes, correspondence and viewing details remain in the store.
 
-Contact requests are saved as pending. The gallery itself sends nothing. The [contact skill](../profile/skills/contact/SKILL.md) picks up the request within a few minutes, records each message it sends and receives, and books agreed viewing times in your Google Calendar. A listing shows as contacted once its first message is out, and a viewing appears in Viewings with its time once its calendar event exists. Sample listings are never contacted. The Notes tab is a live conversation with the running Hermes agent. It streams replies and tool activity, and shows questions or approval choices in the tab. The conversation resumes the same Hermes session after reopening.
+Contact requests are saved as pending. The gallery itself sends nothing. The [contact skill](../skills/contact/SKILL.md) picks up the request within a few minutes, records each message it sends and receives, and books agreed viewing times in your Google Calendar. A listing shows as contacted once its first message is out, and a viewing appears in Viewings with its time once its calendar event exists. Sample listings are never contacted. The Notes tab is a live conversation with the running Hermes agent. It streams replies and tool activity, and shows questions or approval choices in the tab. The conversation resumes the same Hermes session after reopening.
 
 ## Score and rerank
 
@@ -29,13 +29,13 @@ Questions use available, matching, undismissed listings with ranking features. T
 On Windows:
 
 ```powershell
-python profile/skills/gallery/scripts/gallery.py --sample open
+python skills/gallery/scripts/gallery.py --sample open
 ```
 
 On macOS:
 
 ```bash
-python3 profile/skills/gallery/scripts/gallery.py --sample open
+python3 skills/gallery/scripts/gallery.py --sample open
 ```
 
 The command opens the default browser and returns a local URL containing a fresh launch secret in its fragment. The frontend moves the secret into session storage and removes it from the address bar. Do not share or log that URL. `open --redact-token` opens the authenticated link but prints only the base URL. Add `--no-browser` for headless verification. Every `/api/*` request, including health and stop, requires the bearer secret. Connection records stay under `~/.secrets/apt-scraper/gallery/`, protected by a restricted Windows ACL or owner-only POSIX permissions. The Windows server runs with `pythonw.exe`. On macOS it starts a new session. Both redirect diagnostics to `gallery.log` and keep running after the launch command exits. The `serve` command runs in the foreground for development.
@@ -48,11 +48,11 @@ The default port is 8765. If it serves another application or database, select a
 
 Inside Hermes, data is under `HERMES_HOME/workspace/gallery/`. Outside Hermes, Windows uses `%LOCALAPPDATA%/apt-scraper/` and macOS uses `~/Library/Application Support/apt-scraper/`. The databases are `listings.sqlite3` and `sample.sqlite3`, and `store_path(sample)` in `store.py` returns their paths. Search settings are always in `listings.sqlite3`. `--database <path>` selects an explicit database. Keep all global options before the command name.
 
-The shared Python interface is `ListingStore` in `profile/skills/gallery/scripts/store.py`. The schema is at version 10, recorded in `PRAGMA user_version`. Each version's migration runs in a transaction when the store opens, so a version-1 store gains the contact workflow's records without losing data, a version-2 store gains the code-derived features of every stored listing, a version-3 store gains the feature records, and a version-4 store gains explanations, exploration marks, reranks, readings and pairwise answers, keeping its ranks. A version-5 store gains the persistent pairwise skip cooldowns. A version-6 store gains geocodes, stations and the distances of every listing, with each saved place kept as its name and address. A version-7 store gains the review passes of later reranks. A version-8 store gains implicit gallery signals. A version-9 store gains an empty Notes session record and keeps its messages, so its next Notes turn starts a session of its own. The earlier record, whose session other databases may share, stays for gallery servers started before the update, which still write it, and the gallery no longer reads it. A reply still running in the earlier session ends with an error asking the user to send the message again. Databases from newer schema versions are rejected. A store refuses every read and write once another process has migrated its database to another version, and asks for the gallery to be opened again. Scraped fields, analysis, code-derived features, feature records, ranking, user feedback, implicit signals, contacts, approvals, viewings and chat records are separate.
+The shared Python interface is `ListingStore` in `skills/gallery/scripts/store.py`. The schema is at version 10, recorded in `PRAGMA user_version`. Each version's migration runs in a transaction when the store opens, so a version-1 store gains the contact workflow's records without losing data, a version-2 store gains the code-derived features of every stored listing, a version-3 store gains the feature records, and a version-4 store gains explanations, exploration marks, reranks, readings and pairwise answers, keeping its ranks. A version-5 store gains the persistent pairwise skip cooldowns. A version-6 store gains geocodes, stations and the distances of every listing, with each saved place kept as its name and address. A version-7 store gains the review passes of later reranks. A version-8 store gains implicit gallery signals. A version-9 store gains an empty Notes session record and keeps its messages, so its next Notes turn starts a session of its own. The earlier record, whose session other databases may share, stays for gallery servers started before the update, which still write it, and the gallery no longer reads it. A reply still running in the earlier session ends with an error asking the user to send the message again. Databases from newer schema versions are rejected. A store refuses every read and write once another process has migrated its database to another version, and asks for the gallery to be opened again. Scraped fields, analysis, code-derived features, feature records, ranking, user feedback, implicit signals, contacts, approvals, viewings and chat records are separate.
 
 | Method | Behavior |
 | --- | --- |
-| `update_settings(judge=None, **values)`, `settings()`, `missing_settings()` | Replaces each named setting among `criteria`, `preferences`, `places`, `location_priorities`, `listing_sites`, `viewing_availability` and `transit_feed`, in the format the [interview skill](../profile/skills/interview/SKILL.md) gives. Settings left out stay unchanged. Saving criteria while listings are stored needs `judge`, which the same transaction applies to every stored listing as `apply_criteria` does, returning its result. The interview's `settings.py` passes the search's criteria judgment, as the [search guide](search.md) describes. Saving criteria drops the location priority of every area they no longer name, and a location priority for an area the criteria do not name is rejected. Saving places or the transit feed computes every listing's distances again. `missing_settings(names)` lists what the interview still needs, limited to the named settings. `places_without_coordinates()` names the saved places whose address has no stored geocode. |
+| `update_settings(judge=None, **values)`, `settings()`, `missing_settings()` | Replaces each named setting among `criteria`, `preferences`, `places`, `location_priorities`, `listing_sites`, `viewing_availability` and `transit_feed`, in the format the [interview skill](../skills/interview/SKILL.md) gives. Settings left out stay unchanged. Saving criteria while listings are stored needs `judge`, which the same transaction applies to every stored listing as `apply_criteria` does, returning its result. The interview's `settings.py` passes the search's criteria judgment, as the [search guide](search.md) describes. Saving criteria drops the location priority of every area they no longer name, and a location priority for an area the criteria do not name is rejected. Saving places or the transit feed computes every listing's distances again. `missing_settings(names)` lists what the interview still needs, limited to the named settings. `places_without_coordinates()` names the saved places whose address has no stored geocode. |
 | `save_geocodes(geocodes)`, `geocodes(addresses)` | Keeps and returns the coordinates a geocoder found for place addresses, by address: `latitude`, `longitude` and `found`, the name the geocoder gave the location. |
 | `transit_feed()`, `save_stations(url, stations)` | The feed URL the `transit_feed` setting names, or CTA's by default, with `fetched_at` and its `stations` once fetched. `save_stations` replaces the stations with those fetched from `url`, each `id`, `name`, `latitude` and `longitude`, and computes every listing's distances again. |
 | `upsert_listing(listing, matches_criteria=None)` | Saves scraped content without rank or reason. Returns `changed`, `needs_analysis` and `content_fingerprint`. Preserves first-seen date, ranking and history. `matches_criteria` true or false shows or hides the listing in the same transaction, so a new listing outside the criteria is never shown. |
@@ -143,16 +143,17 @@ Viewings are agreed, moved, canceled and booked only through the contact skill's
 
 The frontend source is in `gallery/`. It uses React, TypeScript, Mantine, TanStack Query, Tabler icons and Yet Another React Lightbox. Vite builds the assets into the gallery skill's `web/` directory. Commit the generated assets with source changes so an installed profile can open the app without a frontend toolchain. Source and output line endings are pinned to LF. Assets have stable names. The build normalizes HTML and bundled license line endings to LF. Hermes profile installation replaces the complete gallery skill directory, removing obsolete files.
 
+The whole check suite runs through `tests/run.sh` on macOS and Linux and `tests/run.ps1` on Windows, in a fresh virtual environment, and CI runs them on Linux, macOS and Windows. The gallery's own steps, from `gallery/`:
+
 ```powershell
-python -m unittest discover -s tests -v
-ruff check profile/skills/gallery/scripts tests
-cd gallery
 npm ci
 npx playwright install chromium
 npm run lint
 npm run build
 npm test
 ```
+
+The committed assets in `skills/gallery/web` must be the build of the committed source; the check suite fails when they differ.
 
 The Python tests use real SQLite files and HTTP servers. Launcher tests start through a virtual environment, exit the caller, and check that the server remains reachable. On Windows they verify the server has no console. On POSIX they verify a separate session. Automated adapter tests execute `run_turn` against a controlled external Hermes interface. Live verification uses the installed gateway. Browser checks run headless with screenshots. The opener is stubbed in its command test. Hermes test launches use `open --no-browser`. Browser tests use isolated stores and the production build, including real server restarts, keyboard navigation, failed saves, missing photos, source navigation and accessibility checks at desktop and mobile sizes.
 

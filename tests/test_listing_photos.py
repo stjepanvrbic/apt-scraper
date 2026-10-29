@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/listing-features/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/listing-features/scripts'))
 
 from photos import (SHEET_SIZE, TILE_SIZE, contact_sheets, difference_hash, distance, distinct_photos,  # noqa: E402
                     photo_key, without_near_duplicates)

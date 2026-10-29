@@ -1,0 +1,106 @@
+# Runs the whole check suite, tests/run.sh or tests/run.ps1, on a fresh Linux, macOS and Windows machine, and the
+# real install line, install.sh or install.ps1, on another fresh machine of each, with the checkout as the profile.
+name: CI
+
+# Every push, which covers every pull request's branch in this repository, and pull requests from forks, whose
+# pushes this repository never sees. The jobs skip a pull_request event from this repository's own branches, which
+# the push already ran.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# The checks only read the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: ${{ matrix.os }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: gallery/package-lock.json
+      - name: Checks
+        if: runner.os != 'Windows'
+        shell: bash
+        run: tests/run.sh --work "$RUNNER_TEMP/apt-scraper-tests"
+      - name: Checks
+        if: runner.os == 'Windows'
+        # Windows PowerShell 5.1, which the installer, the bootstrap and the uninstaller run in.
+        shell: powershell
+        run: tests/run.ps1 -Work "$env:RUNNER_TEMP/apt-scraper-tests"
+      - name: Keep the test output of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output-${{ matrix.os }}
+          path: |
+            gallery/test-results
+            ${{ runner.temp }}/apt-scraper-tests/pytest.xml
+          if-no-files-found: ignore
+
+  install:
+    name: install on ${{ matrix.os }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Install
+        if: runner.os != 'Windows'
+        shell: bash
+        # The runner has no terminal, so the Claude login and the macOS permission dialogs are skipped.
+        run: bash ./install.sh "$PWD" < /dev/null
+      - name: Install
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          .\install.ps1 -Source "$PWD"
+          # The installer's PATH change reaches later shells, not this runner; the next step needs hermes.
+          "$env:LOCALAPPDATA\hermes\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: What the install left behind
+        shell: bash
+        run: |
+          set -x
+          export PATH="$HOME/.local/bin:$PATH"
+          hermes --version
+          jobs=$(hermes -p apt-scraper cron list) || echo "cron list exited with $?"
+          printf '%s\n' "$jobs"
+          for job in contact search features review encoder; do
+            printf '%s\n' "$jobs" | grep -E "apt-scraper-$job.*\[active\]"
+          done
+          plugins=$(hermes -p apt-scraper plugins list --plain)
+          printf '%s\n' "$plugins"
+          printf '%s\n' "$plugins" | grep claude-subscription-directsdk
+          hermes -p apt-scraper skills list || echo "skills list exited with $?"
+          hermes_home=$HOME/.hermes
+          if [ -n "${LOCALAPPDATA:-}" ]; then hermes_home=$LOCALAPPDATA/hermes; fi
+          ls "$hermes_home/profiles/apt-scraper/skills/productivity/google-workspace"
+          hermes -p apt-scraper computer-use status
+          hermes gateway status

@@ -145,7 +145,7 @@ Failures:
 | `invalid_grant` | The user changed their password or removed the app's access, or the app was left in Testing. Step 6 if it is in Testing, then step 8 |
 | `Error 403: access_denied` during consent | Step 6: the app must be published |
 | `not checked`, did not answer within 30 seconds | Check the internet connection, then check again |
-| The Hermes google-workspace skill is missing | Ask the user to run the apt-scraper installer again |
+| The Hermes google-workspace skill is missing | Ask the user to run the install line again |
 
 ## Messaging gateway
 
@@ -163,22 +163,19 @@ Your questions reach the user here while the gallery is closed, and their replie
    hermes -p apt-scraper config set TELEGRAM_HOME_CHANNEL "<the ID>"
    ```
 
-7. Open the dashboard's Channels page. The installer records the dashboard's address in `$HERMES_HOME/dashboard-address`. Check that Hermes answers there:
+7. Open the dashboard's Channels page. The dashboard is Hermes's own, `hermes -p apt-scraper dashboard`, on port 9119 unless the user chose another. Check that Hermes answers there:
 
    ```bash
-   curl -s --max-time 2 -w '\n%{http_code}\n' "$(cat "$HERMES_HOME/dashboard-address")/api/health"
+   curl -s --max-time 2 -w '\n%{http_code}\n' http://127.0.0.1:9119/api/health
    ```
 
-   Hermes answers only when the last line is `200` and the reply above it is JSON with `"ok": true` and a `version`. Any other program on that port answers differently. Then open `<the address>/channels?profile=apt-scraper` with `browser_navigate`.
-
-   If anything else answers, or nothing does, start the dashboard without a window, the way it starts at login, and check again after a few seconds. If the file is missing, a command fails or Hermes still does not answer, ask the user to run the apt-scraper installer again:
+   Hermes answers only when the last line is `200` and the reply above it is JSON with `"ok": true` and a `version`. Any other program on that port answers differently. If nothing answers, start the dashboard yourself, without a window and without opening a browser, and check again after a few seconds:
 
    ```bash
-   cscript //nologo "$LOCALAPPDATA/hermes/profiles/apt-scraper/dashboard.vbs"   # Windows
-   # macOS
-   launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/io.github.stjepanvrbic.apt-scraper.dashboard.plist 2>/dev/null ||
-       launchctl kickstart "gui/$(id -u)/io.github.stjepanvrbic.apt-scraper.dashboard"
+   nohup hermes -p apt-scraper dashboard --no-open --skip-build </dev/null >/dev/null 2>&1 &
    ```
+
+   If something else answers, or Hermes still does not, ask the user which address their browser shows for the dashboard and use that. Then open `<the address>/channels?profile=apt-scraper` with `browser_navigate`.
 
    On the Telegram card press **Manual setup**. Never press **Create with QR**: it creates the bot through a Nous-hosted service. The form shows the ID from step 6 under **Allowed Telegram user IDs**. Take a snapshot, then ask the user to click the **Telegram bot token** field in your window and paste the token from step 3. The field shows dots, and you never type into it. Leave **Webhook secret** empty and press **Save & enable**. The running gateway connects the bot within seconds, without a restart, and the Telegram card shows its state.
 8. Run `check gateway`. Ask the user to confirm the test message arrived in the bot chat.
@@ -191,7 +188,7 @@ Failures:
 | No test message has gone through yet | `check gateway`, then fix whatever it reports |
 | `No home channel set for telegram` | The `TELEGRAM_HOME_CHANNEL` command in step 6, then check again |
 | the gateway is not running | `hermes -p default gateway start`. If it reports no installed service, run `hermes -p default gateway install --no-start-now --start-on-login`, then `hermes -p default gateway start` again: on Windows, an install that starts the gateway after an administrator approval starts it as administrator, where no chat can reach it. One gateway serves every profile, and Hermes refuses these commands with `-p apt-scraper` |
-| Listing messaging platforms failed or returned unreadable output | Run `hermes -p apt-scraper send --list` and fix what it reports, or ask the user to run the apt-scraper installer again |
+| Listing messaging platforms failed or returned unreadable output | Run `hermes -p apt-scraper send --list` and fix what it reports, or ask the user to run the install line again |
 | Any other test message failure | Read the error on the Telegram card of the Channels page. Step 4 if the bot chat was never started. If the token was mistyped or revoked, the user gets a new one from BotFather with `/token`, then step 7 with the new token |
 
 ## iMessage on macOS
@@ -206,7 +203,7 @@ iMessage exists only on macOS, and texting is off elsewhere. `imsg` needs macOS 
 
    When it asks for the Mac password, the user types it. When it asks to press RETURN, press Enter. At the end, type the commands it prints under "Next steps". Then run `brew install steipete/tap/imsg` and `imsg --version`.
 2. Run `open -a Messages`. The user signs in with their Apple ID if Messages asks. For texts to phones without iMessage, they turn on **Settings → Apps → Messages → Text Message Forwarding** for this Mac on their iPhone.
-3. Full Disk Access. Ask the user which terminal app they run the installer and `hermes` commands in (Terminal, iTerm and so on). Open the pane:
+3. Full Disk Access. Ask the user which terminal app they run the install line and `hermes` commands in (Terminal, iTerm and so on). Open the pane:
 
    ```bash
    open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
