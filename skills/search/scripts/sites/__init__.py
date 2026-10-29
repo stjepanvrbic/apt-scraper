@@ -13,17 +13,44 @@ A search is a dict with the criteria area it covers under 'area'. Every listing 
 site module's name and a colon. Failures are the exceptions in sites.errors.
 """
 
+from collections.abc import Iterator
+from typing import Protocol
 from urllib.parse import urlsplit
 
+from client import Fetcher
+from matching import Facts
+from shapes import Criteria
 from sites import zillow
+from sites.zillow import Card, Search, SiteListing, SourcedListing
 
-SITES = (zillow,)
+
+class Site(Protocol):
+    """A site module, as the search uses it."""
+
+    __name__: str
+
+    @property
+    def NAME(self) -> str: ...
+
+    @property
+    def HOSTS(self) -> set[str]: ...
+
+    def searches(self, criteria: Criteria, client: Fetcher, regions: dict[str, object]) -> list[Search]: ...
+
+    def pages(self, search: Search, client: Fetcher) -> Iterator[list[Card]]: ...
+
+    def read(self, card: Card, client: Fetcher) -> tuple[SiteListing, Facts]: ...
+
+    def reread(self, listing: SourcedListing, client: Fetcher) -> tuple[SiteListing, Facts]: ...
 
 
-def site_for(url):
+SITES: tuple[Site, ...] = (zillow,)
+
+
+def site_for(url: str) -> Site | None:
     host = (urlsplit(url).hostname or '').lower()
     return next((site for site in SITES if host in site.HOSTS), None)
 
 
-def site_named(name):
+def site_named(name: str) -> Site | None:
     return next((site for site in SITES if site.__name__.rsplit('.', 1)[-1] == name), None)

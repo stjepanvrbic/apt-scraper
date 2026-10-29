@@ -65,13 +65,13 @@ GATE_PROBES = ('carpet', 'exposed brick', 'balcony', 'bathtub', 'open kitchen')
 MATCH_ROOMS = ('kitchen', 'bathroom', 'living', 'bedroom')
 
 
-def entries():
+def entries() -> list[tuple[str, str, str]]:
     """Every phrasing in the order of the rows of probes.npy: rooms first, then probes."""
     return ([('room', name, text) for name, texts in ROOM_PROMPTS.items() for text in texts]
             + [('probe', name, text) for name, texts in PROBE_PROMPTS.items() for text in texts])
 
 
-def vocabulary():
+def vocabulary() -> dict[str, str]:
     """The reading vocabulary's photo features: what the photos look like, by probe."""
     return {f'photo:{name}': f'the photos show {texts[0].removeprefix("a ").removeprefix("an ")}'
             for name, texts in PROBE_PROMPTS.items()}

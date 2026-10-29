@@ -20,38 +20,72 @@ criterion. Changed criteria are judged from stored features, so only phrases the
 yet need a model call.
 """
 
-INSIDE = 'inside'
-OUTSIDE = 'outside'
-PENDING = 'pending'
+from typing import Literal, TypedDict
+
+from shapes import Criteria, PriceLimit, Range, RentalPeriod
+
+Verdict = Literal['inside', 'outside', 'pending']
+INSIDE: Verdict = 'inside'
+OUTSIDE: Verdict = 'outside'
+PENDING: Verdict = 'pending'
 
 SQUARE_FEET_PER_SQUARE_METER = 10.7639
 PERIODS_PER_YEAR = {'day': 365, 'week': 52, 'month': 12, 'year': 1}
 
 
-def within(value, limits, scale=1):
+class Unit(TypedDict, total=False):
+    price: int | float | None
+    period: RentalPeriod
+    bedrooms: int | float | None
+    bathrooms: int | float | None
+    size_sqft: int | float | None
+    available_on: str | None
+    label: str | None
+    floor: int | None
+
+
+class Facts(TypedDict, total=False):
+    areas: list[str]
+    currency: str
+    latitude: float | None
+    longitude: float | None
+    stories: int | None
+    units: list[Unit]
+
+
+MustHaves = dict[str, bool | None]
+
+
+class Features(TypedDict, total=False):
+    facts: Facts
+    must_haves: MustHaves
+
+
+def within(value: int | float | None, limits: Range, scale: float = 1) -> bool:
     if value is None:
         return True
     low, high = limits.get('min'), limits.get('max')
     return (low is None or value >= low * scale) and (high is None or value <= high * scale)
 
 
-def price_within(unit, currency, limits):
-    price, period = unit.get('price'), unit.get('period')
-    if price is None or limits.get('currency') != currency or period not in PERIODS_PER_YEAR or limits.get('period') not in PERIODS_PER_YEAR:
+def price_within(unit: Unit, currency: str | None, limits: PriceLimit) -> bool:
+    price, period, limit_period = unit.get('price'), unit.get('period'), limits.get('period')
+    if price is None or limits.get('currency') != currency or period not in PERIODS_PER_YEAR or limit_period not in PERIODS_PER_YEAR:
         return True
-    return within(price * PERIODS_PER_YEAR[period] / PERIODS_PER_YEAR[limits['period']], limits)
+    return within(price * PERIODS_PER_YEAR[period] / PERIODS_PER_YEAR[limit_period], limits)
 
 
-def unit_meets(unit, currency, criteria):
+def unit_meets(unit: Unit, currency: str | None, criteria: Criteria) -> bool:
     size = criteria.get('size', {})
     move_in = criteria.get('move_in')
+    available_on = unit.get('available_on')
     return (price_within(unit, currency, criteria.get('price', {}))
             and within(unit.get('bedrooms'), criteria.get('rooms', {}))
             and within(unit.get('size_sqft'), size, SQUARE_FEET_PER_SQUARE_METER if size.get('unit') == 'm2' else 1)
-            and (move_in is None or unit.get('available_on') is None or unit['available_on'] <= move_in))
+            and (move_in is None or available_on is None or available_on <= move_in))
 
 
-def facts_meet(criteria, facts):
+def facts_meet(criteria: Criteria, facts: Facts) -> bool:
     areas = facts.get('areas') or []
     if areas and not set(areas) & set(criteria.get('location', [])):
         return False
@@ -59,43 +93,48 @@ def facts_meet(criteria, facts):
     return not units or any(unit_meets(unit, facts.get('currency'), criteria) for unit in units)
 
 
-def amount(value):
+def amount(value: int | float) -> str:
     return f'{value:,g}' if value < 1e6 else f'{value:,.0f}'
 
 
-def span(limits):
+def span(limits: Range) -> str | None:
     low, high = limits.get('min'), limits.get('max')
     if low is not None and high is not None:
         return f'from {amount(low)} to {amount(high)}'
     return f'at least {amount(low)}' if low is not None else f'at most {amount(high)}' if high is not None else None
 
 
-def criterion_phrases(criteria):
+def criterion_phrases(criteria: Criteria) -> list[str]:
     """The criteria as phrases the model judges for a listing that has no facts from a listing site."""
-    phrases = ['In one of these areas: ' + '; '.join(criteria['location'])] if criteria.get('location') else []
+    location = criteria.get('location')
+    phrases = ['In one of these areas: ' + '; '.join(location)] if location else []
     price, size, rooms = criteria.get('price', {}), criteria.get('size', {}), criteria.get('rooms', {})
     if span(price):
-        phrases.append(f'Price {span(price)} {price["currency"]} ' + ('in total' if price['period'] == 'total' else f'a {price["period"]}'))
+        period = price['period']  # pyright: ignore[reportTypedDictNotRequiredAccess]  # the store saves a price limit only with its currency and period
+        currency = price['currency']  # pyright: ignore[reportTypedDictNotRequiredAccess]  # the store saves a price limit only with its currency and period
+        phrases.append(f'Price {span(price)} {currency} ' + ('in total' if period == 'total' else f'a {period}'))
     if span(size):
-        phrases.append(f'Size {span(size)} {size["unit"]}')
+        unit = size['unit']  # pyright: ignore[reportTypedDictNotRequiredAccess]  # the store saves a size limit only with its unit
+        phrases.append(f'Size {span(size)} {unit}')
     if span(rooms):
         phrases.append(f'Rooms {span(rooms)}')
-    if criteria.get('move_in'):
-        phrases.append(f'Can be moved into by {criteria["move_in"]}')
+    move_in = criteria.get('move_in')
+    if move_in:
+        phrases.append(f'Can be moved into by {move_in}')
     return phrases
 
 
-def required(criteria, features):
+def required(criteria: Criteria, features: Features | None) -> list[str]:
     facts = (features or {}).get('facts')
     return ([] if facts is not None else criterion_phrases(criteria)) + list(criteria.get('other', []))
 
 
-def unjudged(criteria, features):
+def unjudged(criteria: Criteria, features: Features | None) -> list[str]:
     judged = (features or {}).get('must_haves', {})
     return [phrase for phrase in required(criteria, features) if phrase not in judged]
 
 
-def evaluate(criteria, features):
+def evaluate(criteria: Criteria, features: Features | None) -> Verdict:
     facts = (features or {}).get('facts')
     if facts is not None and not facts_meet(criteria, facts):
         return OUTSIDE
