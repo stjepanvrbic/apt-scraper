@@ -1,7 +1,11 @@
 {
   "typeCheckingMode": "all",
   "pythonVersion": "3.14",
-  "include": ["tests", "profile", "typings"],
+  "include": [
+    "tests",
+    "profile",
+    "typings"
+  ],
   "extraPaths": [
     "tests",
     "profile/skills/gallery/scripts",
@@ -13,5 +17,6 @@
     "profile/skills/account-connections/scripts",
     "profile/skills/interview/scripts"
   ],
-  "reportUninitializedInstanceVariable": false
+  "reportUninitializedInstanceVariable": false,
+  "reportMissingModuleSource": false
 }
