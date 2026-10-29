@@ -88,7 +88,8 @@ jobs:
           for job in contact search features review encoder; do
             printf '%s\n' "$jobs" | grep -E "apt-scraper-$job.*\[active\]"
           done
-          hermes -p apt-scraper plugins list | tee /dev/stderr | grep claude-subscription-directsdk
-          hermes -p apt-scraper skills list | tee /dev/stderr | grep google-workspace
+          hermes -p apt-scraper plugins list --plain | tee /dev/stderr | grep claude-subscription-directsdk
+          hermes -p apt-scraper skills list || echo "skills list exited with $?"
+          ls "$HOME/.hermes/profiles/apt-scraper/skills/productivity/google-workspace"
           hermes -p apt-scraper computer-use status || echo "computer-use status exited with $?"
           hermes gateway status || echo "gateway status exited with $?"
