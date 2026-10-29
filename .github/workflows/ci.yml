@@ -72,7 +72,7 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         # The runner has no terminal, so the Claude login and the macOS permission dialogs are skipped.
-        run: ./install.sh "$PWD" < /dev/null
+        run: bash ./install.sh "$PWD" < /dev/null
       - name: Install
         if: runner.os == 'Windows'
         shell: powershell
