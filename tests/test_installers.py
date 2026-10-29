@@ -8,6 +8,7 @@ import select
 import shlex
 import shutil
 import socket
+import socketserver
 import subprocess
 import sys
 import tempfile
@@ -20,7 +21,8 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-# Windows starts the first bash.exe it finds in System32, which is WSL's, before searching PATH.
+# Windows starts the first bash.exe it finds in System32, which is WSL's, before searching PATH; tests/run.ps1 puts
+# Git for Windows's usr\bin first.
 BASH = shutil.which('bash')
 WINDOWS = sys.platform == 'win32'
 # Windows PowerShell 5.1 runs the PowerShell installer, bootstrap and uninstaller, and exists only on Windows.
@@ -32,6 +34,8 @@ PLATFORMS = ('windows', 'macos') if WINDOWS else ('macos',)
 INSTALLERS = ('install.ps1', 'install.sh') if WINDOWS else ('install.sh',)
 # The bash that run_in_a_terminal starts: an MSYS path for Git Bash's perl on Windows.
 TERMINAL_BASH = '/usr/bin/bash' if WINDOWS else BASH
+# Every temporary directory is resolved: on a Windows account with a long name, TEMP spells the profile in its
+# short 8.3 form (RUNNER~1), which PowerShell and the shortcuts expand, so unresolved paths would not compare equal.
 # Where the shell scripts find the system's tools without Git Bash: macOS and Linux keep them here.
 SYSTEM_PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
 CHAT_URL = 'http://127.0.0.1:{port}/chat?profile=apt-scraper'
@@ -54,7 +58,7 @@ HERMES_HEALTH = '{"ok":true,"version":"0.22.5","displayVersion":"0.22.5","commit
 # Stands in for the dashboard: answers /api/health as Hermes does on the port in argv[1] until the file in
 # argv[2] exists.
 FAKE_DASHBOARD = textwrap.dedent(f"""\
-    import http.server, os, sys, threading, time
+    import http.server, os, socketserver, sys, threading, time
     class Health(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             found = self.path == '/api/health'
@@ -66,8 +70,13 @@ FAKE_DASHBOARD = textwrap.dedent(f"""\
             self.wfile.write(body)
         def log_message(self, *arguments):
             pass
-    http.server.HTTPServer.allow_reuse_address = False
-    server = http.server.HTTPServer(('127.0.0.1', int(sys.argv[1])), Health)
+    class Server(http.server.HTTPServer):
+        allow_reuse_address = False
+        def server_bind(self):
+            # Not HTTPServer's, whose reverse lookup of the address can take a minute on macOS.
+            socketserver.TCPServer.server_bind(self)
+            self.server_name, self.server_port = self.server_address[0], self.server_address[1]
+    server = Server(('127.0.0.1', int(sys.argv[1])), Health)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     deadline = time.monotonic() + 60
     while not os.path.exists(sys.argv[2]) and time.monotonic() < deadline:
@@ -451,7 +460,7 @@ class InstallerTests(unittest.TestCase):
     def run_shell_step(self, lines: list[str], exit_code: int) -> tuple[subprocess.CompletedProcess, str, str]:
         """Runs the dashboard step against a fake hermes. Returns its result, the URL it opened and the address it recorded."""
         with tempfile.TemporaryDirectory() as directory:
-            folder = Path(directory)
+            folder = Path(directory).resolve()
             opened = folder / 'opened'
             address = folder / 'profile' / 'dashboard-address'
             address.parent.mkdir()
@@ -475,7 +484,7 @@ class InstallerTests(unittest.TestCase):
     def run_powershell_step(self, lines: list[str], exit_code: int) -> tuple[subprocess.CompletedProcess, str, str]:
         """Runs the dashboard step against a fake hermes. Returns its result, the URL it opened and the address it recorded."""
         with tempfile.TemporaryDirectory() as directory:
-            folder = Path(directory)
+            folder = Path(directory).resolve()
             opened = folder / 'opened'
             address = folder / 'profile' / 'dashboard-address'
             address.parent.mkdir()
@@ -533,7 +542,7 @@ class ProfileStepTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.folder = Path(directory.name)
+        self.folder = Path(directory.name).resolve()
         self.root = self.folder / 'root'
         self.profile = self.root / 'profiles' / 'apt-scraper'
         self.mark = self.root / 'profiles' / '.deleted' / 'apt-scraper'
@@ -689,7 +698,7 @@ class BrowserSettingsTests(unittest.TestCase):
 
     def run_browser_step(self, installer: str, values: dict) -> list:
         """The installer's Browser tools step against a fake hermes whose `config get` prints values."""
-        folder = Path(tempfile.mkdtemp())
+        folder = Path(tempfile.mkdtemp()).resolve()
         self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
         calls = folder / 'calls'
         calls.touch()
@@ -739,7 +748,7 @@ class QuestionTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.folder = Path(directory.name)
+        self.folder = Path(directory.name).resolve()
         self.calls = self.folder / 'calls'
         self.entry = self.folder / LOGIN_ENTRY
         (self.folder / 'hermes.py').write_text(FAKE_GATEWAY_HERMES, encoding='utf-8')
@@ -985,6 +994,11 @@ class ExclusiveServer(http.server.HTTPServer):
     port, so it stays off there; macOS and Linux need it to take a port back from its closed connections."""
     allow_reuse_address = os.name != 'nt'
 
+    def server_bind(self):
+        # Not HTTPServer's, whose reverse lookup of the address can take a minute on macOS.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[0], self.server_address[1]
+
 
 @contextlib.contextmanager
 def serving(port: int, handler: type[http.server.BaseHTTPRequestHandler]):
@@ -1003,7 +1017,7 @@ class DashboardAtLoginTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.folder = Path(directory.name)
+        self.folder = Path(directory.name).resolve()
         self.port = free_port()
         self.chat_url = CHAT_URL.format(port=self.port)
         self.command = DASHBOARD_COMMAND.format(port=self.port)
@@ -1225,7 +1239,7 @@ class BootstrapTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.folder = Path(directory.name)
+        self.folder = Path(directory.name).resolve()
         self.tools = self.folder / 'bin'
         self.tools.mkdir()
         self.git_calls = self.folder / 'git-calls'
@@ -1512,7 +1526,7 @@ class AccountTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.folder = Path(directory.name)
+        self.folder = Path(directory.name).resolve()
         self.hermes_calls, self.claude_calls = self.folder / 'hermes-calls', self.folder / 'claude-calls'
         self.settings = self.folder / 'settings.json'
         (self.folder / 'hermes.py').write_text(FAKE_ACCOUNT_HERMES)
@@ -1756,7 +1770,7 @@ class UninstallTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.folder = Path(directory.name)
+        self.folder = Path(directory.name).resolve()
         self.machine = self.folder / 'machine'
         self.tools = self.folder / 'bin'
         self.tools.mkdir()

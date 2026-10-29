@@ -29,10 +29,12 @@ function Invoke-Checked([string]$Command) {
 }
 
 if (-not $Python) { $Python = 'python' }
-# Git for Windows's own bash and perl, ahead of System32, whose bash.exe starts WSL.
+# Git for Windows's own bash and perl, ahead of System32, whose bash.exe starts WSL. Its usr\bin, not its bin:
+# bin\bash.exe is a wrapper that puts Git's mingw64\bin and usr\bin ahead of everything on PATH, so the real git
+# and claude would beat the fakes the tests put first.
 $gitExecutable = (Get-Command git -ErrorAction Stop).Source
 $gitRoot = Split-Path -Parent (Split-Path -Parent $gitExecutable)
-$env:PATH = (Join-Path $gitRoot 'bin') + ';' + (Join-Path $gitRoot 'usr\bin') + ';' + $env:PATH
+$env:PATH = (Join-Path $gitRoot 'usr\bin') + ';' + $env:PATH
 
 Write-Step "Virtual environment in $Work\venv"
 New-Item -ItemType Directory -Force $Work | Out-Null

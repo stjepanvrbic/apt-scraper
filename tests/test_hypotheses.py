@@ -369,7 +369,7 @@ class CopyTests(StoreTestCase):
         connect = sqlite3.connect
         with mock.patch('store_copy.sqlite3.connect', wraps=connect) as opened:
             copy_database(self.store.path, destination)
-        self.assertEqual(opened.call_args_list, [mock.call(destination)])
+        self.assertEqual(opened.call_args_list, [mock.call(destination.resolve())])
         self.assertEqual(hashlib.sha256(self.store.path.read_bytes()).hexdigest(), before)
         with closing(sqlite3.connect(destination)) as copied:
             self.assertEqual(copied.execute('SELECT value FROM copy_marker').fetchone()[0], 'committed')

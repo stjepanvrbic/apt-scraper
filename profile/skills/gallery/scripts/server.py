@@ -3,6 +3,7 @@ import mimetypes
 import os
 import secrets
 import socket
+import socketserver
 import threading
 import sqlite3
 import time
@@ -27,6 +28,14 @@ def comparison(store):
     if pairs:
         question = {'listings': [store.listing(identifier, visible_only=True) for identifier in pairs[0]['listings']]}
     return {'question': question, 'answered': len(store.pairwise_answers())}
+
+
+class GalleryServer(ThreadingHTTPServer):
+    def server_bind(self):
+        # Not HTTPServer's server_bind, whose reverse lookup of the address through socket.getfqdn can take a
+        # minute on macOS and leaves the gallery unreachable while the launcher waits for it.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[0], self.server_address[1]
 
 
 def make_server(store, port=8765, chat_runner=None, install_id='development'):
@@ -226,6 +235,6 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
             if set(body) != fields:
                 raise ValueError('Request fields do not match this action.')
 
-    server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+    server = GalleryServer(('127.0.0.1', port), Handler)
     server.access_token = access_token
     return server

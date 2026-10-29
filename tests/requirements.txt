@@ -9,3 +9,6 @@ onnxruntime==1.31.1
 # Packages of Hermes's own environment that the profile's scripts import: psutil and websockets.
 psutil==7.1.3
 websockets==15.0.1
+# Windows has no time zone database of its own; Hermes's environment pins tzdata there (its pyproject.toml), and
+# the interview's time zone check needs it.
+tzdata==2025.3; sys_platform == 'win32'

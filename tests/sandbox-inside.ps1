@@ -43,7 +43,20 @@ try {
     Write-Log 'Unpacking Git for Windows'
     # PortableGit is a self-extracting 7-Zip archive: -o names the folder, -y answers its one question.
     $git = Join-Path $tools 'git'
-    Start-Process -Wait -FilePath (Join-Path $toolchain 'PortableGit-2.56.0.4-64-bit.7z.exe') -ArgumentList "-o`"$git`"", '-y'
+    $extractor = Start-Process -Wait -PassThru -FilePath (Join-Path $toolchain 'PortableGit-2.56.0.4-64-bit.7z.exe') -ArgumentList "-o`"$git`"", '-y'
+    if ($extractor.ExitCode -ne 0) { throw "Unpacking Git for Windows failed with exit code $($extractor.ExitCode)" }
+    if (-not (Test-Path (Join-Path $git 'usr\bin\bash.exe'))) { throw "Unpacking Git for Windows left no usr\bin\bash.exe in $git" }
+
+    # The sandbox's Windows lacks the VBScript engine, which Windows 11 ships as an optional capability and the
+    # dashboard's login entry and Start menu shortcut run through wscript.exe. The tests of those entries say so when
+    # it is still missing after this.
+    Write-Log 'Adding the VBScript capability'
+    try {
+        $capability = Add-WindowsCapability -Online -Name 'VBSCRIPT~~~~'
+        Write-Log "VBScript: $((Get-WindowsCapability -Online -Name 'VBSCRIPT~~~~').State)$(if ($capability.RestartNeeded) { ', restart needed' })"
+    } catch {
+        Write-Log "VBScript could not be added: $_"
+    }
 
     Write-Log 'Unpacking Node 24'
     Expand-Archive -Path (Join-Path $toolchain 'node-v24.22.2-win-x64.zip') -DestinationPath $tools -Force
@@ -70,6 +83,9 @@ try {
 } catch {
     Write-Log "Failed: $_"
 } finally {
-    Set-Content -Encoding ascii (Join-Path $out 'exit-code') $code
+    # Written whole, then renamed: the host takes the file's existence as the result, and must never read it empty.
+    $exitFile = Join-Path $out 'exit-code'
+    [IO.File]::WriteAllText("$exitFile.partial", [string]$code, [Text.Encoding]::ASCII)
+    [IO.File]::Move("$exitFile.partial", $exitFile)
     if (-not ($options -and $options.keepOpen)) { shutdown /s /t 5 }
 }
