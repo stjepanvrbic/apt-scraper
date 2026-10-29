@@ -1,7 +1,7 @@
 ---
 title: The repository is the Hermes profile, and the install is a few Hermes commands
 type: Chore
-state: In Progress
+state: Done
 priority: 1
 assignee: agent
 milestone:
@@ -20,8 +20,8 @@ apt-scraper is a Hermes profile and nothing more. The user installs it with one 
 - [x] `install.sh` and `install.ps1` are each a short list of commands with no logic of their own: Hermes's installer, Claude Code's installer and login, `hermes profile install`, the subscription plugin, the Google Workspace skill, the computer-use driver, the scheduled jobs and the gateway service.
 - [x] The bootstraps, the uninstallers, the dashboard launchers (`dashboard.vbs`, the LaunchAgent and the app bundle), the Start menu and login entries, their tests and the Windows Sandbox scripts are deleted. Uninstall is `hermes profile delete` plus two folders, documented in README.
 - [x] Every test runs on every platform; `tests/skips.py` fails any skip.
-- [ ] CI is green on Linux, macOS and Windows.
-- [ ] CI also runs the install line itself on a fresh machine of each platform, with the checkout as the profile source, and checks what it left behind. The Claude login and the macOS permission dialogs are skipped without a terminal, and the install says what to run.
+- [x] CI is green on Linux, macOS and Windows.
+- [x] CI also runs the install line itself on a fresh machine of each platform, with the checkout as the profile source, and checks what it left behind. The Claude login and the macOS permission dialogs are skipped without a terminal, and the install says what to run.
 - [x] README, the spec, the agent instructions and the skills say the new install, open and uninstall, and nothing mentions the deleted machinery.
 
 ## Spec
@@ -41,3 +41,5 @@ docs/spec.md, Installation and setup.
 - The cron jobs are resumed by the install line, not by the agent, because `hermes profile install` ships them paused and the agent should not be the one deciding to start them.
 
 ## Result
+
+Pull request #59. The first real install runs on fresh machines found what no test had: Hermes refuses a distribution with a symlink (CLAUDE.md was one, now a file importing AGENTS.md); Claude Code's Windows installer leaves its directory off PATH, so the install adds it to the user's PATH through the registry; and, found by CodeRabbit, nothing built the search and encoder environments once the installers were gone, so each job's first run builds its own. On every platform the install leaves the profile, its five jobs active, the plugin, the skill, the driver and the gateway service, as the `install` jobs check on every push. The net change against main is about 4,000 lines removed and 400 added.
