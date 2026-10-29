@@ -6,7 +6,12 @@ param([string]$Source = 'github.com/stjepanvrbic/apt-scraper')
 $ErrorActionPreference = 'Stop'
 $name = 'apt-scraper'
 function Update-Path {
-    $env:PATH = [Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('PATH', 'User') + ';' + $env:PATH
+    # Where Hermes's and Claude Code's installers put their commands. Claude Code's leaves adding its directory to
+    # PATH to the user, so this adds it to the user's PATH once, for later terminals, and to this session's.
+    $claudeBin = "$env:USERPROFILE\.local\bin"
+    $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+    if (($userPath -split ';') -notcontains $claudeBin) { [Environment]::SetEnvironmentVariable('PATH', "$claudeBin;$userPath", 'User') }
+    $env:PATH = "$env:LOCALAPPDATA\hermes\bin;$claudeBin;" + [Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('PATH', 'User') + ';' + $env:PATH
 }
 function Invoke-Step([string[]]$Command) {
     & $Command[0] $Command[1..($Command.Length - 1)]

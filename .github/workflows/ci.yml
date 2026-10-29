@@ -2,9 +2,12 @@
 # real install line, install.sh or install.ps1, on another fresh machine of each, with the checkout as the profile.
 name: CI
 
-# Every push, which covers every pull request's branch too; a pull_request trigger as well would run each push twice.
+# Every push, which covers every pull request's branch in this repository, and pull requests from forks, whose
+# pushes this repository never sees. The jobs skip a pull_request event from this repository's own branches, which
+# the push already ran.
 on:
   push:
+  pull_request:
   workflow_dispatch:
 
 # The checks only read the repository.
@@ -18,6 +21,7 @@ concurrency:
 jobs:
   checks:
     name: ${{ matrix.os }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     strategy:
       fail-fast: false
       matrix:
@@ -57,6 +61,7 @@ jobs:
 
   install:
     name: install on ${{ matrix.os }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     strategy:
       fail-fast: false
       matrix:
