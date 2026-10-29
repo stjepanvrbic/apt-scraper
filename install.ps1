@@ -8,9 +8,14 @@ $name = 'apt-scraper'
 function Update-Path {
     # Where Hermes's and Claude Code's installers put their commands. Claude Code's leaves adding its directory to
     # PATH to the user, so this adds it to the user's PATH once, for later terminals, and to this session's.
+    # The user's PATH is read and written through the registry, unexpanded, so entries such as %JAVA_HOME%\bin stay as they are.
     $claudeBin = "$env:USERPROFILE\.local\bin"
-    $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
-    if (($userPath -split ';') -notcontains $claudeBin) { [Environment]::SetEnvironmentVariable('PATH', "$claudeBin;$userPath", 'User') }
+    $environment = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+    $userPath = [string]$environment.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    if (($userPath -split ';') -notcontains $claudeBin) {
+        $environment.SetValue('Path', "$claudeBin;$userPath".TrimEnd(';'), [Microsoft.Win32.RegistryValueKind]::ExpandString)
+    }
+    $environment.Close()
     $env:PATH = "$env:LOCALAPPDATA\hermes\bin;$claudeBin;" + [Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('PATH', 'User') + ';' + $env:PATH
 }
 function Invoke-Step([string[]]$Command) {
