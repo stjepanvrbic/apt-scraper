@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import cast
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/ranking/scripts'))
@@ -18,27 +18,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/ranking/scr
 from test_rerank import StoreTestCase, fill  # noqa: E402
 from test_scoring import GARDEN, entry, garden_neighborhood, inputs, neighborhood, position, record_of  # noqa: E402
 from scoring import DEFAULT_HYPERPARAMETERS, Model, Question, RankingInputs, fit_model, questions  # noqa: E402
-from measurement import HistoryInputs, ReplayEvent, agreement, bootstrap, garden, pair_accuracy, replay, simulate, store_report, wilson  # noqa: E402
+from measurement import (PAIR_TIE_POLICY, HistoryInputs, ReplayEvent, Trajectory, agreement, bootstrap, garden, pair_accuracy, replay,  # noqa: E402
+                         simulate, store_report, wilson)
 from extraction_retest import RetestTask, collect, prepare  # noqa: E402
 from test_feature_record import extraction  # noqa: E402
-from ranking_experiments import write_report  # noqa: E402
+from ranking_experiments import FrozenFeedback, ReportWithSimulation, SavedReport, SavedSimulation, write_report  # noqa: E402
 from rerank import rerank  # noqa: E402
 from learning import decode  # noqa: E402
 from schema import MIGRATIONS, plain_learning_events  # noqa: E402
 from rescore_ranking_feedback import validate_saved_curves  # noqa: E402
 from shapes import loads  # noqa: E402
 from store import ListingStore, select  # noqa: E402
-
-
-class SavedSimulation(TypedDict):
-    """The simulation of a written report, as far as the test reads it: where write_report put the frozen feedback
-    and its digest."""
-    feedback_file: str
-    feedback_sha256: str
-
-
-class SavedReport(TypedDict):
-    simulation: SavedSimulation
 
 
 def required[T](value: T | None) -> T:
@@ -104,8 +94,11 @@ class MeasurementTests(unittest.TestCase):
         self.assertEqual(expensive['displayed_median_rank'], cheap['displayed_median_rank'])
 
     def test_rescoring_rejects_truncated_or_nonfinite_saved_curves(self) -> None:
-        source = {'runs': 1, 'curves': [{'labels': 0}, {'labels': 5}], 'run_curves': [[0.5, 0.6]]}
-        trajectories = [{'pairs': [('a', 'b')] * 5}]
+        source: SavedSimulation = {'runs': 1, 'seed': 0, 'labels': 5, 'curves': [{'labels': 0, 'accuracy': 0.5, 'interval': None},
+                                                                            {'labels': 5, 'accuracy': 0.6, 'interval': None}],
+                                   'run_curves': [[0.5, 0.6]], 'tie_policy': PAIR_TIE_POLICY, 'feedback_file': 'frozen.feedback.json.gz',
+                                   'feedback_sha256': ''}
+        trajectories: list[Trajectory] = [{'pairs': [('a', 'b')] * 5, 'held_pairs': [], 'taste': {}}]
         self.assertEqual(validate_saved_curves(source, trajectories), [0, 5])
         truncated: list[list[list[float]]] = [[], [[]], [[0.5]], [[0.5, float('nan')]]]
         for curves in truncated:
@@ -268,8 +261,9 @@ class JournalTests(StoreTestCase):
         self.assertIsNotNone(result['median_interval'])
 
     def test_report_preserves_frozen_feedback_in_a_checksummed_artifact(self) -> None:
-        feedback = {'inputs': 'snapshot', 'trajectories': [{'pairs': [['a', 'b']]}]}
-        report = {'simulation': {**feedback, 'curves': []}}
+        feedback: FrozenFeedback = {'inputs': 'snapshot', 'trajectories': [{'pairs': [], 'held_pairs': [['a', 'b']], 'taste': {}}]}
+        report: ReportWithSimulation = {'simulation': {**feedback, 'runs': 1, 'seed': 0, 'labels': 0, 'curves': [], 'run_curves': [],
+                                                       'tie_policy': PAIR_TIE_POLICY}}
         output = self.home / 'report.json'
         write_report(report, output)
         saved = cast(SavedReport, loads(output.read_text()))['simulation']

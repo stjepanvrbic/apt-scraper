@@ -409,6 +409,8 @@ class HypothesisTests(StoreTestCase):
         result = run(self.home / 'survival')
         survivors = [item for item in result['assessments'] if item['survives']]
         self.assertEqual([item['phrase'] for item in survivors], ['original wood trim'])
+        if 'rank_summary' not in survivors[0]:
+            raise AssertionError('The survivor has no rank summary.')
         self.assertGreater(survivors[0]['rank_summary']['mean_improvement'], 0)
         self.assertEqual(result['requested_passes'], result['reranks_with_new_labels'])
         store = type(self.store)(self.home / 'survival' / 'listings.sqlite3')
