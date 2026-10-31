@@ -55,6 +55,11 @@ Typing the code changed a few edge behaviors, each listed here because the suite
 - Malformed output from a connector (google_api, imsg, the gateway) or from Hermes's session snapshot raises a `RuntimeError` naming the connector and the missing key, where it raised a `KeyError`, `TypeError` or `AttributeError`; the exit paths are the same.
 - The encoder build tools and the ranking experiments raise `ValueError` or `SystemExit` with a message where a malformed lock entry, an empty sweep split, a missing option or a simulation with no runs used to fail with a `KeyError`, `TypeError` or an unbound name. `variants()` lost the models-directory parameter it never read.
 - `validate_listing` builds the listing in a fixed field order instead of set order; the content and its fingerprint are unchanged.
+- A follow-up email whose first message has no thread id or whose contact has no subject raises a `ValueError` saying so, where `'Re: ' + None` raised a `TypeError` or a `None` thread id reached the Gmail command line; the store records both for every first email, so no follow-up reaches the branch.
+- `remove_event` raises a `ValueError` naming the viewing when it has no calendar event id, where `write_calendar('delete', None)` would have sent `None` to the calendar command; the job calls it only for viewings whose event is recorded.
+- The replay's displayed-rank statistics skip a held-out action whose `displayed_rank` is `None`, where `statistics` raised a `TypeError` on the first `None`; an action without a displayed rank was never shown, so it has no displayed rank to average.
+- `review_outcome` reverts the moves when either held-out mean is `None`, where it tested only the mean before the moves; both means are over the same favorites, so one is `None` exactly when the other is, and the branch exists for the type.
+- The garden check's peer filter binds the peer's price to a name before comparing it; the comparison is the same.
 
 ## Result
 
