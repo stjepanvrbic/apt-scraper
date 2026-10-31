@@ -158,7 +158,7 @@ def text_vectors(model: Model) -> tuple[list[Phrasing], Vector]:
 
 def unit(values: ArrayLike) -> Vector:
     values = np.asarray(values, dtype=np.float32)
-    norms = cast(Vector, np.linalg.norm(values, axis=-1, keepdims=True))
+    norms = np.linalg.norm(values, axis=-1, keepdims=True)
     return np.divide(values, norms, out=np.zeros_like(values), where=norms > 0)
 
 
@@ -350,7 +350,7 @@ def class_scores(vectors: Vector, texts: Vector, phrasings: Sequence[Phrasing], 
     columns: list[Vector] = []
     for name in names:
         rows = [index for index, (entry_kind, entry_name, _) in enumerate(phrasings) if entry_kind == kind and entry_name == name]
-        columns.append(vectors @ unit(cast(Vector, texts[rows].mean(axis=0))) if pooling == 'mean'
+        columns.append(vectors @ unit(texts[rows].mean(axis=0)) if pooling == 'mean'
                        else cast(Vector, (vectors @ texts[rows].T).max(axis=1)))
     return names, np.stack(columns, axis=1) if columns else np.zeros((len(vectors), 0), dtype=np.float32)
 
@@ -372,7 +372,7 @@ def derive(complete: Sequence[tuple[Target, Sequence[tuple[str, str]]]], vectors
     matrix = unit(np.stack([vectors_by_content[content] for _, _, content in photos]))
     room_names, room_scores = class_scores(matrix, texts, phrasings, 'room', model['pooling'])
     predicted = [room_names[index] for index in cast(Iterable[np.intp], room_scores.argmax(axis=1))]
-    probe_matrix = matrix - cast(Vector, matrix.mean(axis=0)) if model['probe_rule'] == 'centered' else matrix
+    probe_matrix = matrix - matrix.mean(axis=0) if model['probe_rule'] == 'centered' else matrix
     probe_names, probe_scores = class_scores(unit(probe_matrix), texts, phrasings, 'probe', model['pooling'])
     effective: list[str] = []
     for (target, url, _), prediction in zip(photos, predicted):
@@ -391,7 +391,7 @@ def derive(complete: Sequence[tuple[Target, Sequence[tuple[str, str]]]], vectors
         indices = [index for index, value in enumerate(effective) if value == room]
         if not indices:
             continue
-        centered = unit(matrix[indices] - cast(Vector, matrix[indices].mean(axis=0)))
+        centered = unit(matrix[indices] - matrix[indices].mean(axis=0))
         owners = [photos[index][0]['id'] for index in indices]
         order = sorted(range(len(indices)), key=lambda position: owners[position])
         centered = centered[order]
@@ -444,7 +444,7 @@ def check(arguments: Arguments) -> None:
     vector = cast(Vector, tower.embed([image])[0])
     if abs(float(np.linalg.norm(vector)) - 1) > 1e-4:
         raise ValueError('The image tower did not return a usable embedding.')
-    print(json.dumps({'model': model['name'], 'dimensions': int(vector.shape[0])}))
+    print(json.dumps({'model': model['name'], 'dimensions': len(vector)}))
 
 
 def main(argv: Sequence[str] | None = None) -> int:

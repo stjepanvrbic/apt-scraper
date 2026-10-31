@@ -114,7 +114,7 @@ def text_vectors(directory: Path, graph: str) -> Vector:
         raise ValueError('A phrasing exceeds the SigLIP text context; shorten it instead of truncating.')
     session = ort.InferenceSession(str(directory / graph), providers=['CPUExecutionProvider'])
     vectors = session.run(['pooler_output'], {'input_ids': ids.astype(np.int64)})[0].astype(np.float32)
-    return vectors / cast('Vector', np.linalg.norm(vectors, axis=1, keepdims=True))
+    return vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
 
 
 def quality(report: VariantReport) -> Quality:
@@ -154,7 +154,7 @@ def main(argv: Sequence[str]) -> None:
     np.save(output / 'probes.npy', vectors, allow_pickle=False)
     preprocessing = spec['preprocessing']
     [text_graph] = [pinned(item) for item in lock['files'] if item['filename'] == spec['text']]
-    probes: ProbeVectors = {'file': 'probes.npy', 'sha256': sha256(output / 'probes.npy'), 'rows': int(vectors.shape[0]),
+    probes: ProbeVectors = {'file': 'probes.npy', 'sha256': sha256(output / 'probes.npy'), 'rows': len(vectors),
                             'text_graph': {'filename': text_graph['filename'], 'sha256': text_graph['sha256']}}
     gate = quality(report)
     identity = hashlib.sha256(json.dumps({'files': [item['sha256'] for item in files], 'preprocessing': preprocessing,
@@ -164,7 +164,7 @@ def main(argv: Sequence[str]) -> None:
         'name': variant, 'identity': identity,
         'source': {'repository': lock['repository'], 'revision': lock['revision'], 'weights': WEIGHTS[spec['model']],
                    'license': 'Apache-2.0'},
-        'graph': graph, 'output': 'pooler_output', 'dimensions': int(vectors.shape[1]), 'preprocessing': preprocessing,
+        'graph': graph, 'output': 'pooler_output', 'dimensions': np.size(vectors, 1), 'preprocessing': preprocessing,
         'pooling': report['choice']['pooling'], 'probe_rule': gate['probe_rule'], 'files': files, 'probes': probes,
         'quality': gate, 'resources': report.get('resources'),
     }

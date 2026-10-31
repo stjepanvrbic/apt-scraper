@@ -390,7 +390,7 @@ def images(args: Arguments) -> None:
 def unit(values: ArrayLike) -> Vector:
     import numpy as np
     values = np.asarray(values, dtype=np.float32)
-    return values / cast('Vector', np.linalg.norm(values, axis=-1, keepdims=True))
+    return values / np.linalg.norm(values, axis=-1, keepdims=True)
 
 
 def class_scores(vectors: Vector, texts: Vector, entries: Sequence[Phrasing], kind: str, pooling: Pooling) -> tuple[list[str], Vector]:
@@ -401,7 +401,7 @@ def class_scores(vectors: Vector, texts: Vector, entries: Sequence[Phrasing], ki
     for name in names:
         rows = [index for index, (entry_kind, entry_name, _) in enumerate(entries) if entry_kind == kind and entry_name == name]
         if pooling == 'mean':
-            columns.append(unit(vectors) @ unit(cast('Vector', unit(texts[rows]).mean(axis=0))))
+            columns.append(unit(vectors) @ unit(unit(texts[rows]).mean(axis=0)))
         else:
             columns.append(cast('Vector', (unit(vectors) @ unit(texts[rows]).T).max(axis=1)))
     return names, np.stack(columns, axis=1)
@@ -477,7 +477,7 @@ def probe_scores(photos: Sequence[SweepPhoto], vectors: Vector, texts: Vector, e
         vectors = unit(vectors)
         for source in {photo['source'] for photo in photos}:
             rows = [index for index, photo in enumerate(photos) if photo['source'] == source]
-            vectors[rows] = vectors[rows] - cast('Vector', vectors[rows].mean(axis=0))
+            vectors[rows] = vectors[rows] - vectors[rows].mean(axis=0)
     names, scores = class_scores(vectors, texts, entries, 'probe', pooling)
     if rule == 'contrast':
         contrast_names, contrast = class_scores(vectors, texts, entries, 'contrast', 'max')
@@ -622,10 +622,10 @@ def compare(args: Arguments) -> None:
         'room_agreement_reference': sum(full_predicted[p] == photos[sample[p]]['room'] for p in labeled) / len(labeled),
         'room_agreement_variant': sum(lower_predicted[p] == photos[sample[p]]['room'] for p in labeled) / len(labeled),
         'labeled_photos': len(labeled),
-        'cosine_to_reference': {'mean': float(cast(np.float32, cosines.mean())), 'min': float(cast(np.float32, cosines.min()))},
+        'cosine_to_reference': {'mean': float(cosines.mean()), 'min': float(cosines.min())},
         'probe_score_shift': {name: float(cast(np.float32, np.abs(full_probes[:, column] - lower_probes[:, column]).max()))
                               for column, name in enumerate(probe_names)},
-        'probe_score_spread': {name: float(cast(np.float32, full_probes[:, column].std())) for column, name in enumerate(probe_names)}}
+        'probe_score_spread': {name: float(full_probes[:, column].std()) for column, name in enumerate(probe_names)}}
     print(json.dumps(result, allow_nan=False))
 
 

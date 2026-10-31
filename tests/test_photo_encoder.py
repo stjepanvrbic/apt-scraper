@@ -121,7 +121,7 @@ class DeriveTests(unittest.TestCase):
         values = {(first, second): value for room, first, second, value in similarities if room == 'kitchen'}
         self.assertEqual(set(values), {(a, b) for a in 'abc' for b in 'abc' if a != b})
         matrix = encoder.unit(np.stack([vectors[name] for name in ('c1', 'c2', 'c3', 'c4')]))
-        centered = encoder.unit(matrix - cast(encoder.Vector, matrix.mean(axis=0)))
+        centered = encoder.unit(matrix - matrix.mean(axis=0))
         first, second, third = (cast(encoder.Vector, centered[index]) for index in (0, 1, 2))
         self.assertAlmostEqual(values[('a', 'b')], max(float(first @ third), float(second @ third)), places=5)
         self.assertAlmostEqual(values[('a', 'b')], values[('b', 'a')], places=6)
