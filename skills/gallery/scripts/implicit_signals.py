@@ -2,20 +2,8 @@
 
 from collections import defaultdict
 from statistics import median
-from typing import Literal, TypedDict
 
-from scoring import HeldOutRank, HeldOutSummary, Label, Model, RankingInputs, RankingSummary, fit_model, in_fit, labeled, leave_one_out, summary_of, title
-
-
-class Diagnostic(TypedDict):
-    """The rerank summary's implicit_signals entry: the held-out check with the weak labels, against the ordinary one."""
-    policy: Literal['completed_visible_dwell']
-    weak_labels: int
-    held_out: list[HeldOutRank]
-    held_out_median: float | None
-    held_out_mean: float | None
-    mean_rank_improvement: float | None
-    improves: bool | None
+from scoring import Diagnostic, HeldOutRank, HeldOutSummary, Label, Model, RankingInputs, RankingSummary, fit_model, in_fit, labeled, leave_one_out, summary_of, title
 
 
 def weak_labels(inputs: RankingInputs) -> dict[str, Label]:

@@ -194,6 +194,17 @@ class HeldOutSummary(TypedDict):
     mean: float | None
 
 
+class Diagnostic(TypedDict):
+    """The rerank summary's implicit_signals entry: the held-out check with the weak labels, against the ordinary one."""
+    policy: Literal['completed_visible_dwell']
+    weak_labels: int
+    held_out: list[HeldOutRank]
+    held_out_median: float | None
+    held_out_mean: float | None
+    mean_rank_improvement: float | None
+    improves: bool | None
+
+
 class RankingSummary(TypedDict):
     ranked: int
     waiting_for_features: int
@@ -208,6 +219,8 @@ class RankingSummary(TypedDict):
     unlabeled_weight: float
     weights: dict[str, float]
     findings: list[str]
+    implicit_signals: NotRequired[Diagnostic]
+    """The diagnostic rerank.rerank adds (implicit_signals.diagnostic)."""
 
 
 class RankingResult(TypedDict):

@@ -1,21 +1,25 @@
 import hashlib
 import json
+import sqlite3
+from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TypedDict, cast
 
 from code_features import store_all_code_features
-from scoring import compose_reason, feature_reason
+from scoring import Explanation, FeatureReason, Reason, ReasonText, compose_reason, feature_reason
+from shapes import Listing, Place
 
 LISTING_ID = r'[A-Za-z0-9:._-]{1,200}'
 FINGERPRINT = r'[a-f0-9]{64}'
 
 
-def content_fingerprint(listing):
+def content_fingerprint(listing: Listing) -> str:
     content = {key: value for key, value in listing.items() if key not in ('id', 'first_seen', 'status')}
     return hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
 
-def initial_schema(connection):
+def initial_schema(connection: sqlite3.Connection) -> None:
     statements = [
         "CREATE TABLE listings (id TEXT PRIMARY KEY, data TEXT NOT NULL, status TEXT NOT NULL, first_seen TEXT NOT NULL, fingerprint TEXT NOT NULL, matches_criteria INTEGER NOT NULL DEFAULT 1)",
         'CREATE TABLE ranking (listing_id TEXT PRIMARY KEY REFERENCES listings(id), fingerprint TEXT NOT NULL, features TEXT, rank INTEGER, reason TEXT)',
@@ -39,10 +43,10 @@ def initial_schema(connection):
         'INSERT INTO chat_session VALUES (1, NULL)',
     ]
     for statement in statements:
-        connection.execute(statement)
+        _ = connection.execute(statement)
 
 
-def contact_workflow(connection):
+def contact_workflow(connection: sqlite3.Connection) -> None:
     statements = [
         'ALTER TABLE contacts ADD COLUMN handled_through INTEGER NOT NULL DEFAULT 0',
         'ALTER TABLE contacts ADD COLUMN subject TEXT',
@@ -50,26 +54,26 @@ def contact_workflow(connection):
         'CREATE INDEX questions_open ON questions(listing_id) WHERE answered_at IS NULL',
     ]
     for statement in statements:
-        connection.execute(statement)
+        _ = connection.execute(statement)
 
 
-def code_derived_features(connection):
-    connection.execute("""CREATE TABLE code_features (listing_id TEXT PRIMARY KEY REFERENCES listings(id), fingerprint TEXT NOT NULL,
+def code_derived_features(connection: sqlite3.Connection) -> None:
+    _ = connection.execute("""CREATE TABLE code_features (listing_id TEXT PRIMARY KEY REFERENCES listings(id), fingerprint TEXT NOT NULL,
         monthly_price REAL, currency TEXT, size_sqft REAL, price_per_sqft REAL, bedrooms INTEGER, bathrooms REAL, unit_label TEXT,
         unit_floor INTEGER, unit_level TEXT, photo_count INTEGER NOT NULL, latitude REAL, longitude REAL)""")
 
 
-def listing_features(connection):
+def listing_features(connection: sqlite3.Connection) -> None:
     statements = [
         'CREATE TABLE feature_records (listing_id TEXT PRIMARY KEY REFERENCES listings(id), fingerprint TEXT NOT NULL, extraction TEXT NOT NULL, extracted_at TEXT NOT NULL, preferences TEXT NOT NULL)',
         'CREATE TABLE tags (tag TEXT PRIMARY KEY, added_at TEXT NOT NULL)',
         'CREATE TABLE model_reads (read TEXT PRIMARY KEY, attempts INTEGER NOT NULL)',
     ]
     for statement in statements:
-        connection.execute(statement)
+        _ = connection.execute(statement)
 
 
-def scoring_model(connection):
+def scoring_model(connection: sqlite3.Connection) -> None:
     statements = [
         'ALTER TABLE ranking ADD COLUMN explanation TEXT',
         'ALTER TABLE ranking ADD COLUMN exploration INTEGER NOT NULL DEFAULT 0',
@@ -79,16 +83,16 @@ def scoring_model(connection):
         'CREATE TABLE pairwise_answers (id INTEGER PRIMARY KEY, chosen TEXT NOT NULL REFERENCES listings(id), other TEXT NOT NULL REFERENCES listings(id), answered_at TEXT NOT NULL)',
     ]
     for statement in statements:
-        connection.execute(statement)
+        _ = connection.execute(statement)
 
 
-def pairwise_skips(connection):
-    connection.execute('''CREATE TABLE pairwise_skips (
+def pairwise_skips(connection: sqlite3.Connection) -> None:
+    _ = connection.execute('''CREATE TABLE pairwise_skips (
         first TEXT NOT NULL REFERENCES listings(id), second TEXT NOT NULL REFERENCES listings(id),
         remaining INTEGER NOT NULL CHECK (remaining > 0), PRIMARY KEY (first, second), CHECK (first < second))''')
 
 
-def distances(connection):
+def distances(connection: sqlite3.Connection) -> None:
     """Places become a name and an address, and the code features of every listing are computed again, now with its
     distances. Code features are first computed here, so a store from before them gets them with every column."""
     statements = [
@@ -100,39 +104,39 @@ def distances(connection):
         'CREATE TABLE stations (id TEXT PRIMARY KEY, name TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL)',
     ]
     for statement in statements:
-        connection.execute(statement)
-    row = connection.execute("SELECT value FROM settings WHERE name = 'places'").fetchone()
+        _ = connection.execute(statement)
+    row = cast(tuple[str] | None, connection.execute("SELECT value FROM settings WHERE name = 'places'").fetchone())
     if row:
-        places = [{'name': place['name'], 'address': place['address']} for place in json.loads(row[0])]
-        connection.execute("UPDATE settings SET value = ? WHERE name = 'places'", (json.dumps(places),))
+        places: list[Place] = [{'name': place['name'], 'address': place['address']} for place in cast(list[Place], json.loads(row[0]))]
+        _ = connection.execute("UPDATE settings SET value = ? WHERE name = 'places'", (json.dumps(places),))
     store_all_code_features(connection)
 
 
-def review_pass(connection):
-    connection.execute('CREATE TABLE reviews (rerank_id INTEGER PRIMARY KEY REFERENCES reranks(id), state TEXT NOT NULL, '
-                       'attempts INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, snapshot TEXT, result TEXT)')
+def review_pass(connection: sqlite3.Connection) -> None:
+    _ = connection.execute('CREATE TABLE reviews (rerank_id INTEGER PRIMARY KEY REFERENCES reranks(id), state TEXT NOT NULL, '
+                           + 'attempts INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, snapshot TEXT, result TEXT)')
 
 
-def implicit_signals(connection):
-    connection.execute('''CREATE TABLE implicit_signals (
+def implicit_signals(connection: sqlite3.Connection) -> None:
+    _ = connection.execute('''CREATE TABLE implicit_signals (
         event_id TEXT PRIMARY KEY, visit_id TEXT NOT NULL, listing_id TEXT NOT NULL REFERENCES listings(id),
         fingerprint TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('open', 'dwell', 'photo', 'close')),
         occurred_at TEXT NOT NULL, duration_ms INTEGER, photo_url TEXT,
         CHECK ((kind = 'dwell' AND duration_ms >= 0 AND photo_url IS NULL)
             OR (kind = 'photo' AND photo_url IS NOT NULL AND duration_ms IS NULL)
             OR (kind IN ('open', 'close') AND duration_ms IS NULL AND photo_url IS NULL)))''')
-    connection.execute('CREATE INDEX implicit_signals_listing_visit ON implicit_signals(listing_id, fingerprint, visit_id)')
+    _ = connection.execute('CREATE INDEX implicit_signals_listing_visit ON implicit_signals(listing_id, fingerprint, visit_id)')
 
 
-def notes_session_per_database(connection):
+def notes_session_per_database(connection: sqlite3.Connection) -> None:
     """A session in chat_session may be one that other databases share, bound to a working folder that no longer exists.
     Each database starts a Hermes session of its own in notes_session and keeps its messages. A gallery server started
     before the migration still writes the shared session to chat_session, so that table stays and nothing reads it.
     A reply still running belongs to the shared session, so the gallery cannot collect it and closes it with an error
     the user can act on."""
-    connection.execute('CREATE TABLE notes_session (id INTEGER PRIMARY KEY CHECK (id = 1), session_id TEXT)')
-    connection.execute('INSERT INTO notes_session VALUES (1, NULL)')
-    connection.execute("""UPDATE chat_messages SET status = 'error', prompt = NULL,
+    _ = connection.execute('CREATE TABLE notes_session (id INTEGER PRIMARY KEY CHECK (id = 1), session_id TEXT)')
+    _ = connection.execute('INSERT INTO notes_session VALUES (1, NULL)')
+    _ = connection.execute("""UPDATE chat_messages SET status = 'error', prompt = NULL,
         error = 'The gallery was updated while this reply was running, and the reply could not be collected. Send the message again if you still need it.'
         WHERE status = 'running'""")
 
@@ -141,13 +145,13 @@ EARLIER_EXPLORATION_MARK = 'Shown to learn your taste. '
 EARLIER_CODE_ONLY_MARK = 'Ranked from code features only, because extraction failed 3 times. '
 
 
-def earlier_marks(text):
+def earlier_marks(text: str) -> tuple[bool, str]:
     """Whether a reason stored as text carried the code-only mark its rerank wrote, and the text without its marks."""
     text = text.removeprefix(EARLIER_EXPLORATION_MARK)
     return text.startswith(EARLIER_CODE_ONLY_MARK), text.removeprefix(EARLIER_CODE_ONLY_MARK)
 
 
-def earlier_feature_text(features):
+def earlier_feature_text(features: FeatureReason) -> str:
     """The part of a reason that named its features when reasons were stored as text."""
     sentences = [f'For it: {", ".join(features["for"])}.'] if features['for'] else []
     if features['against']:
@@ -155,69 +159,79 @@ def earlier_feature_text(features):
     return ' '.join(sentences) or 'Close to the average listing.'
 
 
-def structured_reasons(connection):
+def structured_reasons(connection: sqlite3.Connection) -> None:
     """A reason becomes the parts compose_reason gives, so each value it names renders as one item of its list. A
     ranked listing's reason is built again from its explanation: the part that names its features becomes the model's
     lists when the text is the one the model wrote, and stays the text when a review rewrote it. A reason without an
     explanation, a sample listing's, keeps its text as that part. The code-only mark is the one the text carries,
     which the rerank wrote, since the listing may have got its record after it. Listings without a rank lose their
     stored reason, because why a listing is not ranked is derived when it is read."""
-    for row in connection.execute('SELECT listing_id, rank, reason, explanation FROM ranking').fetchall():
-        if row['rank'] is None or row['reason'] is None:
+    for row in cast(list[sqlite3.Row], connection.execute('SELECT listing_id, rank, reason, explanation FROM ranking').fetchall()):
+        stored, explained = cast(str | None, row['reason']), cast(str | None, row['explanation'])
+        reason: Reason | None
+        if cast(int | None, row['rank']) is None or stored is None:
             reason = None
-        elif row['explanation']:
-            explanation = json.loads(row['explanation'])
+        elif explained:
+            explanation = cast(Explanation, json.loads(explained))
             similar_favorite = explanation['similar_favorite']
-            code_only, text = earlier_marks(row['reason'])
+            code_only, text = earlier_marks(stored)
             if similar_favorite:
                 text = text.removesuffix(f' Most like your favorite {similar_favorite["title"]}.')
             model = feature_reason(explanation['contributions'])
-            reason = compose_reason(model if text == earlier_feature_text(model) else {'text': text}, code_only=code_only,
+            written: ReasonText = {'text': text}
+            reason = compose_reason(model if text == earlier_feature_text(model) else written, code_only=code_only,
                                     similar_favorite=similar_favorite)
         else:
-            code_only, text = earlier_marks(row['reason'])
+            code_only, text = earlier_marks(stored)
             reason = compose_reason({'text': text}, code_only=code_only, similar_favorite=None)
-        connection.execute('UPDATE ranking SET reason = ? WHERE listing_id = ?',
-                           (json.dumps(reason, ensure_ascii=False) if reason else None, row['listing_id']))
+        _ = connection.execute('UPDATE ranking SET reason = ? WHERE listing_id = ?',
+                               (json.dumps(reason, ensure_ascii=False) if reason else None, cast(str, row['listing_id'])))
 
 
-def reviews_with_inputs(connection):
+def reviews_with_inputs(connection: sqlite3.Connection) -> None:
     """A review still waiting fails, because its snapshot lacks the rerank's inputs that its task now describes. The next
     rerank leaves a review whose snapshot has them."""
-    connection.execute("UPDATE reviews SET state = 'failed', snapshot = NULL, result = ?, updated_at = ? WHERE state IN ('waiting', 'running')",
+    _ = connection.execute("UPDATE reviews SET state = 'failed', snapshot = NULL, result = ?, updated_at = ? WHERE state IN ('waiting', 'running')",
                        (json.dumps({'error': 'apt-scraper was updated after this rerank. Rerank to get a review.'}),
                         datetime.now(timezone.utc).isoformat()))
 
 
-def compare_invitation(connection):
+class FeaturesJobState(TypedDict, total=False):
+    """The part of the listing features job's features.json the compare_invitation migration reads."""
+    compare_invited_at: str | None
+
+
+def compare_invitation(connection: sqlite3.Connection) -> None:
     """The Compare invitation's delivery state becomes one record in the store, which the job, the gallery and the
     conversations all read: when each surface delivered it, and the last attempt that failed while none had. The
     listing features job recorded a sent invitation as compare_invited_at in features.json next to the database, which
     counts as delivered through the gateway."""
-    connection.execute('''CREATE TABLE compare_invitation (id INTEGER PRIMARY KEY CHECK (id = 1),
+    _ = connection.execute('''CREATE TABLE compare_invitation (id INTEGER PRIMARY KEY CHECK (id = 1),
         gateway TEXT, gallery TEXT, conversation TEXT, failed_at TEXT, failure TEXT)''')
-    database = next(row[2] for row in connection.execute('PRAGMA database_list') if row[1] == 'main')
+    database = next(cast(str, row[2]) for row in cast(Iterable[sqlite3.Row], connection.execute('PRAGMA database_list'))
+                    if cast(str, row[1]) == 'main')
     job_state = Path(database).parent / 'features.json'
-    invited_at = json.loads(job_state.read_text(encoding='utf-8')).get('compare_invited_at') if database and job_state.exists() else None
-    connection.execute('INSERT INTO compare_invitation (id, gateway) VALUES (1, ?)', (invited_at,))
+    invited_at = (cast(FeaturesJobState, json.loads(job_state.read_text(encoding='utf-8'))).get('compare_invited_at')
+                  if database and job_state.exists() else None)
+    _ = connection.execute('INSERT INTO compare_invitation (id, gateway) VALUES (1, ?)', (invited_at,))
 
 
-def learning_events(connection):
-    connection.execute('''CREATE TABLE learning_events (id INTEGER PRIMARY KEY, occurred_at TEXT NOT NULL,
+def learning_events(connection: sqlite3.Connection) -> None:
+    _ = connection.execute('''CREATE TABLE learning_events (id INTEGER PRIMARY KEY, occurred_at TEXT NOT NULL,
         kind TEXT NOT NULL, listing TEXT NOT NULL, other TEXT, inputs TEXT NOT NULL)''')
 
 
-def plain_learning_events(connection):
+def plain_learning_events(connection: sqlite3.Connection) -> None:
     import zlib
-    identifiers = [row[0] for row in connection.execute("SELECT id FROM learning_events WHERE typeof(inputs) = 'blob'")]
+    identifiers = [row[0] for row in cast(Iterable[tuple[int]], connection.execute("SELECT id FROM learning_events WHERE typeof(inputs) = 'blob'"))]
     for identifier in identifiers:
-        packed = connection.execute('SELECT inputs FROM learning_events WHERE id = ?', (identifier,)).fetchone()[0]
-        connection.execute('UPDATE learning_events SET inputs = ? WHERE id = ?', (zlib.decompress(packed).decode('utf-8'), identifier))
+        packed = cast(tuple[bytes], connection.execute('SELECT inputs FROM learning_events WHERE id = ?', (identifier,)).fetchone())[0]
+        _ = connection.execute('UPDATE learning_events SET inputs = ? WHERE id = ?', (zlib.decompress(packed).decode('utf-8'), identifier))
 
 
-def card_impressions(connection):
-    connection.execute('ALTER TABLE implicit_signals RENAME TO earlier_signals')
-    connection.execute('''CREATE TABLE implicit_signals (
+def card_impressions(connection: sqlite3.Connection) -> None:
+    _ = connection.execute('ALTER TABLE implicit_signals RENAME TO earlier_signals')
+    _ = connection.execute('''CREATE TABLE implicit_signals (
         event_id TEXT PRIMARY KEY, visit_id TEXT NOT NULL, listing_id TEXT NOT NULL REFERENCES listings(id),
         fingerprint TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('open', 'dwell', 'photo', 'close', 'impression')),
         occurred_at TEXT NOT NULL, duration_ms INTEGER, photo_url TEXT, shown_rank INTEGER,
@@ -225,54 +239,54 @@ def card_impressions(connection):
             OR (kind = 'photo' AND photo_url IS NOT NULL AND duration_ms IS NULL AND shown_rank IS NULL)
             OR (kind IN ('open', 'close') AND duration_ms IS NULL AND photo_url IS NULL AND shown_rank IS NULL)
             OR (kind = 'impression' AND duration_ms IS NULL AND photo_url IS NULL AND (shown_rank IS NULL OR shown_rank > 0))))''')
-    connection.execute('INSERT INTO implicit_signals SELECT *, NULL FROM earlier_signals')
-    connection.execute('DROP TABLE earlier_signals')
-    connection.execute('CREATE INDEX implicit_signals_listing_visit ON implicit_signals(listing_id, fingerprint, visit_id)')
-    connection.execute("CREATE INDEX impressions_latest ON implicit_signals(listing_id, fingerprint, julianday(occurred_at) DESC) WHERE kind = 'impression'")
-    connection.execute("CREATE INDEX impressions_visit ON implicit_signals(visit_id) WHERE kind = 'impression'")
+    _ = connection.execute('INSERT INTO implicit_signals SELECT *, NULL FROM earlier_signals')
+    _ = connection.execute('DROP TABLE earlier_signals')
+    _ = connection.execute('CREATE INDEX implicit_signals_listing_visit ON implicit_signals(listing_id, fingerprint, visit_id)')
+    _ = connection.execute("CREATE INDEX impressions_latest ON implicit_signals(listing_id, fingerprint, julianday(occurred_at) DESC) WHERE kind = 'impression'")
+    _ = connection.execute("CREATE INDEX impressions_visit ON implicit_signals(visit_id) WHERE kind = 'impression'")
 
 
-def ranking_hypotheses(connection):
-    connection.execute('''CREATE TABLE hypotheses (id TEXT PRIMARY KEY, phrase TEXT NOT NULL UNIQUE,
+def ranking_hypotheses(connection: sqlite3.Connection) -> None:
+    _ = connection.execute('''CREATE TABLE hypotheses (id TEXT PRIMARY KEY, phrase TEXT NOT NULL UNIQUE,
         kind TEXT NOT NULL CHECK (kind IN ('textual', 'visual')),
         state TEXT NOT NULL CHECK (state IN ('active', 'retired', 'confirmed')),
         evidence TEXT NOT NULL, start_event INTEGER NOT NULL, weight REAL NOT NULL DEFAULT 0,
         assessment TEXT NOT NULL DEFAULT '{}')''')
-    connection.execute('''CREATE TABLE hypothesis_judgments (hypothesis TEXT NOT NULL REFERENCES hypotheses(id),
+    _ = connection.execute('''CREATE TABLE hypothesis_judgments (hypothesis TEXT NOT NULL REFERENCES hypotheses(id),
         listing_id TEXT NOT NULL REFERENCES listings(id), fingerprint TEXT NOT NULL, verdict TEXT NOT NULL,
         evidence TEXT NOT NULL, PRIMARY KEY (hypothesis, listing_id))''')
-    connection.execute('''CREATE TABLE hypothesis_passes (label_event INTEGER PRIMARY KEY, rerank_id INTEGER NOT NULL,
+    _ = connection.execute('''CREATE TABLE hypothesis_passes (label_event INTEGER PRIMARY KEY, rerank_id INTEGER NOT NULL,
         task TEXT NOT NULL, saved INTEGER NOT NULL DEFAULT 0)''')
 
 
-def photo_encoder(connection):
+def photo_encoder(connection: sqlite3.Connection) -> None:
     """The photo encoder's results, per listing content: the best photo's match with each probe, the encoder's room type
     of each photo and whether extraction's room types disagree with it on most photos; the best-match similarity of
     two listings' photos of one room; the second reads that disagreement asked for; the blind tests; the encoder
     model whose probes a preference reading could name; and the probe that scores a visual hypothesis."""
-    connection.execute('''CREATE TABLE photo_features (listing_id TEXT PRIMARY KEY REFERENCES listings(id),
+    _ = connection.execute('''CREATE TABLE photo_features (listing_id TEXT PRIMARY KEY REFERENCES listings(id),
         fingerprint TEXT NOT NULL, model TEXT NOT NULL, probes TEXT NOT NULL, rooms TEXT NOT NULL,
         reread INTEGER NOT NULL, computed_at TEXT NOT NULL)''')
-    connection.execute('''CREATE TABLE photo_similarity (model TEXT NOT NULL, room TEXT NOT NULL, other_id TEXT NOT NULL,
+    _ = connection.execute('''CREATE TABLE photo_similarity (model TEXT NOT NULL, room TEXT NOT NULL, other_id TEXT NOT NULL,
         listing_id TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY (model, room, other_id, listing_id))''')
-    connection.execute('CREATE TABLE photo_rereads (listing_id TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY (listing_id, fingerprint))')
-    connection.execute('''CREATE TABLE encoder_blind_tests (id INTEGER PRIMARY KEY, model TEXT NOT NULL, created_at TEXT NOT NULL,
+    _ = connection.execute('CREATE TABLE photo_rereads (listing_id TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY (listing_id, fingerprint))')
+    _ = connection.execute('''CREATE TABLE encoder_blind_tests (id INTEGER PRIMARY KEY, model TEXT NOT NULL, created_at TEXT NOT NULL,
         criterion TEXT NOT NULL, listings TEXT NOT NULL, picks TEXT, result TEXT)''')
-    connection.execute('ALTER TABLE preference_readings ADD COLUMN photo_model TEXT')
-    connection.execute('ALTER TABLE hypotheses ADD COLUMN probe TEXT')
+    _ = connection.execute('ALTER TABLE preference_readings ADD COLUMN photo_model TEXT')
+    _ = connection.execute('ALTER TABLE hypotheses ADD COLUMN probe TEXT')
 
 
 # Persisted schema versions must not shift when a migration is removed.
-MIGRATIONS = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals,
+MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (initial_schema, contact_workflow, code_derived_features, listing_features, scoring_model, pairwise_skips, distances, review_pass, implicit_signals,
               notes_session_per_database, structured_reasons, reviews_with_inputs, compare_invitation, learning_events, lambda connection: None,
               card_impressions, plain_learning_events, ranking_hypotheses, photo_encoder)
 
 
-def migrate(connection):
-    connection.execute('BEGIN IMMEDIATE')
-    version = connection.execute('PRAGMA user_version').fetchone()[0]
+def migrate(connection: sqlite3.Connection) -> None:
+    _ = connection.execute('BEGIN IMMEDIATE')
+    version = cast(tuple[int], connection.execute('PRAGMA user_version').fetchone())[0]
     if version > len(MIGRATIONS):
         raise ValueError('This database uses a newer schema. Update the gallery before opening it.')
     for index in range(version, len(MIGRATIONS)):
         MIGRATIONS[index](connection)
-        connection.execute(f'PRAGMA user_version = {index + 1}')
+        _ = connection.execute(f'PRAGMA user_version = {index + 1}')
