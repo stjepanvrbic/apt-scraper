@@ -134,14 +134,15 @@ def install(home: Path, run: Run, opener: Callable[[str], Download]) -> int:
     return 0
 
 
-def encode_once(home, run, opener):
+def encode_once(home: Path, run: Run, opener: Callable[[str], Download]) -> None:
     environment, model, status = paths(home)
     manifest = cast(ModelManifest, json.loads(MANIFEST.read_text(encoding='utf-8')))
     if reason := failed_gate(manifest):
         write_status(status, problem=None, off=reason)
         print(NO_WAKE)
         return
-    problem, summary = None, None
+    problem: str | None = None
+    summary: object = None
     # The first run builds the environment and downloads the image tower, as `install` does by hand; later runs
     # rebuild the environment when Hermes's Python or the requirements changed.
     if not environment_python(environment).exists() or not ready(manifest, model) or not current(environment):

@@ -48,7 +48,7 @@ SETTINGS: Settings = {
 
 
 class Job(TypedDict):
-    """The part of a shipped cron job (profile/cron/jobs.json) the tests read."""
+    """The part of a shipped cron job (cron/jobs.json) the tests read."""
     id: str
     script: str
     skills: list[str]
@@ -109,7 +109,7 @@ def jpeg(image: Image.Image) -> bytes:
 
 
 def shipped_jobs() -> list[Job]:
-    return cast(Jobs, json.loads((ROOT / 'profile/cron/jobs.json').read_text(encoding='utf-8')))['jobs']
+    return cast(Jobs, json.loads((ROOT / 'cron/jobs.json').read_text(encoding='utf-8')))['jobs']
 
 
 def found(pattern: str, text: str, flags: int = 0) -> str:

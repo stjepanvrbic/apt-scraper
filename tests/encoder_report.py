@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypedDict, cast
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
 from encoder_sweep import AucReport, Choice, EvaluateReport, Labels, RoomReport, Rule, RuleResult, Timing  # noqa: E402
 from photo_catalog import GATE_PROBES as GATE, Probe  # noqa: E402
 

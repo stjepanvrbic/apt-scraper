@@ -168,13 +168,13 @@ class LauncherTests(unittest.TestCase):
 
     def test_the_first_eligible_run_builds_the_missing_environment_and_searches(self) -> None:
         self.complete_interview()
-        code, lines = self.launch()
+        code, _ = self.launch()
         self.assertEqual(code, 0)
         self.assertEqual([command[1:3] for command in self.commands][:2], [['-m', 'venv'], ['-m', 'pip']])
         self.assertEqual([command[-1] for command in self.commands][-1:], ['run'])
         self.assertIsNone(self.problem())
 
-    def test_a_build_that_fails_is_recorded_for_status_without_waking_the_model(self):
+    def test_a_build_that_fails_is_recorded_for_status_without_waking_the_model(self) -> None:
         self.complete_interview()
         self.pip_fails = True
         code, lines = self.launch()

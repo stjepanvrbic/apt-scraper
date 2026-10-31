@@ -1,5 +1,5 @@
 """Embeds every listing photo once with the shipped image tower and derives the ranking's photo columns from the
-embeddings. It runs in the encoder's own environment (onnxruntime, numpy, Pillow), which profile/scripts/encoder-run.py
+embeddings. It runs in the encoder's own environment (onnxruntime, numpy, Pillow), which scripts/encoder-run.py
 builds and starts; nothing here runs during a rerank.
 
 Commands:

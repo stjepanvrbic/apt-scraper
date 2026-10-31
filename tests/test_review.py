@@ -32,7 +32,7 @@ MOVE_REASON = 'The model weighs [price] too little.'
 
 
 class CronJob(TypedDict):
-    """A job of profile/cron/jobs.json, as far as these tests read it."""
+    """A job of cron/jobs.json, as far as these tests read it."""
     id: str
     skills: list[str]
     schedule: str
