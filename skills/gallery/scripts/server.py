@@ -57,6 +57,8 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
             self.send_response(status)
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(len(content)))
+            if self.close_connection:
+                self.send_header('Connection', 'close')
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.send_header('Referrer-Policy', 'no-referrer')
@@ -77,6 +79,9 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
             return True
 
         def do_GET(self):
+            # A body on a GET is left unread, so the connection closes rather than read it as the next request.
+            if 'Content-Length' in self.headers or 'Transfer-Encoding' in self.headers:
+                self.close_connection = True
             if not self.allowed():
                 return
             path = unquote(urlsplit(self.path).path)
@@ -151,6 +156,8 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
             # Closing a socket with unread data resets the connection and the client loses the reply, so the
             # body is read before any check, and a body of unknown or excessive length is drained after the reply.
             content = self.read_body()
+            if content is None:
+                self.close_connection = True
             try:
                 if not self.allowed():
                     return
