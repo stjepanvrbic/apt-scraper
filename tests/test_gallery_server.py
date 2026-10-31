@@ -1,3 +1,4 @@
+import http.client
 import json
 import socket
 import tempfile
@@ -12,7 +13,7 @@ from urllib.request import Request, urlopen
 
 from test_gallery_store import listing
 from queries import Page
-from server import ChatPage, GalleryServer, make_server
+from server import DISCARD_LIMIT, ChatPage, GalleryServer, make_server
 from shapes import loads
 from store import ListingDetail, ListingStore
 
@@ -56,6 +57,34 @@ class GalleryServerCase(unittest.TestCase):
 
 
 class GalleryServerTests(GalleryServerCase):
+    def test_one_connection_serves_several_requests(self) -> None:
+        connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=3)
+        self.addCleanup(connection.close)
+        sockets: set[int] = set()
+        for extra in ({}, {'Content-Length': '0'}, {}):
+            connection.request('GET', '/api/health', headers={'Authorization': 'Bearer ' + self.server.access_token, **extra})
+            response = connection.getresponse()
+            self.assertEqual((response.status, response.version, response.getheader('Connection')), (200, 11, None))
+            _ = response.read()
+            sockets.add(id(connection.sock))
+        self.assertEqual(len(sockets), 1)
+
+    def test_a_request_the_server_cannot_read_past_closes_the_connection_and_says_so(self) -> None:
+        headers = {'Authorization': 'Bearer ' + self.server.access_token, 'Content-Type': 'application/json'}
+        connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=3)
+        self.addCleanup(connection.close)
+        for method, path, body, status in (('GET', '/api/health', b'x', 200),
+                                           ('POST', '/api/chat', b'{' * (DISCARD_LIMIT + 1), 400)):
+            with self.subTest(method):
+                connection.request(method, path, body=body, headers=headers)
+                response = connection.getresponse()
+                _ = response.read()
+                self.assertEqual((response.status, response.getheader('Connection')), (status, 'close'))
+                connection.request('GET', '/api/health', headers=headers)
+                response = connection.getresponse()
+                _ = response.read()
+                self.assertEqual(response.status, 200)
+
     def test_browser_actions_are_saved_in_shared_store(self) -> None:
         self.assertEqual(cast(ListingDetail, self.request('/api/listings/example:100'))['title'], 'Courtyard apartment')
         _ = self.request('/api/listings/example:100/feedback', {'favorite': True})
@@ -126,5 +155,5 @@ class GalleryServerTests(GalleryServerCase):
         for content, headers, (status, error) in cases:
             with self.subTest(length=len(content), headers=headers):
                 for _ in range(20):
-                    self.assertEqual(self.raw_post('/api/chat', content, headers), ('HTTP/1.0 ' + status, {'error': error}))
+                    self.assertEqual(self.raw_post('/api/chat', content, headers), ('HTTP/1.1 ' + status, {'error': error}))
         self.assertEqual(self.store.chat_state()['messages'], [])

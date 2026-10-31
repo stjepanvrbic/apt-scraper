@@ -90,6 +90,11 @@ def make_server(store: ListingStore, port: int = 8765, chat_runner: Runner | Non
     chat = ChatController(store, chat_runner)
     rerank_lock = threading.Lock()
     class Handler(BaseHTTPRequestHandler):
+        # Keeps a browser's connections open across requests. The HTTP/1.0 default closes one per request, and on
+        # Windows each closed connection holds a port for minutes, which a photo-heavy page exhausts.
+        protocol_version: str = 'HTTP/1.1'
+        close_connection: bool
+
         @override
         def log_message(self, format: str, *arguments: object) -> None:
             pass
@@ -101,6 +106,8 @@ def make_server(store: ListingStore, port: int = 8765, chat_runner: Runner | Non
             self.send_response(status)
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(len(content)))
+            if self.close_connection:
+                self.send_header('Connection', 'close')
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.send_header('Referrer-Policy', 'no-referrer')
@@ -122,6 +129,10 @@ def make_server(store: ListingStore, port: int = 8765, chat_runner: Runner | Non
             return True
 
         def do_GET(self) -> None:
+            # A body on a GET is left unread, so the connection closes rather than read it as the next request.
+            length = self.headers.get('Content-Length', '0')
+            if 'Transfer-Encoding' in self.headers or not length.isdigit() or int(length) > 0:
+                self.close_connection = True
             if not self.allowed():
                 return
             path = unquote(urlsplit(self.path).path)
@@ -166,6 +177,7 @@ def make_server(store: ListingStore, port: int = 8765, chat_runner: Runner | Non
                 except KeyError as error:
                     self.reply(404, {'error': str(cast(object, error.args[0]))})
                 except sqlite3.Error:
+                    self.close_connection = True
                     self.reply(500, {'error': 'Could not read the listing store. Check the gallery log.'})
                     raise
             else:
@@ -186,6 +198,7 @@ def make_server(store: ListingStore, port: int = 8765, chat_runner: Runner | Non
             return self.rfile.read(length) if 0 <= length <= DISCARD_LIMIT else None
 
         def close_unread(self) -> None:
+            self.close_connection = True
             deadline = time.monotonic() + CLOSE_SECONDS
             connection = cast(socket.socket, self.connection)
             try:
@@ -201,6 +214,8 @@ def make_server(store: ListingStore, port: int = 8765, chat_runner: Runner | Non
             # Closing a socket with unread data resets the connection and the client loses the reply, so the
             # body is read before any check, and a body of unknown or excessive length is drained after the reply.
             content = self.read_body()
+            if content is None:
+                self.close_connection = True
             try:
                 if not self.allowed():
                     return
@@ -279,6 +294,7 @@ def make_server(store: ListingStore, port: int = 8765, chat_runner: Runner | Non
             except KeyError as error:
                 self.reply(404, {'error': str(cast(object, error.args[0]))})
             except sqlite3.Error:
+                self.close_connection = True
                 self.reply(500, {'error': 'Could not save changes. Try again. Check the gallery log if this continues.'})
                 raise
             finally:
