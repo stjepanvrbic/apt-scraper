@@ -80,7 +80,8 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
 
         def do_GET(self):
             # A body on a GET is left unread, so the connection closes rather than read it as the next request.
-            if 'Content-Length' in self.headers or 'Transfer-Encoding' in self.headers:
+            length = self.headers.get('Content-Length', '0')
+            if 'Transfer-Encoding' in self.headers or not length.isdigit() or int(length) > 0:
                 self.close_connection = True
             if not self.allowed():
                 return

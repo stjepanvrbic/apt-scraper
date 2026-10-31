@@ -55,8 +55,8 @@ class GalleryServerTests(GalleryServerCase):
         connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=3)
         self.addCleanup(connection.close)
         sockets = set()
-        for _ in range(3):
-            connection.request('GET', '/api/health', headers={'Authorization': 'Bearer ' + self.server.access_token})
+        for extra in ({}, {'Content-Length': '0'}, {}):
+            connection.request('GET', '/api/health', headers={'Authorization': 'Bearer ' + self.server.access_token, **extra})
             response = connection.getresponse()
             self.assertEqual((response.status, response.version, response.getheader('Connection')), (200, 11, None))
             response.read()
