@@ -273,7 +273,8 @@ print(json.dumps({'review': result, 'listing': store.listing(first)}))
     await page.screenshot({ path: testInfo.outputPath(`rerank-${viewport.name}.png`) });
     const favorites = page.getByRole('region', { name: 'All favorites and held-out ranks', exact: true });
     await favorites.press('End');
-    await expect.poll(() => favorites.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    // End scrolls with an animation, and Chromium drops a Home key that lands on the animation's last frame.
+    await expect.poll(() => favorites.evaluate(element => element.scrollTop === element.scrollHeight - element.clientHeight)).toBe(true);
     const viewportBounds = await favorites.boundingBox();
     const headerBounds = await favorites.getByRole('row').first().boundingBox();
     expect(viewportBounds!.height).toBeLessThanOrEqual(190);
