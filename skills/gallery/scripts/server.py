@@ -43,6 +43,10 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
     chat = ChatController(store, chat_runner)
     rerank_lock = threading.Lock()
     class Handler(BaseHTTPRequestHandler):
+        # Keeps a browser's connections open across requests. The HTTP/1.0 default closes one per request, and on
+        # Windows each closed connection holds a port for minutes, which a photo-heavy page exhausts.
+        protocol_version = 'HTTP/1.1'
+
         def log_message(self, format, *arguments):
             pass
 
@@ -132,6 +136,7 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
             return self.rfile.read(length) if 0 <= length <= DISCARD_LIMIT else None
 
         def close_unread(self):
+            self.close_connection = True
             deadline = time.monotonic() + CLOSE_SECONDS
             try:
                 self.connection.shutdown(socket.SHUT_WR)

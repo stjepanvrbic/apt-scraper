@@ -1,3 +1,4 @@
+import http.client
 import json
 import socket
 import tempfile
@@ -50,6 +51,18 @@ class GalleryServerCase(unittest.TestCase):
 
 
 class GalleryServerTests(GalleryServerCase):
+    def test_one_connection_serves_several_requests(self):
+        connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=3)
+        self.addCleanup(connection.close)
+        sockets = set()
+        for _ in range(3):
+            connection.request('GET', '/api/health', headers={'Authorization': 'Bearer ' + self.server.access_token})
+            response = connection.getresponse()
+            self.assertEqual((response.status, response.version, response.getheader('Connection')), (200, 11, None))
+            response.read()
+            sockets.add(id(connection.sock))
+        self.assertEqual(len(sockets), 1)
+
     def test_browser_actions_are_saved_in_shared_store(self):
         self.assertEqual(self.request('/api/listings/example:100')['title'], 'Courtyard apartment')
         self.request('/api/listings/example:100/feedback', {'favorite': True})
