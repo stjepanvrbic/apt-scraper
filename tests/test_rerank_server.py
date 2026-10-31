@@ -53,7 +53,7 @@ class RerankServerTests(GalleryServerCase):
             with self.subTest(length=len(content), headers=headers):
                 for _ in range(200):
                     status_line, reply = self.raw_post('/api/rerank', content, headers)
-                    self.assertEqual(status_line, 'HTTP/1.0 ' + status)
+                    self.assertEqual(status_line, 'HTTP/1.1 ' + status)
                     self.assertEqual(list(reply), ['error'])
         self.assertIsNone(self.store.last_rerank())
 
