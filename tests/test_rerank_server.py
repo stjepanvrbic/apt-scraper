@@ -13,16 +13,16 @@ from rerank import RerankReport, rerank, save_review
 from review import Rerank, ReviewState
 from server import RerankStatus
 from shapes import loads
-from store import READ_ATTEMPTS, ListingDetail, ListingStore, RerankRecord, ReviewRecord, extraction_read
+from store import READ_ATTEMPTS, ListingDetail, ListingStore, extraction_read
 from test_gallery_store import listing
 from test_feature_record import extraction
 
 
 class RerankServerTests(GalleryServerCase):
-    def last_rerank(self) -> RerankRecord | None:
+    def last_rerank(self) -> Rerank | None:
         return cast(RerankStatus, self.request('/api/rerank'))['last_rerank']
 
-    def review_of(self, rerank: Rerank | RerankRecord | None) -> ReviewState | ReviewRecord:
+    def review_of(self, rerank: Rerank | None) -> ReviewState:
         review = rerank['review'] if rerank else None
         if review is None:
             self.fail('The rerank has no review.')

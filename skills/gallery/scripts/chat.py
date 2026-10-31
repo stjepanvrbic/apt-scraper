@@ -2,9 +2,9 @@ import asyncio
 import contextlib
 import queue
 import threading
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from pathlib import Path
-from typing import Literal, NotRequired, Protocol, TypedDict, override
+from typing import Literal, NotRequired, Protocol, TypedDict, Unpack, override
 from uuid import uuid4
 
 from shapes import is_object
@@ -50,15 +50,32 @@ class ChatState(TypedDict):
     session_id: str | None
 
 
+class ChatChanges(TypedDict, total=False):
+    """What a turn changes on its reply, each given only when it changes: the prompt is the question as the gateway
+    sent it, and a prompt or error given as None clears the stored one."""
+    content: str
+    status: MessageStatus
+    events: list[ToolEvent]
+    prompt: Mapping[str, object] | None
+    error: str | None
+    session_id: str | None
+    admission_id: str | None
+
+
 class ChatStore(Protocol):
     """What the conversation reads and writes in the listing store."""
     path: Path
     def chat_state(self, page: int = ...) -> ChatState: ...
     def start_chat(self, text: object, request_id: object) -> int: ...
-    def update_chat(self, message_id: int, **changes: object) -> None: ...
+    def update_chat(self, message_id: int, **changes: Unpack[ChatChanges]) -> None: ...
 
 
 Runner = Callable[[ChatStore, int, str | None, 'Controls'], Coroutine[object, object, None]]
+
+
+def text_of(value: object) -> str | None:
+    """A value of the gateway's answer when it is text, otherwise None."""
+    return value if isinstance(value, str) else None
 
 
 class Controls(queue.Queue[str]):
@@ -149,12 +166,13 @@ async def run_turn(store: ChatStore, message_id: int, text: str | None, controls
             if self.timer is None:
                 self.timer = asyncio.get_running_loop().call_later(0.1, self.flush)
 
-        def flush(self, **changes: object) -> None:
+        def flush(self, **changes: Unpack[ChatChanges]) -> None:
             if self.timer is not None:
                 self.timer.cancel()
                 self.timer = None
             if self.dirty or changes:
-                store.update_chat(message_id, content=self.content, events=self.tools, **changes)
+                written: ChatChanges = {'content': self.content, 'events': self.tools, **changes}
+                store.update_chat(message_id, **written)
                 self.dirty = False
 
         def on_text_delta(self, text: str | None) -> None:
@@ -190,7 +208,10 @@ async def run_turn(store: ChatStore, message_id: int, text: str | None, controls
             # Untitled: a titled create resumes whichever session already holds the title. The profile home
             # outlives every gallery database's folder, and a session runs turns only in the folder it was created with.
             snapshot = await client.rpc('session.create', request_id=uuid4().hex, source='cli', cwd=str(profile_home))
-        store.update_chat(message_id, session_id=snapshot['stored_session_id'])
+        session = snapshot['stored_session_id']
+        if not isinstance(session, str):
+            raise RuntimeError('Hermes did not name the session.')
+        store.update_chat(message_id, session_id=session)
         if text is not None and snapshot.get('pending'):
             raise RuntimeError('This Hermes session still has unfinished work. Wait for it to finish before sending another message.')
         view = GalleryView(client, snapshot, quiet=True, emitter=events)
@@ -211,7 +232,8 @@ async def run_turn(store: ChatStore, message_id: int, text: str | None, controls
                 if receipt.get('status') == 'terminal':
                     result = receipt.get('result')
                     result = result if is_object(result) else {}
-                    store.update_chat(message_id, content=result.get('final_response') or '', status='error' if result.get('failed') else 'complete', error=result.get('error'), prompt=None)
+                    store.update_chat(message_id, content=text_of(result.get('final_response')) or '', status='error' if result.get('failed') else 'complete',
+                                      error=text_of(result.get('error')), prompt=None)
                     return
                 if receipt.get('status') == 'unknown':
                     raise RuntimeError('Hermes reports an unknown execution outcome. The gallery did not resend the message.')
@@ -237,11 +259,11 @@ async def run_turn(store: ChatStore, message_id: int, text: str | None, controls
             terminal = view.completions[admission]
             result = await client.rpc('prompt.receipt', session_id=view.session_id, admission_id=admission, include_result=True)
             outcome = result.get('result')
-            failure = outcome.get('error') if is_object(outcome) else None
+            failure = text_of(outcome.get('error')) if is_object(outcome) else None
             if terminal.get('outcome') not in ('completed', 'cancelled'):
                 failure = failure or 'Hermes could not complete the reply.'
             events.flush()
-            store.update_chat(message_id, content=terminal.get('text') or terminal.get('content') or '', prompt=None,
+            store.update_chat(message_id, content=text_of(terminal.get('text')) or text_of(terminal.get('content')) or '', prompt=None,
                               status='error' if failure else 'complete', error=failure, session_id=view.session_id)
         finally:
             controls.wake = None

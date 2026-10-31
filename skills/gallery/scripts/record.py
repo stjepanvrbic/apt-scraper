@@ -88,10 +88,10 @@ class Tags(TypedDict):
     concerns: list[str]
 
 
-class Extraction(Tags):
-    """A feature record as validate_extraction keeps it: a room type for every unique photo, every rating, category and
-    flag present, and the judgments of the stated preferences by phrase."""
-    photos: list[PhotoRoom]
+class RecordValues(Tags):
+    """What an extraction states about the listing itself: every rating, category and flag, its unit level, its tags
+    and its summary. The photos' room types and the judgments of the stated preferences come with the record's
+    shapes, which keep them differently."""
     ratings: dict[str, Rating | NotShown]
     floor: str
     style: str
@@ -100,6 +100,12 @@ class Extraction(Tags):
     unit_level: UnitLevel
     flags: dict[str, bool | None]
     summary: str
+
+
+class Extraction(RecordValues):
+    """A feature record as validate_extraction keeps it: a room type for every unique photo, every rating, category and
+    flag present, and the judgments of the stated preferences by phrase."""
+    photos: list[PhotoRoom]
     preferences: dict[str, Judgment]
 
 

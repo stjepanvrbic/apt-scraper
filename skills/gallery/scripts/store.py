@@ -8,35 +8,28 @@ from collections import Counter
 from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from datetime import date, datetime, timedelta, timezone
-from enum import Enum
 from pathlib import Path
-from typing import Literal, NamedTuple, NotRequired, TypedDict, cast
+from typing import Literal, NamedTuple, TypedDict, Unpack, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
-from chat import ChatMessage, ChatPrompt, MessageStatus, ToolEvent
-from code_features import FEATURES, CodeFeatures, RankingFeatures, configured_transit_feed, store_all_code_features, store_code_features
+from chat import ChatChanges, ChatMessage, ChatPrompt, MessageStatus, ToolEvent
+from code_features import CodeFeatures, Level, RankingFeatures, configured_transit_feed, store_all_code_features, store_code_features
 from learning import encode, label_clock
 from photo_catalog import MATCH_ROOMS, vocabulary as photo_vocabulary
-from queries import RANKABLE, RANKING_EXCLUSION, BrowseItem, Page, Snapshot, answered_pairs, browse, paired, snapshot, user_noted, validate_page
-from record import (SEED_TAGS, Judgment, NotShown, PhotoRoom, Rating, Tags, UnitLevel, Verdict, known_spelling, validate_extraction,
-                    validate_judgments)
+from queries import (RANKABLE, RANKING_EXCLUSION, BrowseItem, Page, Snapshot, answered_pairs, browse, paired, settings_of, snapshot, user_noted,
+                     validate_page)
+from record import SEED_TAGS, Judgment, PhotoRoom, RecordValues, Verdict, known_spelling, validate_extraction, validate_judgments
+from review import Rerank, ReviewFailure, ReviewResult, ReviewSnapshot, ReviewState, ReviewStateName
 from schema import FINGERPRINT, LISTING_ID, MIGRATIONS, content_fingerprint, migrate
-from scoring import (Direction, Explanation, FeatureReading, FeatureReason, Impression, NoteReading, PhotoInputs, RankingCheck, RankingInputs,
-                     RankingListing, RankingResult, RankingSummary, Reason, ReasonText, Visit, compose_reason, reading_vocabulary, stated_phrases,
+from scoring import (Direction, Explanation, FeatureReading, FeatureReason, Impression, NoteReading, PhotoInputs, RankingInputs, RankingListing,
+                     RankingResult, RankingSummary, Reason, ReasonText, Visit, compose_reason, reading_vocabulary, stated_phrases,
                      validate_note_reading, validate_preference_reading)
-from shapes import Agent, Criteria, Listing, Settings, is_array, is_object, loads
+from shapes import AGENT_FIELDS, Agent, Criteria, Listing, LocationPriorities, RentalPeriod, Settings, Source, is_array, is_object, loads
 
-
-class Unchanged(Enum):
-    """The default of update_chat's prompt and error, which leaves the stored value as it is, since None clears it."""
-    token = 0
-
-
-UNCHANGED = Unchanged.token
 CONTACT_CHANNELS = {'email', 'imessage', 'contact_form'}
-RENTAL_PERIODS = ('day', 'week', 'month', 'year', 'total')
+RENTAL_PERIODS: tuple[RentalPeriod, ...] = ('day', 'week', 'month', 'year', 'total')
 WEEKDAYS = ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday')
 VIEWING_MINUTES = 60
 CRITERIA = ('location', 'price', 'size', 'rooms', 'move_in', 'other')
@@ -55,7 +48,8 @@ ContactChannel = Literal['email', 'imessage', 'contact_form']
 MessageDirection = Literal['incoming', 'outgoing']
 NoteRole = Literal['user', 'agent']
 ViewingStatus = Literal['agreed', 'booked', 'canceled']
-ReviewStatus = Literal['waiting', 'running', 'done', 'failed', 'superseded']
+DueReason = Literal['reply', 'answer', 'start']
+"""Why a contact needs the agent: a reply came in, the user answered a question, or the first message is still to send."""
 LearningKind = Literal['favorite', 'unfavorite', 'dismiss', 'restore', 'contact', 'pair', 'note']
 SignalRow = tuple[str, str, str, str, str, str, int | None, str | None, int | None]
 """An implicit_signals row in column order: event, visit, listing, fingerprint, kind, time, duration, photo, rank."""
@@ -101,18 +95,10 @@ class RecordPhoto(PhotoRoom):
     url: str
 
 
-class StoredExtraction(Tags):
+class StoredExtraction(RecordValues):
     """The model's part of a feature record as the store keeps it: validate_extraction's record without the judgments of
     the stated preferences, which the feature_records table keeps apart, and with each photo's URL."""
     photos: list[RecordPhoto]
-    ratings: dict[str, Rating | NotShown]
-    floor: str
-    style: str
-    outdoor_space: str
-    building_type: str
-    unit_level: UnitLevel
-    flags: dict[str, bool | None]
-    summary: str
 
 
 class FeatureRecord(TypedDict):
@@ -125,24 +111,9 @@ class SavedExtraction(TypedDict):
     new_tags: list[str]
 
 
-class ReviewRecord(TypedDict):
-    """A rerank's review pass: its state, how many times it was handed to the agent, when its state last changed and its
-    result, the saved review or the error that ended it, once it has one."""
-    state: ReviewStatus
-    attempts: int
-    updated_at: str
-    result: object
-
-
 class RerankSummary(RankingSummary):
     """A reranks row's result: the rerank's summary and the ids left out because their listing changed meanwhile."""
     stale: list[str]
-
-
-class RerankRecord(RerankSummary):
-    id: int
-    finished_at: str
-    review: ReviewRecord | None
 
 
 class RankedEntry(TypedDict):
@@ -181,7 +152,7 @@ class ContactRecord(TypedDict):
 
 class DueContact(TypedDict):
     listing_id: str
-    reason: Literal['reply', 'answer', 'start']
+    reason: DueReason
 
 
 class QuestionRecord(TypedDict):
@@ -246,7 +217,7 @@ class ListingDetail(Listing):
     correspondence: list[CorrespondenceRecord]
     viewings_total: int
     viewings: list[ViewingRecord]
-    unranked_reason: NotRequired[str | None]
+    unranked_reason: str | None
 
 
 class ChatState(TypedDict):
@@ -337,13 +308,50 @@ def inserted(cursor: sqlite3.Cursor) -> int:
     return cast(int, cursor.lastrowid)
 
 
-def settings_of(rows: Iterable[sqlite3.Row]) -> Settings:
-    """The settings rows as the settings they hold, which validate_settings checked before they were stored."""
-    return cast(Settings, {cast(str, row['name']): loads(cast(str, row['value'])) for row in rows})
-
-
 def contact_record(row: sqlite3.Row) -> ContactRecord:
-    return cast(ContactRecord, {**dict(row), 'agent': loads(cast(str, row['agent']))})
+    return {'listing_id': cast(str, row['listing_id']), 'status': cast(ContactStatus, row['status']), 'requested_at': cast(str, row['requested_at']),
+            'channel': cast(ContactChannel | None, row['channel']), 'agent': cast(Agent, loads(cast(str, row['agent']))),
+            'error': cast(str | None, row['error']), 'handled_through': cast(int, row['handled_through']), 'subject': cast(str | None, row['subject'])}
+
+
+def note_record(row: sqlite3.Row) -> NoteRecord:
+    return {'id': cast(int, row['id']), 'listing_id': cast(str, row['listing_id']), 'role': cast(NoteRole, row['role']), 'text': cast(str, row['text']),
+            'created_at': cast(str, row['created_at'])}
+
+
+def correspondence_record(row: sqlite3.Row) -> CorrespondenceRecord:
+    return {'id': cast(int, row['id']), 'listing_id': cast(str, row['listing_id']), 'direction': cast(MessageDirection, row['direction']),
+            'channel': cast(ContactChannel, row['channel']), 'text': cast(str, row['text']), 'created_at': cast(str, row['created_at']),
+            'external_message_id': cast(str, row['external_message_id']), 'external_thread_id': cast(str | None, row['external_thread_id'])}
+
+
+def viewing_record(row: sqlite3.Row) -> ViewingRecord:
+    return {'id': cast(str, row['id']), 'listing_id': cast(str, row['listing_id']), 'time': cast(str, row['time']), 'details': cast(str, row['details']),
+            'calendar_event_id': cast(str | None, row['calendar_event_id']), 'status': cast(ViewingStatus, row['status'])}
+
+
+def question_record(row: sqlite3.Row) -> QuestionRecord:
+    return {'id': cast(int, row['id']), 'listing_id': cast(str, row['listing_id']), 'question': cast(str, row['question']),
+            'field': cast(str | None, row['field']), 'purpose': cast(str | None, row['purpose']), 'asked_at': cast(str, row['asked_at']),
+            'external_message_id': cast(str | None, row['external_message_id']), 'answer': cast(str | None, row['answer']),
+            'answered_at': cast(str | None, row['answered_at']), 'handled': cast(int, row['handled'])}
+
+
+def approval_record(row: sqlite3.Row) -> ApprovalRecord:
+    return {'id': cast(int, row['id']), 'listing_id': cast(str, row['listing_id']), 'field': cast(str, row['field']), 'value': cast(str, row['value']),
+            'purpose': cast(str, row['purpose']), 'approved_at': cast(str, row['approved_at']), 'revoked_at': cast(str | None, row['revoked_at'])}
+
+
+def code_features_record(row: sqlite3.Row) -> CodeFeatures:
+    """A code_features row as code_features.py describes the features."""
+    return {'monthly_price': cast(float | None, row['monthly_price']), 'currency': cast(str | None, row['currency']),
+            'size_sqft': cast(int | float | None, row['size_sqft']), 'price_per_sqft': cast(float | None, row['price_per_sqft']),
+            'bedrooms': cast(int | float | None, row['bedrooms']), 'bathrooms': cast(int | float | None, row['bathrooms']),
+            'unit_label': cast(str | None, row['unit_label']), 'unit_floor': cast(int | None, row['unit_floor']),
+            'unit_level': cast(Level | None, row['unit_level']), 'photo_count': cast(int, row['photo_count']),
+            'latitude': cast(float | None, row['latitude']), 'longitude': cast(float | None, row['longitude']),
+            'nearest_station': cast(str | None, row['nearest_station']), 'station_distance_km': cast(float | None, row['station_distance_km']),
+            'place_distances_km': cast(dict[str, float], loads(cast(str, row['place_distances_km'])))}
 
 
 def require_text(value: object, name: str, *, limit: int = 20000) -> str:
@@ -352,11 +360,13 @@ def require_text(value: object, name: str, *, limit: int = 20000) -> str:
     return value.strip()
 
 
-def require_url(value: object) -> None:
+def require_url(value: object) -> str:
     _ = require_text(value, 'URL')
-    parsed = urlsplit(cast(str, value))
+    url = cast(str, value)
+    parsed = urlsplit(url)
     if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError('URLs must use http or https without credentials.')
+    return url
 
 
 def validate_listing(listing: object) -> Listing:
@@ -366,31 +376,35 @@ def validate_listing(listing: object) -> Listing:
         raise ValueError('A listing needs id and sources, with only documented listing fields.')
     record: dict[str, object] = {**dict.fromkeys(fields), 'amenities': [], 'photos': [], 'agent': {},
                                  'first_seen': datetime.now(timezone.utc).date().isoformat(), 'status': 'available', **listing}
+    texts: dict[str, str | None] = {}
     for field in fields - {'price', 'agent', 'amenities', 'photos', 'sources'}:
         value = record[field]
         if value is not None:
             if not isinstance(value, str):
                 raise ValueError(f'{field} must be text or null.')
-            record[field] = value.strip() or None
-    identifier = require_text(record['id'], 'id')
+            value = value.strip() or None
+        texts[field] = value
+    identifier = require_text(texts['id'], 'id')
     if not re.fullmatch(LISTING_ID, identifier):
         raise ValueError('Listing id must use letters, digits, colons, dots, underscores or hyphens.')
     price = record['price']
     if isinstance(price, str):
-        record['price_note'] = require_text(price, 'Price description', limit=1000)
-        record['price'] = price = None
+        texts['price_note'] = require_text(price, 'Price description', limit=1000)
+        price = None
     if price is not None and (not isinstance(price, (int, float)) or type(price) not in (int, float) or not math.isfinite(price) or price < 0):
         raise ValueError('Price must be a finite nonnegative number.')
-    if record['rental_period'] not in (None, *RENTAL_PERIODS):
+    rental_period = texts['rental_period']
+    if rental_period not in (None, *RENTAL_PERIODS):
         raise ValueError('Rental period must be day, week, month, year or total.')
-    validate_agent(record['agent'])
-    currency = record['currency']
-    if currency is not None and (not isinstance(currency, str) or not re.fullmatch(r'[A-Z]{3}', currency)):
+    agent = validate_agent(record['agent'])
+    currency = texts['currency']
+    if currency is not None and not re.fullmatch(r'[A-Z]{3}', currency):
         raise ValueError('Currency must be a three-letter currency code.')
-    if record['status'] not in ('available', 'unavailable'):
+    status = texts['status']
+    if status not in ('available', 'unavailable'):
         raise ValueError('Status must be available or unavailable.')
-    first_seen = record['first_seen']
-    if not isinstance(first_seen, str) or date.fromisoformat(first_seen).isoformat() != first_seen:
+    first_seen = texts['first_seen']
+    if first_seen is None or date.fromisoformat(first_seen).isoformat() != first_seen:
         raise ValueError('First seen must use YYYY-MM-DD.')
     arrays: dict[str, list[object]] = {}
     for field in ('amenities', 'photos', 'sources'):
@@ -398,19 +412,24 @@ def validate_listing(listing: object) -> Listing:
         if not is_array(value):
             raise ValueError(f'{field} must be an array.')
         arrays[field] = value
+    amenities: list[str] = []
     for amenity in arrays['amenities']:
         _ = require_text(amenity, 'Amenity')
+        amenities.append(cast(str, amenity))
+    photos: list[str] = []
     for photo in arrays['photos']:
-        if not isinstance(photo, str) or not re.fullmatch(r'/media/[A-Za-z0-9._-]+', photo):
-            require_url(photo)
+        photos.append(photo if isinstance(photo, str) and re.fullmatch(r'/media/[A-Za-z0-9._-]+', photo) else require_url(photo))
     if not arrays['sources']:
         raise ValueError('At least one source is required.')
+    sources: list[Source] = []
     for source in arrays['sources']:
         if not is_object(source) or set(source) != {'label', 'url'}:
             raise ValueError('A source needs a label and URL.')
         _ = require_text(source['label'], 'Source label')
-        require_url(source['url'])
-    return cast(Listing, record)
+        sources.append({'label': cast(str, source['label']), 'url': require_url(source['url'])})
+    return {'id': identifier, 'title': texts['title'], 'price': price, 'currency': currency, 'size': texts['size'], 'rooms': texts['rooms'],
+            'address': texts['address'], 'description': texts['description'], 'amenities': amenities, 'photos': photos, 'sources': sources,
+            'first_seen': first_seen, 'status': status, 'rental_period': rental_period, 'agent': agent, 'price_note': texts['price_note']}
 
 
 def require_object(value: object, name: str, keys: Iterable[str]) -> dict[str, object]:
@@ -483,7 +502,7 @@ def validate_listing_sites(sites: object) -> None:
     if not is_array(sites):
         raise ValueError('Listing sites must be an array of URLs.')
     for url in sites:
-        require_url(url)
+        _ = require_url(url)
     if len(set(sites)) != len(sites):
         raise ValueError('Each listing site is named once.')
 
@@ -500,7 +519,7 @@ def validate_viewing_availability(availability: object) -> None:
         except (TypeError, ValueError, ZoneInfoNotFoundError):
             if not available_timezones():
                 raise TimeZoneDataMissing(f'{sys.executable} has no time zone database, so the time zone cannot be checked. '
-                                          'Run the script with a Python that has the tzdata package, such as the one Hermes runs on.') from None
+                                          + 'Run the script with a Python that has the tzdata package, such as the one Hermes runs on.') from None
             raise ValueError('Timezone must be an IANA time zone such as Europe/Berlin.') from None
     weekly, unavailable = fields.get('weekly', []), fields.get('unavailable', [])
     if not is_array(weekly) or not is_array(unavailable):
@@ -555,20 +574,22 @@ def validate_location_priorities(priorities: object) -> None:
 
 def reconcile_area_priorities(saved: Settings, changed: Mapping[str, object]) -> Settings:
     """The settings to save along with changed: the stored location priorities without the areas the criteria no longer name.
-    saved holds every setting after the change. A changed priority for an area the criteria do not name is rejected."""
-    priorities = saved.get('location_priorities')
+    saved holds every setting before the change, and changed the validated settings that replace them. A changed
+    priority for an area the criteria do not name is rejected."""
+    priorities = cast(LocationPriorities, changed['location_priorities']) if 'location_priorities' in changed else saved.get('location_priorities')
     if priorities is None:
         return {}
-    areas = saved.get('criteria', {}).get('location', [])
+    criteria = cast(Criteria, changed['criteria']) if 'criteria' in changed else saved.get('criteria', {})
+    areas = criteria.get('location', [])
     unknown = [area for area in priorities.get('areas', {}) if area not in areas]
     if 'location_priorities' in changed and unknown:
         raise ValueError(f'Location priorities name areas the criteria do not: {", ".join(unknown)}.')
     if not unknown:
         return {}
-    return {'location_priorities': {**priorities, 'areas': {area: importance for area, importance in priorities['areas'].items() if area in areas}}}
+    return {'location_priorities': {**priorities, 'areas': {area: importance for area, importance in priorities.get('areas', {}).items() if area in areas}}}
 
 
-SETTINGS: dict[str, Callable[[object], None]] = {
+SETTINGS: dict[str, Callable[[object], object]] = {
     'criteria': validate_criteria,
     'preferences': validate_preferences,
     'listing_sites': validate_listing_sites,
@@ -601,13 +622,18 @@ def viewing_time(value: object) -> str:
     return time.astimezone(timezone.utc).isoformat()
 
 
-def validate_agent(agent: object) -> None:
-    if not is_object(agent) or not set(agent) <= {'name', 'email', 'phone', 'contact_form'}:
+def validate_agent(agent: object) -> Agent:
+    if not is_object(agent) or not set(agent) <= set(AGENT_FIELDS):
         raise ValueError('Agent accepts name, email, phone and contact_form.')
     for name, value in agent.items():
         _ = require_text(value, name, limit=1000)
         if name == 'contact_form':
-            require_url(value)
+            _ = require_url(value)
+    validated: Agent = {}
+    for field in AGENT_FIELDS:
+        if field in agent:
+            validated[field] = cast(str, agent[field])
+    return validated
 
 
 def encoder_manifest(path: str | Path | None = None) -> EncoderManifest | None:
@@ -680,7 +706,8 @@ def apply_criteria(connection: sqlite3.Connection, judge: Judge) -> CriteriaAppl
     rows = [(cast(str, row['id']), bool(cast(int, row['matches_criteria'])), cast(str | None, row['features']))
             for row in select(connection, 'SELECT l.id, l.matches_criteria, CASE WHEN r.fingerprint = l.fingerprint THEN r.features END AS features '
                               + 'FROM listings l LEFT JOIN ranking r ON r.listing_id = l.id ORDER BY l.rowid')]
-    verdicts = {identifier: judge(criteria, cast(RankingFeatures, loads(features)) if features else None) for identifier, _, features in rows}
+    verdicts: dict[str, CriteriaVerdict] = {identifier: judge(criteria, cast(RankingFeatures, loads(features)) if features else None)
+                                            for identifier, _, features in rows}
     flipped = [identifier for identifier, matches, _ in rows if (verdicts[identifier] == 'inside') != matches]
     _ = connection.executemany('UPDATE listings SET matches_criteria = ? WHERE id = ?', [(verdicts[identifier] == 'inside', identifier) for identifier in flipped])
     changed = {verdict: [identifier for identifier in flipped if verdicts[identifier] == verdict] for verdict in ('outside', 'pending', 'inside')}
@@ -777,14 +804,14 @@ class ListingStore:
         if not settings or not set(settings) <= set(SETTINGS):
             raise ValueError(f'Settings are {", ".join(SETTINGS)}, and at least one is required.')
         for name, value in settings.items():
-            SETTINGS[name](value)
+            _ = SETTINGS[name](value)
         if judge is not None and 'criteria' not in settings:
             raise ValueError('A judge is given only with the criteria it applies.')
         with self.connect(write=True) as connection:
             if 'criteria' in settings and judge is None and select_one(connection, 'SELECT 1 FROM listings LIMIT 1'):
                 raise ValueError('Stored listings must be judged against new criteria. Give a judge.')
             saved = settings_of(select(connection, 'SELECT * FROM settings'))
-            settings = {**settings, **reconcile_area_priorities(cast(Settings, {**saved, **settings}), settings)}
+            settings = {**settings, **reconcile_area_priorities(saved, settings)}
             _ = connection.executemany('INSERT INTO settings VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
                                        [(name, json.dumps(value, allow_nan=False)) for name, value in settings.items()])
             if {'places', 'transit_feed'} & set(settings):
@@ -819,7 +846,9 @@ class ListingStore:
         with self.connect() as connection:
             url = configured_transit_feed(connection)
             fetched = select_one(connection, 'SELECT * FROM transit_feed WHERE url = ?', (url,))
-            stations = [cast(Station, dict(row)) for row in select(connection, 'SELECT * FROM stations ORDER BY id')] if fetched else []
+            stations: list[Station] = [{'id': cast(str, row['id']), 'name': cast(str, row['name']), 'latitude': cast(float, row['latitude']),
+                                        'longitude': cast(float, row['longitude'])}
+                                       for row in select(connection, 'SELECT * FROM stations ORDER BY id')] if fetched else []
             return {'url': url, 'fetched_at': cast(str, fetched['fetched_at']) if fetched else None, 'stations': stations}
 
     def save_stations(self, url: str, stations: Iterable[Station]) -> None:
@@ -888,10 +917,9 @@ class ListingStore:
         with the content fingerprint, first_seen and days_since_first_seen counted to today, a date (by default today in UTC)."""
         today = today or datetime.now(timezone.utc).date()
         with self.connect() as connection:
-            return {cast(str, row['listing_id']): cast(StoredCodeFeatures, {
-                        **{name: cast(object, row[name]) for name in ('fingerprint', *FEATURES, 'first_seen')},
-                        'place_distances_km': loads(cast(str, row['place_distances_km'])),
-                        'days_since_first_seen': (today - date.fromisoformat(cast(str, row['first_seen']))).days})
+            return {cast(str, row['listing_id']): {**code_features_record(row), 'fingerprint': cast(str, row['fingerprint']),
+                                                   'first_seen': cast(str, row['first_seen']),
+                                                   'days_since_first_seen': (today - date.fromisoformat(cast(str, row['first_seen']))).days}
                     for row in select(connection, '''SELECT c.*, l.first_seen FROM code_features c
                         JOIN listings l ON l.id = c.listing_id AND l.fingerprint = c.fingerprint ORDER BY c.listing_id''')}
 
@@ -913,7 +941,7 @@ class ListingStore:
             attempts = {cast(str, row['read']): cast(int, row['attempts']) for row in select(connection, 'SELECT * FROM model_reads')}
             records = {cast(str, row['listing_id']): row for row in select(
                 connection, 'SELECT r.* FROM feature_records r JOIN listings l ON l.id = r.listing_id AND l.fingerprint = r.fingerprint')}
-            code = {cast(str, row['listing_id']): cast(CodeFeatures, {**dict(row), 'place_distances_km': loads(cast(str, row['place_distances_km']))})
+            code = {cast(str, row['listing_id']): code_features_record(row)
                     for row in select(connection, 'SELECT c.* FROM code_features c JOIN listings l ON l.id = c.listing_id AND l.fingerprint = c.fingerprint')}
             ranking = {cast(str, row['listing_id']): row for row in select(
                 connection, 'SELECT r.* FROM ranking r JOIN listings l ON l.id = r.listing_id AND l.fingerprint = r.fingerprint')}
@@ -924,13 +952,15 @@ class ListingStore:
             noted = user_noted(connection)
             note_readings = {cast(int, row['note_id']): (cast(str, row['listing_id']), cast(NoteReading, loads(cast(str, row['reading']))))
                              for row in select(connection, 'SELECT r.*, n.listing_id FROM note_readings r JOIN notes n ON n.id = r.note_id ORDER BY r.note_id')}
-            preference_readings = {(cast(Direction, row['kind']), cast(str, row['phrase'])): cast(list[FeatureReading], loads(cast(str, row['features'])))
-                                   for row in select(connection, 'SELECT * FROM preference_readings')}
+            preference_readings: dict[tuple[Direction, str], list[FeatureReading]] = {
+                (cast(Direction, row['kind']), cast(str, row['phrase'])): cast(list[FeatureReading], loads(cast(str, row['features'])))
+                for row in select(connection, 'SELECT * FROM preference_readings')}
             pairs = answered_pairs(connection)
             tags = sorted(self.known_tags(connection))
             visits: list[Visit] = []
             if include_signals:
-                visits = [cast(Visit, dict(row)) for row in select(connection, '''SELECT s.listing_id, s.visit_id,
+                visits = [{'listing_id': cast(str, row['listing_id']), 'visit_id': cast(str, row['visit_id']), 'duration_ms': cast(int, row['duration_ms'])}
+                          for row in select(connection, '''SELECT s.listing_id, s.visit_id,
                     SUM(COALESCE(s.duration_ms, 0)) AS duration_ms FROM implicit_signals s
                     JOIN listings l ON l.id = s.listing_id AND l.fingerprint = s.fingerprint
                     GROUP BY s.listing_id, s.fingerprint, s.visit_id
@@ -956,7 +986,7 @@ class ListingStore:
                     'record': cast(StoredExtraction, loads(cast(str, record['extraction']))) if record else None,
                     'judgments': cast(dict[str, Judgment], loads(cast(str, record['preferences']))) if record else {},
                     'hypotheses': hypotheses.get(identifier, {}),
-                    'code': code.get(identifier, {}),
+                    'code': code[identifier],
                     'areas': facts[identifier].get('areas') if identifier in facts else None,
                     'given_up': not record and attempts.get(extraction_read(identifier, fingerprint), 0) >= READ_ATTEMPTS,
                     'rank': cast(int | None, ranking[identifier]['rank']) if identifier in ranking else None,
@@ -1088,7 +1118,7 @@ class ListingStore:
             if not is_object(event) or event.get('kind') not in ('open', 'dwell', 'photo', 'close', 'impression'):
                 raise ValueError('Signal kind must be open, dwell, photo, close or impression.')
             kind = event['kind']
-            extra = {'duration_ms'} if kind == 'dwell' else {'photo_url'} if kind == 'photo' else {'rank'} if kind == 'impression' else set()
+            extra: set[str] = {'duration_ms'} if kind == 'dwell' else {'photo_url'} if kind == 'photo' else {'rank'} if kind == 'impression' else set()
             if set(event) != fields | extra:
                 raise ValueError('Signal fields do not match its kind.')
             for name in fields:
@@ -1113,7 +1143,7 @@ class ListingStore:
             if kind == 'photo':
                 _ = require_text(photo, 'photo_url')
                 if not re.fullmatch(r'/media/[A-Za-z0-9._-]+', cast(str, photo)):
-                    require_url(photo)
+                    _ = require_url(photo)
             # The field check leaves duration_ms only on a dwell and photo_url only on a photo, where the checks above settled them.
             rows.append((texts['event_id'], texts['visit_id'], texts['listing_id'], texts['fingerprint'],
                          texts['kind'], texts['occurred_at'], cast(int | None, duration), cast(str | None, photo), rank))
@@ -1160,11 +1190,11 @@ class ListingStore:
                                    (rerank_id, now, json.dumps(result['check'], allow_nan=False)))
             return rerank_id
 
-    def last_rerank(self) -> RerankRecord | None:
+    def last_rerank(self) -> Rerank | None:
         """The latest rerank as rerank describes it, or None before the first."""
         return self.rerank(None)
 
-    def rerank(self, rerank_id: int | None) -> RerankRecord | None:
+    def rerank(self, rerank_id: int | None) -> Rerank | None:
         """The summary of a rerank, the latest when rerank_id is None, with its id, the time it finished and its review
         pass: the review's state, the times it was handed to the agent, when its state last changed, and its result once
         it has one. The states are waiting, running (handed to the agent), done, failed and superseded (a later rerank
@@ -1175,19 +1205,19 @@ class ListingStore:
                              (rerank_id, rerank_id))
             if not row:
                 return None
-            state, reviewed = cast(ReviewStatus | None, row['state']), cast(str | None, row['review'])
-            review: ReviewRecord | None = {'state': state, 'attempts': cast(int, row['attempts']), 'updated_at': cast(str, row['updated_at']),
-                                           'result': loads(reviewed) if reviewed else None} if state else None
+            state, reviewed = cast(ReviewStateName | None, row['state']), cast(str | None, row['review'])
+            review: ReviewState | None = {'state': state, 'attempts': cast(int, row['attempts']), 'updated_at': cast(str, row['updated_at']),
+                                          'result': cast(ReviewResult | ReviewFailure, loads(reviewed)) if reviewed else None} if state else None
             return {**cast(RerankSummary, loads(cast(str, row['result']))), 'id': cast(int, row['id']), 'finished_at': cast(str, row['finished_at']),
                     'review': review}
 
-    def review_snapshot(self, rerank_id: int) -> RankingCheck | None:
+    def review_snapshot(self, rerank_id: int) -> ReviewSnapshot | None:
         """What a waiting review reads as the rerank stored it, the scores of its leave-one-out check and the inputs its
         task describes, or None once the review ended."""
         with self.connect() as connection:
             row = select_one(connection, 'SELECT snapshot FROM reviews WHERE rerank_id = ?', (rerank_id,))
             stored = cast(str | None, row['snapshot']) if row else None
-            return cast(RankingCheck, loads(stored)) if stored else None
+            return cast(ReviewSnapshot, loads(stored)) if stored else None
 
     def ranked_listings(self) -> dict[str, RankedEntry]:
         """Each listing the latest rerank ranked whose content has not changed since: its rank, reason, explanation and
@@ -1216,7 +1246,7 @@ class ListingStore:
                                    + "WHERE rerank_id = ? AND state IN ('waiting', 'running')",
                                    (json.dumps({'error': error}, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), rerank_id))
 
-    def save_review(self, rerank_id: int, ranks: Mapping[str, int], reasons: Mapping[str, Reason], result: object, *,
+    def save_review(self, rerank_id: int, ranks: Mapping[str, int], reasons: Mapping[str, Reason], result: ReviewResult, *,
                     connection: sqlite3.Connection | None = None) -> None:
         """Applies a saved review in one transaction: each listing in ranks gets its rank and each in reasons its
         reason, and the review is done with result. A listing whose content changed since the rerank keeps no rank, as
@@ -1248,7 +1278,9 @@ class ListingStore:
     def unread_notes(self) -> list[UnreadNote]:
         """The user's notes without a reading, oldest first."""
         with self.connect() as connection:
-            return [cast(UnreadNote, dict(row)) for row in select(connection, '''SELECT n.id, n.listing_id, n.text, n.created_at
+            return [{'id': cast(int, row['id']), 'listing_id': cast(str, row['listing_id']), 'text': cast(str, row['text']),
+                     'created_at': cast(str, row['created_at'])}
+                    for row in select(connection, '''SELECT n.id, n.listing_id, n.text, n.created_at
                 FROM notes n LEFT JOIN note_readings r ON r.note_id = n.id
                 WHERE n.role = 'user' AND r.note_id IS NULL ORDER BY n.id''')]
 
@@ -1267,8 +1299,9 @@ class ListingStore:
 
     def preference_readings(self) -> dict[tuple[Direction, str], list[FeatureReading]]:
         with self.connect() as connection:
-            readings = {(cast(Direction, row['kind']), cast(str, row['phrase'])): cast(list[FeatureReading], loads(cast(str, row['features'])))
-                        for row in select(connection, 'SELECT * FROM preference_readings')}
+            readings: dict[tuple[Direction, str], list[FeatureReading]] = {
+                (cast(Direction, row['kind']), cast(str, row['phrase'])): cast(list[FeatureReading], loads(cast(str, row['features'])))
+                for row in select(connection, 'SELECT * FROM preference_readings')}
             return readings if self.encoder_state(connection)['enabled'] else without_photo_features(readings)
 
     def note_readings(self) -> dict[int, NoteReading]:
@@ -1316,10 +1349,10 @@ class ListingStore:
                 _ = connection.execute('''INSERT INTO note_readings VALUES (?, ?, ?) ON CONFLICT(note_id)
                     DO UPDATE SET reading = excluded.reading, read_at = excluded.read_at''', (note_id, encoded, read_at))
 
-    def answer_pair(self, chosen: str, other: str) -> None:
+    def answer_pair(self, chosen: object, other: object) -> None:
         """Records the user's answer to a pairwise question: chosen over other."""
         with self.connect(write=True) as connection:
-            self.require_pair(connection, chosen, other)
+            chosen, other = self.require_pair(connection, chosen, other)
             previous = select_one(connection, '''SELECT chosen FROM pairwise_answers
                 WHERE (chosen = ? AND other = ?) OR (chosen = ? AND other = ?)''', (chosen, other, other, chosen))
             if previous:
@@ -1331,17 +1364,21 @@ class ListingStore:
                                    (chosen, other, datetime.now(timezone.utc).isoformat()))
             self.advance_pairwise_skips(connection)
 
-    def require_pair(self, connection: sqlite3.Connection, first: str, second: str) -> None:
+    def require_pair(self, connection: sqlite3.Connection, first: object, second: object) -> tuple[str, str]:
+        """The two listings of a pairwise question, once both are the ids of different listings the ranking can compare."""
         _ = require_text(first, 'First listing')
         _ = require_text(second, 'Second listing')
-        if first == second:
+        # require_text accepted both, so they are text.
+        pair = cast(str, first), cast(str, second)
+        if pair[0] == pair[1]:
             raise ValueError('A pairwise question compares two different listings.')
-        for identifier in (first, second):
+        for identifier in pair:
             self.require_listing(connection, identifier)
             available = select_one(connection, f'''SELECT 1 FROM listings l LEFT JOIN feedback f ON f.listing_id = l.id
                 WHERE l.id = ? AND {RANKABLE}''', (identifier,))
             if not available:
                 raise ValueError('This listing is no longer available to compare. Refresh Compare.')
+        return pair
 
     @staticmethod
     def advance_pairwise_skips(connection: sqlite3.Connection) -> None:
@@ -1386,11 +1423,10 @@ class ListingStore:
                                    + 'WHERE gateway IS NULL AND gallery IS NULL AND conversation IS NULL',
                                    (datetime.now(timezone.utc).isoformat(), reason))
 
-    def skip_pair(self, first: str, second: str) -> None:
+    def skip_pair(self, first: object, second: object) -> None:
         """Suppresses this pair until twenty other questions have been answered or skipped."""
         with self.connect(write=True) as connection:
-            self.require_pair(connection, first, second)
-            first, second = sorted((first, second))
+            first, second = sorted(self.require_pair(connection, first, second))
             if select_one(connection, 'SELECT 1 FROM pairwise_skips WHERE first = ? AND second = ?', (first, second)):
                 return
             if select_one(connection, '''SELECT 1 FROM pairwise_answers
@@ -1412,14 +1448,14 @@ class ListingStore:
         them from their code features."""
         return {listing['id'] for listing in self.ranking_inputs()['listings'] if listing['given_up']}
 
-    def rank(self, listing_id: str, fingerprint: str, rank: object, reason_features: object) -> None:
+    def rank(self, listing_id: str, fingerprint: str, rank: object, reason_features: FeatureReason | ReasonText) -> None:
         """Sets one listing's rank and a reason whose features part is reason_features, either {'for': [...], 'against':
         [...]} or {'text': ...}."""
         if type(rank) is not int or rank < 1:
             raise ValueError('Rank must be a positive integer.')
         if not is_object(reason_features) or set(reason_features) not in ({'for', 'against'}, {'text'}):
             raise ValueError('A reason names its features as for and against lists or as a text.')
-        reason = compose_reason(cast(FeatureReason | ReasonText, reason_features), code_only=False, similar_favorite=None)
+        reason = compose_reason(reason_features, code_only=False, similar_favorite=None)
         with self.connect(write=True) as connection:
             self.require_fingerprint(connection, listing_id, fingerprint)
             _ = connection.execute('''INSERT INTO ranking (listing_id, fingerprint, rank, reason) VALUES (?, ?, ?, ?)
@@ -1555,9 +1591,9 @@ class ListingStore:
                 'content_fingerprint': fingerprint, 'analysis_current': bool(ranking and cast(str, ranking['fingerprint']) == fingerprint),
                 'favorite': bool(feedback and cast(int, feedback['favorite'])), 'dismissed': bool(feedback and cast(int, feedback['dismissed'])),
                 'contact': contact_record(contact) if contact else None,
-                'notes_total': notes_total, 'notes': [cast(NoteRecord, dict(note)) for note in notes],
-                'correspondence_total': correspondence_total, 'correspondence': [cast(CorrespondenceRecord, dict(message)) for message in correspondence],
-                'viewings_total': viewings_total, 'viewings': [cast(ViewingRecord, dict(viewing)) for viewing in viewings],
+                'notes_total': notes_total, 'notes': [note_record(note) for note in notes],
+                'correspondence_total': correspondence_total, 'correspondence': [correspondence_record(message) for message in correspondence],
+                'viewings_total': viewings_total, 'viewings': [viewing_record(viewing) for viewing in viewings], 'unranked_reason': None,
             }
             explain_pending_rankings(connection, [detail])
             if detail['rank'] is None:
@@ -1586,19 +1622,18 @@ class ListingStore:
                                    (message, now, request))
             return inserted(connection.execute("INSERT INTO chat_messages (role, content, status, created_at) VALUES ('agent', '', 'running', ?)", (now,)))
 
-    def update_chat(self, message_id: int, *, content: str | None = None, status: MessageStatus | None = None, events: list[ToolEvent] | None = None,
-                    prompt: ChatPrompt | None | Unchanged = UNCHANGED, error: str | None | Unchanged = UNCHANGED, session_id: str | None = None,
-                    admission_id: str | None = None) -> None:
+    def update_chat(self, message_id: int, **changes: Unpack[ChatChanges]) -> None:
+        """Changes a reply's stored message: each change given replaces the stored value, and a prompt or error given
+        as None clears it."""
+        events, prompt, session_id = changes.get('events'), changes.get('prompt'), changes.get('session_id')
         with self.connect() as connection:
             _ = connection.execute('BEGIN IMMEDIATE')
-            if status is not None and status not in ('running', 'complete', 'error'):
-                raise ValueError('Unknown message status.')
             _ = connection.execute('''UPDATE chat_messages SET content = COALESCE(?, content), status = COALESCE(?, status),
                 events = COALESCE(?, events), prompt = CASE WHEN ? THEN ? ELSE prompt END,
                 error = CASE WHEN ? THEN ? ELSE error END, admission_id = COALESCE(?, admission_id) WHERE id = ?''',
-                (content, status, json.dumps(events) if events is not None else None,
-                 prompt is not UNCHANGED, json.dumps(prompt) if prompt is not UNCHANGED and prompt is not None else None,
-                 error is not UNCHANGED, error if error is not UNCHANGED else None, admission_id, message_id))
+                (changes.get('content'), changes.get('status'), json.dumps(events) if events is not None else None,
+                 'prompt' in changes, json.dumps(prompt) if prompt is not None else None,
+                 'error' in changes, changes.get('error'), changes.get('admission_id'), message_id))
             if session_id:
                 _ = connection.execute('UPDATE notes_session SET session_id = ? WHERE id = 1', (session_id,))
 
@@ -1606,8 +1641,12 @@ class ListingStore:
         validate_page(page, 20)
         with self.connect() as connection:
             rows = select(connection, 'SELECT * FROM chat_messages ORDER BY id DESC LIMIT 20 OFFSET ?', ((page - 1) * 20,))
-            messages = [cast(ChatMessage, {**dict(row), 'events': loads(cast(str, row['events'])),
-                                           'prompt': loads(prompt) if (prompt := cast(str | None, row['prompt'])) else None}) for row in rows]
+            messages: list[ChatMessage] = [
+                {'id': cast(int, row['id']), 'role': cast(str, row['role']), 'content': cast(str, row['content']),
+                 'status': cast(MessageStatus, row['status']), 'events': cast(list[ToolEvent], loads(cast(str, row['events']))),
+                 'prompt': cast(ChatPrompt, loads(prompt)) if (prompt := cast(str | None, row['prompt'])) else None,
+                 'error': cast(str | None, row['error']), 'created_at': cast(str, row['created_at']),
+                 'request_id': cast(str | None, row['request_id']), 'admission_id': cast(str | None, row['admission_id'])} for row in rows]
             return {'messages': list(reversed(messages)), 'total': cast(int, single(connection, 'SELECT COUNT(*) FROM chat_messages')[0]),
                     'active': bool(select_one(connection, "SELECT 1 FROM chat_messages WHERE status = 'running'")),
                     'session_id': cast(str | None, single(connection, 'SELECT session_id FROM notes_session WHERE id = 1')[0])}
@@ -1672,7 +1711,9 @@ class ListingStore:
             ORDER BY julianday(s.occurred_at) DESC, s.rowid DESC LIMIT 1''', (listing, occurred_at))
         if visit is None:
             return []
-        return [cast(Impression, dict(row)) for row in select(connection, '''SELECT listing_id, fingerprint, visit_id, shown_rank, occurred_at
+        return [{'listing_id': cast(str, row['listing_id']), 'fingerprint': cast(str, row['fingerprint']), 'visit_id': cast(str, row['visit_id']),
+                 'shown_rank': cast(int, row['shown_rank']), 'occurred_at': cast(str, row['occurred_at'])}
+                for row in select(connection, '''SELECT listing_id, fingerprint, visit_id, shown_rank, occurred_at
             FROM (SELECT s.*, row_number() OVER (PARTITION BY s.listing_id ORDER BY julianday(s.occurred_at) DESC, s.rowid DESC) AS latest
                 FROM implicit_signals s JOIN listings l ON l.id = s.listing_id AND l.fingerprint = s.fingerprint
                 WHERE s.kind = 'impression' AND s.visit_id = ? AND s.shown_rank IS NOT NULL
@@ -1760,12 +1801,12 @@ class ListingStore:
 
     def unhandled_answers(self, listing_id: str) -> list[QuestionRecord]:
         with self.connect() as connection:
-            return [cast(QuestionRecord, dict(row)) for row in select(
+            return [question_record(row) for row in select(
                 connection, 'SELECT * FROM questions WHERE listing_id = ? AND answered_at IS NOT NULL AND handled = 0 ORDER BY id', (listing_id,))]
 
     def open_questions(self, listing_id: str | None = None) -> list[QuestionRecord]:
         with self.connect() as connection:
-            return [cast(QuestionRecord, dict(row)) for row in select(
+            return [question_record(row) for row in select(
                 connection, 'SELECT * FROM questions WHERE answered_at IS NULL AND (? IS NULL OR listing_id = ?) ORDER BY id', (listing_id, listing_id))]
 
     def answer_question(self, question_id: int, answer: object, *, share: object = None) -> None:
@@ -1797,7 +1838,7 @@ class ListingStore:
         elif error is not None:
             raise ValueError('Only a failed contact can have an error.')
         if agent is not None:
-            validate_agent(agent)
+            _ = validate_agent(agent)
         if subject is not None:
             subject = require_text(subject, 'Subject', limit=500)
         with self.connect(write=True) as connection:
@@ -1820,12 +1861,12 @@ class ListingStore:
 
     def approved_information(self, listing_id: str, purpose: str) -> list[ApprovalRecord]:
         with self.connect() as connection:
-            return [cast(ApprovalRecord, dict(row)) for row in select(
+            return [approval_record(row) for row in select(
                 connection, 'SELECT * FROM approvals WHERE listing_id = ? AND purpose = ? AND revoked_at IS NULL ORDER BY id', (listing_id, purpose))]
 
     def approvals(self, listing_id: str) -> list[ApprovalRecord]:
         with self.connect() as connection:
-            return [cast(ApprovalRecord, dict(row)) for row in select(
+            return [approval_record(row) for row in select(
                 connection, 'SELECT * FROM approvals WHERE listing_id = ? AND revoked_at IS NULL ORDER BY id', (listing_id,))]
 
     def revoke_approval(self, approval_id: int) -> None:
@@ -1857,16 +1898,15 @@ class ListingStore:
 
     def agreed_viewings(self) -> list[ViewingRecord]:
         with self.connect() as connection:
-            return [cast(ViewingRecord, dict(row)) for row in select(connection, "SELECT * FROM viewings WHERE status = 'agreed' ORDER BY time, id")]
+            return [viewing_record(row) for row in select(connection, "SELECT * FROM viewings WHERE status = 'agreed' ORDER BY time, id")]
 
     def scheduled_viewings(self) -> list[ViewingRecord]:
         with self.connect() as connection:
-            return [cast(ViewingRecord, dict(row))
-                    for row in select(connection, "SELECT * FROM viewings WHERE status IN ('agreed', 'booked') ORDER BY time, id")]
+            return [viewing_record(row) for row in select(connection, "SELECT * FROM viewings WHERE status IN ('agreed', 'booked') ORDER BY time, id")]
 
     def canceled_viewing_events(self) -> list[ViewingRecord]:
         with self.connect() as connection:
-            return [cast(ViewingRecord, dict(row)) for row in select(
+            return [viewing_record(row) for row in select(
                 connection, "SELECT * FROM viewings WHERE status = 'canceled' AND calendar_event_id IS NOT NULL ORDER BY time, id")]
 
     def record_booking(self, viewing_id: str, time: str, details: str, calendar_event_id: object) -> bool:

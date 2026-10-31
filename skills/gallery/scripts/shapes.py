@@ -15,6 +15,10 @@ class Source(TypedDict):
     url: str
 
 
+AgentField = Literal['name', 'email', 'phone', 'contact_form']
+AGENT_FIELDS: tuple[AgentField, ...] = ('name', 'email', 'phone', 'contact_form')
+
+
 class Agent(TypedDict, total=False):
     name: str
     email: str
@@ -63,6 +67,9 @@ class Criteria(TypedDict, total=False):
     rooms: Range
     move_in: str | None
     other: list[str]
+
+
+PreferenceKind = Literal['likes', 'dislikes']
 
 
 class Preferences(TypedDict, total=False):

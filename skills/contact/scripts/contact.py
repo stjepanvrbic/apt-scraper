@@ -49,8 +49,8 @@ sys.path.insert(0, str(SKILLS / 'account-connections' / 'scripts'))
 
 import connections  # noqa: E402
 from scratch import read_scratch_object  # noqa: E402
-from shapes import Listing, ViewingAvailability, is_array, is_object, loads  # noqa: E402
-from store import (VIEWING_MINUTES, WEEKDAYS, ContactRecord, ListingDetail, ListingStore, QuestionRecord, ViewingConflict,  # noqa: E402
+from shapes import AgentField, Listing, ViewingAvailability, is_array, is_object, loads  # noqa: E402
+from store import (VIEWING_MINUTES, WEEKDAYS, ContactRecord, DueReason, ListingDetail, ListingStore, QuestionRecord, ViewingConflict,  # noqa: E402
                    ViewingRecord, store_path, viewing_time)
 
 NOT_CONNECTED = 3
@@ -58,7 +58,6 @@ WAITING_FOR_USER = 4
 COMMAND_TIMEOUT_SECONDS = 120
 REQUIRE_TIMEOUT_SECONDS = 200
 CHANNEL_LABELS = {'gmail': 'Gmail', 'imessage': 'iMessage'}
-AgentField = Literal['name', 'email', 'phone', 'contact_form']
 AGENT_DETAILS: tuple[tuple[AgentField, str], ...] = (('name', 'Listing agent'), ('email', 'Email'), ('phone', 'Phone'),
                                                       ('contact_form', 'Contact form'))
 LISTING_FACTS = ('id', 'title', 'price', 'price_note', 'currency', 'rental_period', 'size', 'rooms', 'address',
@@ -129,7 +128,7 @@ class CancelResult(TypedDict):
 
 class DueItem(TypedDict):
     """A contact that needs action, with what the agent needs to act on it."""
-    reason: Literal['reply', 'answer', 'start']
+    reason: DueReason
     listing: dict[str, object]
     contact: ContactRecord | None
     correspondence: list[dict[str, object]]

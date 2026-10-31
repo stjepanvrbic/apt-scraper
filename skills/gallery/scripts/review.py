@@ -29,7 +29,7 @@ from collections import Counter
 from collections.abc import Container, Iterable, Mapping, Sequence
 from typing import Literal, NotRequired, TypedDict, cast
 
-from record import Extraction
+from record import RecordValues, Tags
 from scoring import (DIRECTIONS, Contribution, Direction, Explanation, FeatureReading, FeatureReason, HeldOutSummary, RankedListing, RankingCheck,
                      RankingInputs, RankingListing, RankingResult, RankingSummary, Reason, SimilarFavorite, compose_reason, expressed,
                      feature_reason, prior_means, stated_phrases, summary_of)
@@ -242,7 +242,7 @@ class Rerank(RankingSummary):
     review: ReviewState | None
 
 
-def citable_values(explanation: Explanation, record: Extraction | None) -> list[str]:
+def citable_values(explanation: Explanation, record: Tags | None) -> list[str]:
     """What a reason may cite for a listing: each value its explanation states, and the traits and concerns of its
     record."""
     values = [part['value'] for part in shown_contributions(explanation) if part['value'] is not None]
@@ -277,7 +277,7 @@ def tag_counts(inputs: RankingInputs) -> dict[str, int]:
     return dict(sorted(((tag, used[tag]) for tag in inputs.get('tags', [])), key=lambda item: (-item[1], item[0])))
 
 
-def record_digest(record: Extraction | None) -> RecordDigest | None:
+def record_digest(record: RecordValues | None) -> RecordDigest | None:
     if record is None:
         return None
     return {'summary': record['summary'], 'traits': record['traits'], 'concerns': record['concerns']}

@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from typing import NotRequired, TypedDict, cast
 
 from code_features import RankingFeatures
-from shapes import Agent, Listing, ListingStatus, RentalPeriod
+from shapes import Agent, Criteria, Listing, ListingStatus, LocationPriorities, Place, Preferences, RentalPeriod, Settings, ViewingAvailability
 
 
 RANKING_EXCLUSION = """CASE
@@ -86,7 +86,7 @@ class SnapshotListing(Listing):
 
 class Snapshot(TypedDict):
     listings: list[SnapshotListing]
-    settings: dict[str, object]
+    settings: Settings
 
 
 def validate_page(page: object, page_size: object) -> None:
@@ -173,6 +173,27 @@ def rows(connection: sqlite3.Connection, query: str) -> Iterable[sqlite3.Row]:
     return cast(Iterable[sqlite3.Row], connection.execute(query))
 
 
+def settings_of(rows: Iterable[sqlite3.Row]) -> Settings:
+    """The settings rows as the settings they hold, each validated by its validator before it was stored."""
+    values = {cast(str, row['name']): cast(str, row['value']) for row in rows}
+    settings: Settings = {}
+    if 'criteria' in values:
+        settings['criteria'] = cast(Criteria, json.loads(values['criteria']))
+    if 'preferences' in values:
+        settings['preferences'] = cast(Preferences, json.loads(values['preferences']))
+    if 'listing_sites' in values:
+        settings['listing_sites'] = cast(list[str], json.loads(values['listing_sites']))
+    if 'viewing_availability' in values:
+        settings['viewing_availability'] = cast(ViewingAvailability, json.loads(values['viewing_availability']))
+    if 'places' in values:
+        settings['places'] = cast(list[Place], json.loads(values['places']))
+    if 'location_priorities' in values:
+        settings['location_priorities'] = cast(LocationPriorities, json.loads(values['location_priorities']))
+    if 'transit_feed' in values:
+        settings['transit_feed'] = cast(str, json.loads(values['transit_feed']))
+    return settings
+
+
 def snapshot(connection: sqlite3.Connection) -> Snapshot:
     _ = connection.execute('BEGIN')
     noted = user_noted(connection)
@@ -201,6 +222,4 @@ def snapshot(connection: sqlite3.Connection) -> Snapshot:
         order = 'time, id' if table == 'viewings' else 'id'
         for row in rows(connection, f'SELECT * FROM {table} ORDER BY {order}'):
             listings[cast(str, row['listing_id'])][table].append(cast(dict[str, object], dict(row)))
-    return {'listings': list(listings.values()),
-            'settings': {cast(str, row['name']): cast(object, json.loads(cast(str, row['value'])))
-                         for row in rows(connection, 'SELECT * FROM settings')}}
+    return {'listings': list(listings.values()), 'settings': settings_of(rows(connection, 'SELECT * FROM settings'))}

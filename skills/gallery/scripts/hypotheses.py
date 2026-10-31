@@ -19,7 +19,7 @@ from record import CATEGORIES, RATINGS, Verdict, validate_judgments
 from rerank import RerankStore
 from review import ReviewResult, ReviewTask, review_outcome, review_task, validated_review
 from scoring import Direction, Label, Pair, RankingListing, design, fit_model, label, labeled
-from shapes import Listing, Preferences, is_array, is_object, loads
+from shapes import Listing, PreferenceKind, Preferences, is_array, is_object, loads
 
 MAX_LIVE = 6
 MAX_PROPOSALS = 3
@@ -357,9 +357,9 @@ def decide(store: HypothesisStore, identifier: str, decision: str) -> None:
                 raise ValueError('This hypothesis has no learned direction yet.')
             row = cast(sqlite3.Row | None, connection.execute("SELECT value FROM settings WHERE name = 'preferences'").fetchone())
             preferences = cast(Preferences, loads(cast(str, row['value']))) if row else Preferences(likes=[], dislikes=[])
-            direction = 'likes' if weight >= 0 else 'dislikes'
-            for kind in ('likes', 'dislikes'):
-                preferences[kind] = [candidate for candidate in preferences.get(kind, []) if candidate != phrase]
+            direction: PreferenceKind = 'likes' if weight >= 0 else 'dislikes'
+            preferences['likes'] = [candidate for candidate in preferences.get('likes', []) if candidate != phrase]
+            preferences['dislikes'] = [candidate for candidate in preferences.get('dislikes', []) if candidate != phrase]
             preferences.setdefault(direction, []).append(phrase)
             _ = connection.execute("INSERT INTO settings VALUES ('preferences', ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value", (json.dumps(preferences),))
             for judgment in cast(list[sqlite3.Row], connection.execute('''SELECT j.*, f.preferences FROM hypothesis_judgments j JOIN feature_records f

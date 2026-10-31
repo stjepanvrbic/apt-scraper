@@ -6,7 +6,8 @@ from typing import Unpack
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/search/scripts'))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
 
-from matching import INSIDE, OUTSIDE, PENDING, Features, MustHaves, Unit, criterion_phrases, evaluate, unjudged  # noqa: E402
+from code_features import RankingFeatures, UnitFacts  # noqa: E402
+from matching import INSIDE, OUTSIDE, PENDING, MustHaves, criterion_phrases, evaluate, unjudged  # noqa: E402
 from shapes import Criteria  # noqa: E402
 
 CRITERIA: Criteria = {
@@ -19,13 +20,13 @@ CRITERIA: Criteria = {
 }
 
 
-def unit(**changes: Unpack[Unit]) -> Unit:
-    base: Unit = {'price': 2100, 'period': 'month', 'bedrooms': 2, 'size_sqft': 850, 'available_on': '2026-11-15'}
+def unit(**changes: Unpack[UnitFacts]) -> UnitFacts:
+    base: UnitFacts = {'price': 2100, 'period': 'month', 'bedrooms': 2, 'size_sqft': 850, 'available_on': '2026-11-15'}
     return {**base, **changes}
 
 
-def features(*units: Unit, areas: tuple[str, ...] = ('Lakeview, Chicago, IL',), currency: str = 'USD',
-             must_haves: MustHaves | None = None) -> Features:
+def features(*units: UnitFacts, areas: tuple[str, ...] = ('Lakeview, Chicago, IL',), currency: str = 'USD',
+             must_haves: MustHaves | None = None) -> RankingFeatures:
     return {'facts': {'areas': list(areas), 'currency': currency, 'units': list(units)},
             'must_haves': {'Dogs allowed': True} if must_haves is None else must_haves}
 
@@ -39,7 +40,7 @@ class EvaluateTests(unittest.TestCase):
         self.assertEqual(evaluate(CRITERIA, features(unit())), INSIDE)
 
     def test_each_stated_fact_outside_its_criterion_puts_the_listing_outside(self) -> None:
-        outside: list[Unit] = [{'price': 2500}, {'bedrooms': 1}, {'size_sqft': 600}, {'available_on': '2027-01-01'}]
+        outside: list[UnitFacts] = [{'price': 2500}, {'bedrooms': 1}, {'size_sqft': 600}, {'available_on': '2027-01-01'}]
         for changes in outside:
             with self.subTest(changes=changes):
                 self.assertEqual(evaluate(CRITERIA, features(unit(**changes))), OUTSIDE)

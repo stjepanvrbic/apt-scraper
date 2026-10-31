@@ -84,8 +84,8 @@ def label_clock(connection: sqlite3.Connection, listings: Sequence[RankingListin
             'pair_days': [answered[tuple(pair)] for pair in pairs]}
 
 
-def prediction(inputs: RankingInputs, event: LearningEvent, fitter: Callable[[RankingInputs], Model] = fit_model, *,
-               required_column: str | None = None) -> PairPrediction | RankPrediction | None:
+def prediction[I: RankingInputs](inputs: I, event: LearningEvent, fitter: Callable[[I], Model] = fit_model, *,
+                                 required_column: str | None = None) -> PairPrediction | RankPrediction | None:
     model = fitter(inputs)
     if required_column is not None and model.design.index(required_column) is None:
         return None

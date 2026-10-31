@@ -95,7 +95,7 @@ class CompareTests(CompareTestCase):
         for action in (self.store.answer_pair, self.store.skip_pair):
             for first, second in malformed:
                 with self.subTest(action=action.__name__, first=first), self.assertRaises(ValueError):
-                    action(first, second)  # pyright: ignore[reportArgumentType]  # answer_pair and skip_pair validate the values themselves
+                    action(first, second)
         self.store.set_availability('choice:00', 'unavailable')
         self.store.feedback('choice:01', dismissed=True)
         self.store.set_matches_criteria('choice:02', False)

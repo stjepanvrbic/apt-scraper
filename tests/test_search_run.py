@@ -16,9 +16,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/search/scri
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
 
 from client import Fetcher  # noqa: E402
-from matching import Facts  # noqa: E402
+from code_features import Facts  # noqa: E402
+from matching import evaluate  # noqa: E402
 import search as search_script  # noqa: E402
-from search import AreaSearch, JudgeResult, PendingListing, Report, Search, SiteCard, StatusReport, TasksReport, describe, judge  # noqa: E402
+from search import JudgeResult, PendingListing, Report, Search, StatusReport, TasksReport, describe  # noqa: E402
+from sites import AreaSearch, SiteCard  # noqa: E402
 from shapes import Criteria, LocationPriorities, Place, Preferences, ViewingAvailability  # noqa: E402
 from sites.errors import Blocked, Changed, Gone  # noqa: E402
 from sites.zillow import SiteListing, SourcedListing  # noqa: E402
@@ -316,7 +318,7 @@ class SearchRunTests(unittest.TestCase):
 
     def test_an_area_the_site_does_not_know_is_reported_and_the_others_are_searched(self) -> None:
         _ = self.store.update_settings(criteria={**SETTINGS['criteria'], 'location': ['Atlantis', 'North']},
-                                       location_priorities={'rapid_transit': 'low', 'areas': {'Atlantis': 'low', 'North': 'medium'}}, judge=judge)
+                                       location_priorities={'rapid_transit': 'low', 'areas': {'Atlantis': 'low', 'North': 'medium'}}, judge=evaluate)
         self.site.results = {'North': [1], 'South': []}
         report = self.search()
         self.assertEqual(report['sites'][0]['new'], 1)
@@ -365,7 +367,7 @@ class SearchRunTests(unittest.TestCase):
         self.assertEqual(status['state'], 'failed')
 
     def test_criteria_narrowed_during_a_run_hide_every_listing_outside_them_when_the_run_ends(self) -> None:
-        _ = self.store.update_settings(criteria={**SETTINGS['criteria'], 'other': []}, judge=judge)
+        _ = self.store.update_settings(criteria={**SETTINGS['criteria'], 'other': []}, judge=evaluate)
         self.site.results = {'North': [1, 2, 3], 'South': []}
         _ = self.search()
         self.assertEqual(len(self.shown()), 3)
@@ -373,7 +375,7 @@ class SearchRunTests(unittest.TestCase):
 
         def narrow_then_read(card: SiteCard, client: Fetcher | None) -> tuple[SiteListing, Facts]:
             _ = self.store.update_settings(criteria={**SETTINGS['criteria'], 'other': [], 'price': {'min': None, 'max': 1500, 'currency': 'USD', 'period': 'month'}},
-                                           judge=judge)
+                                           judge=evaluate)
             return original(card, client)
         self.site.read = narrow_then_read
         self.site.results = {'North': [1, 2, 3, 4], 'South': []}

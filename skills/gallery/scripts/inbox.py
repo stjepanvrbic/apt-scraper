@@ -25,8 +25,6 @@ from scratch import read_object
 
 NAME = r'[A-Za-z0-9._-]{1,120}\.json'
 
-Handler = Callable[[dict[str, object]], object]
-"""What a job does with the JSON object of an inbox file of one kind: its result is reported by file name."""
 Rejections = dict[str, str]
 """The error of each rejected inbox file, by file name."""
 BatchKeys = dict[str, list[str]]
@@ -37,15 +35,16 @@ def inbox_directory(job: str) -> Path:
     return (Path(os.environ['HERMES_HOME']) / 'cache' / 'inbox' / job).resolve()
 
 
-def apply(directory: Path, handlers: Mapping[str, Handler]) -> tuple[dict[str, object], Rejections]:
+def apply[T](directory: Path, handlers: Mapping[str, Callable[[dict[str, object]], T]]) -> tuple[dict[str, T], Rejections]:
     """Applies every JSON file in directory with the handler of its kind, the part of its name before the first hyphen,
-    and returns the results of the files applied and the errors of the files rejected, by file name. Only a failure of
+    which does what the job does with the file's JSON object, and returns the results of the files applied and the
+    errors of the files rejected, by file name. Only a failure of
     the machine, an OSError or a locked or unavailable database, stops the run and leaves the file for the next one: the
     handlers check what they use in a path or key first, so any other exception comes from what the agent wrote and
     rejects that file alone. An entry at such a name that is not a regular file, such as the folder write_file creates
     for a path written below it, is removed and rejected, so the agent can write the file itself. An entry whose name
     no task gives is removed unread and unreported, since its name may carry any text."""
-    saved: dict[str, object] = {}
+    saved: dict[str, T] = {}
     rejected: Rejections = {}
     for file in sorted(directory.glob('*.json')) if directory.is_dir() else []:
         if not re.fullmatch(NAME, file.name):

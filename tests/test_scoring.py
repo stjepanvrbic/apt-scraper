@@ -4,7 +4,7 @@ import sys
 import unittest
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import TypedDict, Unpack, override
+from typing import TypedDict, Unpack, cast, override
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
@@ -117,11 +117,11 @@ def neighborhood(count: int, seed: int = 1, **changes: Unpack[EntryChanges]) -> 
 
 
 def record_of(listing: RankingListing) -> Extraction:
-    """The feature record of a listing the test built with one."""
+    """The feature record of a listing the test built with one, which record built whole."""
     extraction = listing['record']
     if extraction is None:
         raise ValueError(f'{listing["id"]} has no record')
-    return extraction
+    return cast(Extraction, extraction)
 
 
 def position(model_design: Design, name: str) -> int:

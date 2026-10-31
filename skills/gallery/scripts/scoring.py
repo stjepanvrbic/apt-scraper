@@ -31,10 +31,10 @@ from dataclasses import dataclass, field as dataclass_field
 from functools import cached_property
 from math import sumprod as dot
 from statistics import fmean, median, pstdev
-from typing import Literal, NotRequired, Self, TypedDict
+from typing import Literal, NotRequired, ReadOnly, Self, TypedDict
 
 from code_features import CodeFeatures, Coordinates, distance_km
-from record import CATEGORIES, NOT_SHOWN, RATINGS, Extraction, Judgment, NotShown, Rating
+from record import CATEGORIES, NOT_SHOWN, RATINGS, Judgment, NotShown, Rating, RecordValues
 from shapes import Settings, is_array, is_object
 
 Direction = Literal['like', 'dislike']
@@ -88,6 +88,15 @@ class PhotoInputs(TypedDict):
     hypotheses: dict[str, str]
 
 
+class Labels(TypedDict):
+    """The user's actions on a listing, which label it for the model. A contact is the request, or whether there is one."""
+    favorite: ReadOnly[bool]
+    dismissed: ReadOnly[bool]
+    contact: ReadOnly[object]
+    user_notes: ReadOnly[bool]
+    paired: ReadOnly[bool]
+
+
 class RankingListing(TypedDict):
     """A listing as ListingStore.ranking_inputs gives it to the model."""
     id: str
@@ -95,7 +104,7 @@ class RankingListing(TypedDict):
     title: str | None
     address: str | None
     rankable: bool
-    record: Extraction | None
+    record: RecordValues | None
     judgments: dict[str, Judgment]
     hypotheses: NotRequired[dict[str, Judgment]]
     code: CodeFeatures
@@ -673,7 +682,7 @@ def in_fit(listing: RankingListing) -> bool:
     return (listing['record'] is not None or listing['given_up']) and (listing['rankable'] or labeled(listing))
 
 
-def labeled(listing: RankingListing) -> bool:
+def labeled(listing: Labels) -> bool:
     return bool(listing['favorite'] or listing['dismissed'] or listing['contact'] or listing['user_notes'] or listing['paired'])
 
 

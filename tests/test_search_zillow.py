@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/search/scripts'))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
 
-from matching import Unit  # noqa: E402
+from code_features import UnitFacts  # noqa: E402
 from shapes import Criteria  # noqa: E402
 from sites import site_for, site_named, zillow  # noqa: E402
 from sites.errors import Blocked, Changed, Gone  # noqa: E402
@@ -113,7 +113,7 @@ def home_page(zpid: int, status: str = 'FOR_RENT', price: int = 2385, latitude: 
     return page({'props': {'pageProps': {'componentProps': {'gdpClientCache': json.dumps({key: {'property': home}})}}}})
 
 
-def unit_fact(price: int | None, bedrooms: int, size: int | None, available_on: str | None, label: str | None, bathrooms: int = 1) -> Unit:
+def unit_fact(price: int | None, bedrooms: int, size: int | None, available_on: str | None, label: str | None, bathrooms: int = 1) -> UnitFacts:
     return {'price': price, 'period': 'month', 'bedrooms': bedrooms, 'bathrooms': bathrooms, 'size_sqft': size, 'available_on': available_on,
             'label': label, 'floor': None}
 

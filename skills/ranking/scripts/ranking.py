@@ -150,7 +150,7 @@ def review_run(store: ListingStore, workspace: Path) -> tuple[list[str], bool]:
         saved, rejected = apply(inbox, {'review': save})
     except (OSError, sqlite3.OperationalError) as error:
         return [f'The review in the inbox could not be saved now, so it stays for the next run. {type(error).__name__}: {error}'], False
-    lines = [saved_line(name, cast(ReviewResult, result)) for name, result in saved.items()]
+    lines = [saved_line(name, result) for name, result in saved.items()]
     last = store.last_rerank()
     rejection = rejected.get(review_file(last['id']).name) if last else None
     task = pending_review(store, rejection)

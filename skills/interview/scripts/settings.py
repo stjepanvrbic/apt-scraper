@@ -29,11 +29,10 @@ from typing import NotRequired, TypedDict, TypeIs, cast
 SKILLS = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(SKILLS / 'gallery' / 'scripts'), str(SKILLS / 'search' / 'scripts')]
 
-from code_features import RankingFeatures  # noqa: E402
 from geodata import ATTRIBUTION, SourceUnavailable, geocode  # noqa: E402
-from matching import INSIDE, OUTSIDE, PENDING, Features, Verdict, evaluate  # noqa: E402
+from matching import INSIDE, OUTSIDE, PENDING, evaluate  # noqa: E402
 from scratch import read_scratch_object  # noqa: E402
-from shapes import Criteria, Place, Settings, is_array, is_object  # noqa: E402
+from shapes import Place, Settings, is_array, is_object  # noqa: E402
 from store import SETTINGS, ListingStore, TimeZoneDataMissing, store_path  # noqa: E402
 
 INCOMPLETE = 3
@@ -83,15 +82,10 @@ def is_places(value: object) -> TypeIs[list[Place]]:
                                    for place in value)
 
 
-def judge(criteria: Criteria, features: RankingFeatures | None) -> Verdict:
-    """evaluate, on the features as the store reads them: code_features.py and matching.py describe the same record."""
-    return evaluate(criteria, cast(Features | None, features))
-
-
 def locate(store: ListingStore, places: object) -> list[Located]:
     """The location of each place, {name, address, found}, geocoding the addresses the store has no coordinates for and
     keeping what is found. Raises PlacesNotFound naming the places the geocoder found nothing for."""
-    SETTINGS['places'](places)
+    _ = SETTINGS['places'](places)
     if not is_places(places):
         raise ValueError('Places must be an array of objects with a name and an address.')
     addresses = list(dict.fromkeys(place['address'] for place in places))
@@ -124,7 +118,7 @@ def run(argv: list[str] | None) -> int:
     if not settings or not set(settings) <= set(SETTINGS):
         raise ValueError(f'Settings must be a JSON object with any of {", ".join(SETTINGS)}.')
     places = locate(store, settings['places']) if 'places' in settings else None
-    applied = store.update_settings(**settings, judge=judge if 'criteria' in settings else None)
+    applied = store.update_settings(**settings, judge=evaluate if 'criteria' in settings else None)
     missing = store.missing_settings()
     result: SaveReport = {'saved': sorted(settings), 'complete': not missing, 'missing': missing}
     if applied is not None:

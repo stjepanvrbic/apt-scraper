@@ -12,79 +12,11 @@ import sys
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, NotRequired, TypedDict, cast
+from typing import TypedDict, cast
 
-Probe = Literal['carpet', 'exposed brick', 'balcony', 'bathtub', 'open kitchen']
-GATE: tuple[Probe, ...] = ('carpet', 'exposed brick', 'balcony', 'bathtub', 'open kitchen')
-
-
-class Agreement(TypedDict):
-    """How often the room type a variant picks matches the label, on a set of photos, with its bootstrap interval."""
-    photos: int
-    listings: int
-    agreement: float
-    interval: list[float]
-
-
-class AucReport(TypedDict):
-    """A probe's AUC against the labels, None when a class had no listing."""
-    auc: float | None
-    interval: list[float] | None
-    positive: int
-    negative: int
-
-
-class RuleResult(TypedDict):
-    """One probe rule's AUCs: chosen on the dev houses, reported on the test listings and on the owner's."""
-    dev_mean_auc: float | None
-    test: dict[str, AucReport]
-    owner: dict[str, AucReport]
-
-
-ProbeReport = TypedDict('ProbeReport', {'rule': str, 'rules': dict[str, RuleResult], 'carpet': AucReport, 'exposed brick': AucReport,
-                                        'balcony': AucReport, 'bathtub': AucReport, 'open kitchen': AucReport})
-"""The chosen rule's test AUCs by probe, next to the rule's name and every rule's results."""
-
-
-class Choice(TypedDict):
-    """The prompt padding and pooling that scored best on the dev houses, and every alternative's dev agreement."""
-    padding: str
-    pooling: Literal['mean', 'max']
-    dev_agreement: float
-    alternatives: list[list[str | float]]
-
-
-class RoomReport(TypedDict):
-    owner_extraction: Agreement | None
-    houses_test: Agreement | None
-    combined_test: Agreement | None
-
-
-class Timing(TypedDict):
-    """timing.json of a variant's embedding run (encoder_sweep.py images)."""
-    threads: int
-    batch: int
-    load_seconds: float
-    seconds: float
-    photos: int
-    graph_bytes: int
-
-
-class VariantReport(TypedDict):
-    """One variant's entry in the output of encoder_sweep.py evaluate."""
-    variant: str
-    choice: Choice
-    room: RoomReport
-    probes: ProbeReport
-    timing: NotRequired[Timing | None]
-
-
-class EvaluateReport(TypedDict):
-    reports: list[VariantReport]
-
-
-Labels = dict[str, dict[Probe, int | None]]
-"""labels.json: each listing's answer per probe, 1, 0 or None when its photos could not tell."""
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'profile/skills/gallery/scripts'))
+from encoder_sweep import AucReport, Choice, EvaluateReport, Labels, RoomReport, Rule, RuleResult, Timing  # noqa: E402
+from photo_catalog import GATE_PROBES as GATE, Probe  # noqa: E402
 
 
 class Candidate(TypedDict):
@@ -93,8 +25,8 @@ class Candidate(TypedDict):
     choice: Choice
     room: RoomReport
     probes: dict[Probe, AucReport]
-    probe_rule: str
-    probe_rules: dict[str, RuleResult]
+    probe_rule: Rule
+    probe_rules: dict[Rule, RuleResult]
     record_fields: dict[str, AucReport] | None
     gate_measures_met: int
     gate_measures_mean: float

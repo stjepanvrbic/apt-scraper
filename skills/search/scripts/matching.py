@@ -20,9 +20,10 @@ criterion. Changed criteria are judged from stored features, so only phrases the
 yet need a model call.
 """
 
-from typing import Literal, TypedDict
+from typing import Literal
 
-from shapes import Criteria, PriceLimit, Range, RentalPeriod
+from code_features import Facts, RankingFeatures, UnitFacts
+from shapes import Criteria, PriceLimit, Range
 
 Verdict = Literal['inside', 'outside', 'pending']
 INSIDE: Verdict = 'inside'
@@ -32,33 +33,7 @@ PENDING: Verdict = 'pending'
 SQUARE_FEET_PER_SQUARE_METER = 10.7639
 PERIODS_PER_YEAR = {'day': 365, 'week': 52, 'month': 12, 'year': 1}
 
-
-class Unit(TypedDict, total=False):
-    price: int | float | None
-    period: RentalPeriod
-    bedrooms: int | float | None
-    bathrooms: int | float | None
-    size_sqft: int | float | None
-    available_on: str | None
-    label: str | None
-    floor: int | None
-
-
-class Facts(TypedDict, total=False):
-    areas: list[str]
-    currency: str
-    latitude: float | None
-    longitude: float | None
-    stories: int | None
-    units: list[Unit]
-
-
 MustHaves = dict[str, bool | None]
-
-
-class Features(TypedDict, total=False):
-    facts: Facts
-    must_haves: MustHaves
 
 
 def within(value: int | float | None, limits: Range, scale: float = 1) -> bool:
@@ -68,14 +43,14 @@ def within(value: int | float | None, limits: Range, scale: float = 1) -> bool:
     return (low is None or value >= low * scale) and (high is None or value <= high * scale)
 
 
-def price_within(unit: Unit, currency: str | None, limits: PriceLimit) -> bool:
+def price_within(unit: UnitFacts, currency: str | None, limits: PriceLimit) -> bool:
     price, period, limit_period = unit.get('price'), unit.get('period'), limits.get('period')
     if price is None or limits.get('currency') != currency or period not in PERIODS_PER_YEAR or limit_period not in PERIODS_PER_YEAR:
         return True
     return within(price * PERIODS_PER_YEAR[period] / PERIODS_PER_YEAR[limit_period], limits)
 
 
-def unit_meets(unit: Unit, currency: str | None, criteria: Criteria) -> bool:
+def unit_meets(unit: UnitFacts, currency: str | None, criteria: Criteria) -> bool:
     size = criteria.get('size', {})
     move_in = criteria.get('move_in')
     available_on = unit.get('available_on')
@@ -124,17 +99,17 @@ def criterion_phrases(criteria: Criteria) -> list[str]:
     return phrases
 
 
-def required(criteria: Criteria, features: Features | None) -> list[str]:
+def required(criteria: Criteria, features: RankingFeatures | None) -> list[str]:
     facts = (features or {}).get('facts')
     return ([] if facts is not None else criterion_phrases(criteria)) + list(criteria.get('other', []))
 
 
-def unjudged(criteria: Criteria, features: Features | None) -> list[str]:
+def unjudged(criteria: Criteria, features: RankingFeatures | None) -> list[str]:
     judged = (features or {}).get('must_haves', {})
     return [phrase for phrase in required(criteria, features) if phrase not in judged]
 
 
-def evaluate(criteria: Criteria, features: Features | None) -> Verdict:
+def evaluate(criteria: Criteria, features: RankingFeatures | None) -> Verdict:
     facts = (features or {}).get('facts')
     if facts is not None and not facts_meet(criteria, facts):
         return OUTSIDE

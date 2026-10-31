@@ -185,7 +185,7 @@ class ConnectionsTest(unittest.TestCase):
     def run_main(self, *arguments: str) -> tuple[int, str]:
         output = io.StringIO()
         with contextlib.ExitStack() as stack:
-            _ = stack.enter_context(mock.patch.dict(os.environ, self.environment))
+            stack.enter_context(mock.patch.dict(os.environ, self.environment))
             _ = stack.enter_context(mock.patch.object(connections, "on_macos", return_value=self.macos))
             _ = stack.enter_context(mock.patch.object(connections, "gateway_running", return_value=self.gateway_running))
             _ = stack.enter_context(mock.patch.object(connections, "imessage_context", return_value=self.imessage_context))
@@ -311,7 +311,7 @@ class ConnectionsTest(unittest.TestCase):
         self.assertIn("Messaging gateway: connected through telegram", output)
         self.assertEqual(len(self.sends()), 1)
         self.assertEqual(self.sends()[0][:4], ["send", "--to", "telegram", "--json"])
-        self.assertEqual(self.stored()["gateway"]["platform"], "telegram")
+        self.assertEqual(self.stored()["gateway"].get("platform"), "telegram")
 
     def test_gateway_fails_when_the_test_message_is_not_delivered(self) -> None:
         self.environment["FAKE_PLATFORMS"] = json.dumps({"telegram": []})
@@ -330,7 +330,7 @@ class ConnectionsTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertIn("Messaging gateway: connected through telegram", output)
-        self.assertEqual(self.stored()["gateway"]["platform"], "telegram")
+        self.assertEqual(self.stored()["gateway"].get("platform"), "telegram")
 
     def test_gateway_tries_the_platform_that_worked_before_first(self) -> None:
         self.environment["FAKE_PLATFORMS"] = json.dumps({"discord": [], "telegram": []})
@@ -359,7 +359,7 @@ class ConnectionsTest(unittest.TestCase):
 
         self.assertEqual(code, connections.NOT_CONNECTED)
         self.assertIn("Messaging gateway: not connected. The test message went out through telegram, but the gateway is not running, so replies cannot reach the agent.", output)
-        self.assertEqual(self.stored()["gateway"]["platform"], "telegram")
+        self.assertEqual(self.stored()["gateway"].get("platform"), "telegram")
 
     def test_imessage_on_macos_passes_after_a_test_text_to_the_users_own_handle(self) -> None:
         self.macos = True
@@ -432,7 +432,7 @@ class ConnectionsTest(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 15)
         self.assertEqual(code, connections.NOT_CONNECTED)
         self.assertIn("iMessage from the terminal: not checked. The test text did not finish within 2 seconds. If macOS asked whether to allow control of Messages, press OK and check again.", output)
-        self.assertEqual(self.stored()["imessage-terminal"]["handle"], "+15551234567")
+        self.assertEqual(self.stored()["imessage-terminal"].get("handle"), "+15551234567")
 
     def test_checking_one_connection_keeps_the_others(self) -> None:
         _ = self.run_main("check")

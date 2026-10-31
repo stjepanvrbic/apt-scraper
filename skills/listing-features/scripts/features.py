@@ -51,7 +51,7 @@ from queries import SnapshotListing  # noqa: E402
 from record import CATEGORIES, FLAGS, NOT_SHOWN, RATINGS, ROOM_TYPES, UNIT_LEVELS, UnitLevel, choices, validate_judgments  # noqa: E402
 from scoring import Direction, FeatureReading, labeled, stated_phrases  # noqa: E402
 from shapes import Listing, Settings, is_array, is_object  # noqa: E402
-from store import READ_ATTEMPTS, FeatureRecord, ListingStore, SavedExtraction, UnreadNote, extraction_read, store_path  # noqa: E402
+from store import READ_ATTEMPTS, FeatureRecord, ListingDetail, ListingStore, SavedExtraction, UnreadNote, extraction_read, store_path  # noqa: E402
 
 ATTENTION = 3
 PARALLEL_TASKS = 10
@@ -286,8 +286,7 @@ def judged_preferences(settings: Settings, readings: Mapping[tuple[Direction, st
 
 def needs_record(listing: SnapshotListing) -> bool:
     """A listing the ranking ranks, or one the user labeled, which the ranking learns from even when it is not shown."""
-    return bool(listing['matches_criteria'] and listing['status'] == 'available' and not listing['dismissed']
-                or labeled(listing))  # pyright: ignore[reportArgumentType]  # labeled reads only the label fields, which a snapshot listing has too
+    return bool(listing['matches_criteria'] and listing['status'] == 'available' and not listing['dismissed'] or labeled(listing))
 
 
 def judgment_read(listing: ListingContent, phrase: str) -> str:
@@ -388,11 +387,11 @@ class Features:
         snapshot = self.store.state()
         records, attempts = self.store.feature_records(), self.store.read_attempts()
         readings = self.store.preference_readings()
-        settings: Settings = snapshot['settings']  # pyright: ignore[reportAssignmentType]  # the rows settings_of reads; queries.Snapshot should say Settings
+        settings = snapshot['settings']
         phrases = extracted_preferences(settings, readings)
         later = judged_preferences(settings, readings)
         listings = sorted((listing for listing in snapshot['listings'] if needs_record(listing)),
-                          key=lambda listing: (not labeled(listing), listing['first_seen'], listing['id']))  # pyright: ignore[reportArgumentType]  # labeled reads only the label fields, which a snapshot listing has too
+                          key=lambda listing: (not labeled(listing), listing['first_seen'], listing['id']))
         rereads = self.store.photo_rereads()
         extract = [listing for listing in listings if listing['id'] not in records or listing['id'] in rereads]
         judge = [(listing, [phrase for phrase in later if phrase not in records[listing['id']]['preferences']])
@@ -711,7 +710,7 @@ class Features:
         return {'photos': [url for url, _ in unique], 'files': files, 'sheets': sheets}
 
     @staticmethod
-    def task_text(listing: SnapshotListing, phrases: Iterable[str], files: Sequence[Path], tags: Iterable[str], record_file: Path,
+    def task_text(listing: SnapshotListing | ListingDetail, phrases: Iterable[str], files: Sequence[Path], tags: Iterable[str], record_file: Path,
                   rejection: str | None) -> str:
         return Template(EXTRACTION_TEMPLATE.read_text(encoding='utf-8')).substitute(
             listing_id=listing['id'], fingerprint=listing['content_fingerprint'], photo_count=len(files),

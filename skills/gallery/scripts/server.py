@@ -17,8 +17,9 @@ from chat import ChatController, MessageStatus, Runner, ToolEvent
 from launch import Health
 from rerank import pairwise_questions, rerank
 from hypotheses import ActiveHypothesis, active as active_hypotheses, decide as decide_hypothesis
+from review import Rerank
 from shapes import is_object, loads
-from store import ListingDetail, ListingStore, RerankRecord
+from store import ListingDetail, ListingStore
 
 
 STATIC = Path(__file__).resolve().parents[1] / 'web'
@@ -40,7 +41,7 @@ class Comparison(TypedDict):
 class RerankStatus(TypedDict):
     """What /api/rerank answers to a GET: whether scoring runs, the last rerank and the hypotheses under test."""
     running: bool
-    last_rerank: RerankRecord | None
+    last_rerank: Rerank | None
     hypotheses: list[ActiveHypothesis]
 
 
@@ -231,10 +232,10 @@ def make_server(store: ListingStore, port: int = 8765, chat_runner: Runner | Non
                     return
                 elif parts == ['api', 'compare', 'answer']:
                     self.require_fields(body, {'chosen', 'other'})
-                    store.answer_pair(body['chosen'], body['other'])  # pyright: ignore[reportArgumentType]  # answer_pair validates the values itself
+                    store.answer_pair(body['chosen'], body['other'])
                 elif parts == ['api', 'compare', 'skip']:
                     self.require_fields(body, {'first', 'second'})
-                    store.skip_pair(body['first'], body['second'])  # pyright: ignore[reportArgumentType]  # skip_pair validates the values itself
+                    store.skip_pair(body['first'], body['second'])
                 elif len(parts) == 4 and parts[:2] == ['api', 'hypotheses']:
                     self.require_fields(body, set())
                     decide_hypothesis(store, parts[2], parts[3])

@@ -10,7 +10,7 @@ from typing import TypedDict, cast
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'gallery/scripts'))
 
 from hypotheses import active, assess, has_new_labels, pending_judgments, prepare, save, save_judgments  # noqa: E402
-from record import Extraction  # noqa: E402
+from record import RecordValues  # noqa: E402
 from review import CONNECTING_WORDS, MODEL_WORDS  # noqa: E402
 from rerank import rerank  # noqa: E402
 from shapes import is_array, is_object, loads  # noqa: E402
@@ -57,7 +57,7 @@ class JudgedListing(TypedDict):
     fingerprint: str
     unjudged: list[str]
     listing: ListingFields
-    record: Extraction | None
+    record: RecordValues | None
 
 
 class JudgmentReport(TypedDict):

@@ -59,7 +59,7 @@ class UnitFacts(TypedDict, total=False):
     """One rentable unit as the listing site states it, any value null."""
     price: int | float | None
     period: RentalPeriod | None
-    bedrooms: int | None
+    bedrooms: int | float | None
     bathrooms: int | float | None
     size_sqft: int | float | None
     available_on: str | None
@@ -95,7 +95,7 @@ class CodeFeatures(Distances):
     currency: str | None
     size_sqft: int | float | None
     price_per_sqft: float | None
-    bedrooms: int | None
+    bedrooms: int | float | None
     bathrooms: int | float | None
     unit_label: str | None
     unit_floor: int | None

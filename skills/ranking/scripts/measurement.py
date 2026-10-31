@@ -209,7 +209,7 @@ def replay(events: Sequence[ReplayEvent], fitter: HistoryFitter = fit_model) -> 
         if event['kind'] not in ('favorite', 'contact', 'pair'):
             continue
         inputs: HistoryInputs = {**event['inputs'], 'history': events[:index]}
-        result = prediction(inputs, event, fitter)  # pyright: ignore[reportArgumentType]  # prediction fits these inputs, which carry the history
+        result = prediction(inputs, event, fitter)
         if result is None:
             excluded += 1
         elif result['kind'] == 'pair':

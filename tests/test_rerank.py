@@ -20,8 +20,9 @@ from record import CATEGORIES, FLAGS, RATINGS, SEED_TAGS  # noqa: E402
 from rerank import RerankReport, pairwise_questions, rerank  # noqa: E402
 from schema import MIGRATIONS, earlier_feature_text, reviews_with_inputs, structured_reasons  # noqa: E402
 from scoring import Explanation, FeatureReason, Question, Reason  # noqa: E402
-from shapes import LocationPriorities, Settings, is_object, loads  # noqa: E402
-from store import READ_ATTEMPTS, ListingStore, RerankRecord, extraction_read  # noqa: E402
+from shapes import LocationPriorities, Settings, loads  # noqa: E402
+from review import Rerank  # noqa: E402
+from store import READ_ATTEMPTS, ListingStore, extraction_read  # noqa: E402
 from test_feature_record import extraction  # noqa: E402
 from test_gallery_store import listing, present  # noqa: E402
 
@@ -44,7 +45,7 @@ class NotRanked(TypedDict):
 
 class Status(TypedDict):
     """What `ranking.py status` prints."""
-    last_rerank: RerankRecord | None
+    last_rerank: Rerank | None
     not_ranked: NotRanked
 
 
@@ -317,7 +318,7 @@ class StructuredReasonMigrationTests(StoreTestCase):
         review = present(present(self.store.rerank(summary['id']))['review'])
         self.assertEqual(review['state'], 'failed')
         result = review['result']
-        assert is_object(result) and isinstance(result['error'], str)
+        assert result is not None and 'error' in result
         self.assertIn('Rerank to get a review', result['error'])
         self.assertIsNone(self.store.review_snapshot(summary['id']))
         later = rerank(self.store, seed=1)

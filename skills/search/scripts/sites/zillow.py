@@ -17,7 +17,7 @@ from typing import NotRequired, TypedDict, TypeGuard, cast
 from urllib.parse import quote, urljoin
 
 from client import Fetcher
-from matching import Facts, Unit
+from code_features import Facts, UnitFacts
 from shapes import Agent, Criteria, RentalPeriod, Source, is_array, is_object, loads
 from sites.errors import Blocked, Changed, Gone
 
@@ -379,7 +379,7 @@ def rooms(beds: int | float | None, baths: int | float | None) -> str | None:
 
 
 def unit_fact(price: int | float | None, beds: int | float | None, baths: int | float | None, sqft: int | float | None,
-              available_on: str | None, label: str | None, floor: int | None) -> Unit:
+              available_on: str | None, label: str | None, floor: int | None) -> UnitFacts:
     return {'price': price, 'period': 'month', 'bedrooms': beds, 'bathrooms': baths, 'size_sqft': sqft, 'available_on': available_on,
             'label': label, 'floor': floor}
 
