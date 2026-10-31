@@ -23,23 +23,23 @@ import argparse
 import json
 import shutil
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from string import Template
-from typing import Literal, Protocol, TypedDict, cast
+from typing import Literal, TypedDict, cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'gallery' / 'scripts'))
 
-from client import Fetcher  # noqa: E402
-from code_features import RankingFeatures  # noqa: E402
+from client import Fetcher, NoClient  # noqa: E402
+from code_features import Facts, RankingFeatures  # noqa: E402
 from inbox import Rejections, apply, batches, correction, discard, inbox_directory, listing_key, load_batches, save_batches  # noqa: E402
-from matching import INSIDE, OUTSIDE, PENDING, Facts, Features, MustHaves, Verdict, evaluate, required, unjudged  # noqa: E402
+from matching import INSIDE, OUTSIDE, PENDING, MustHaves, evaluate, required, unjudged  # noqa: E402
 from schema import content_fingerprint  # noqa: E402
 from shapes import Criteria, RentalPeriod, is_array, is_object  # noqa: E402
-from sites import site_for, site_named  # noqa: E402
+from sites import AreaSearch, Site, SiteCard, site_for, site_named  # noqa: E402
 from sites.errors import Blocked, Gone  # noqa: E402
-from sites.zillow import SiteListing, SourcedListing  # noqa: E402
+from sites.zillow import SiteListing  # noqa: E402
 from state import RunRecord, RunReport, SearchState, SiteReport  # noqa: E402
 from store import ListingStore, store_path, validate_listing  # noqa: E402
 
@@ -58,35 +58,6 @@ JUDGMENT_TEMPLATE = Path(__file__).resolve().parents[1] / 'judgment.md'
 Outcome = Literal['new', 'changed', 'unchanged', 'gone', 'unreadable']
 """What reading a card did to the store."""
 SearchStatus = Literal['waiting for the interview', 'not started', 'stopped', 'running', 'failed', 'finished']
-
-
-class AreaSearch(TypedDict):
-    """A site's search: the criteria area it covers, and whatever the site's own pages need."""
-    area: str
-
-
-class SiteCard(TypedDict):
-    """A listing as a site's results page shows it: its id, its page and a signature of what the card showed."""
-    id: str
-    url: str
-    signature: str
-
-
-class Site[S: AreaSearch, C: SiteCard](Protocol):
-    """A listing site module as the search uses it (sites/__init__.py), with its own search and card shapes."""
-
-    __name__: str
-
-    @property
-    def NAME(self) -> str: ...
-
-    def searches(self, criteria: Criteria, client: Fetcher, regions: dict[str, object], /) -> list[S]: ...
-
-    def pages(self, search: S, client: Fetcher, /) -> Iterator[list[C]]: ...
-
-    def read(self, card: C, client: Fetcher, /) -> tuple[SiteListing, Facts]: ...
-
-    def reread(self, listing: SourcedListing, client: Fetcher, /) -> tuple[SiteListing, Facts]: ...
 
 
 class Handed(TypedDict):
@@ -158,7 +129,7 @@ class TasksReport(TypedDict):
 
 class ApplyReport(TypedDict):
     """What search.py apply prints: each file's result and each rejected file's error, by name."""
-    saved: dict[str, object]
+    saved: dict[str, JudgeResult]
     rejected: Rejections
 
 
@@ -175,17 +146,6 @@ def note(result: SiteReport, text: str) -> None:
         result['errors'].append(text)
 
 
-def stored_features(features: RankingFeatures | None) -> Features | None:
-    """A listing's features as the store reads them, in the shape matching.py judges: code_features.py and matching.py
-    describe the same record."""
-    return cast(Features | None, features)
-
-
-def judge(criteria: Criteria, features: RankingFeatures | None) -> Verdict:
-    """evaluate, on the features as the store reads them."""
-    return evaluate(criteria, stored_features(features))
-
-
 def recorded(report: Report) -> RunReport:
     """The report as the run records it: without the task files."""
     return {'missing': report['missing'], 'sites': report['sites'], 'saved': report['saved'], 'rejected': report['rejected'],
@@ -198,7 +158,7 @@ class Search[S: AreaSearch, C: SiteCard]:
         """inbox is the job's inbox, workspace the directory of its judgment task files."""
         self.store: ListingStore = store
         self.state: SearchState = state
-        self.client: Fetcher | None = client
+        self.client: Fetcher = NoClient() if client is None else client
         self.site_for: Callable[[str], Site[S, C] | None] = site_for
         self.site_named: Callable[[str], Site[S, C] | None] = site_named
         self.now: Callable[[], datetime] = now
@@ -207,7 +167,7 @@ class Search[S: AreaSearch, C: SiteCard]:
 
     def fetcher(self) -> Fetcher:
         """The run's client. The commands that search nothing have none, and never ask a site for a page."""
-        return self.client  # pyright: ignore[reportReturnType]  # None only for the commands that search nothing
+        return self.client
 
     def run(self, budget: timedelta) -> Report:
         """One search pass: searches every listing site, then hands the judgments over as hand_judgments says."""
@@ -220,7 +180,7 @@ class Search[S: AreaSearch, C: SiteCard]:
                 settings = self.store.settings()
                 for url in settings.get('listing_sites', []):
                     report['sites'].append(self.search_site(url, settings.get('criteria', {}), started + budget))
-                _ = self.store.apply_criteria(judge)
+                _ = self.store.apply_criteria(evaluate)
                 report = {**report, **self.hand_judgments()}
         except Exception as error:
             report['error'] = failure(error)
@@ -238,7 +198,7 @@ class Search[S: AreaSearch, C: SiteCard]:
         discard(self.inbox, rejected, handed)
         return {'saved': len(saved), 'rejected': sorted(rejected), 'awaiting_total': len(pending), 'tasks': tasks, 'wake': bool(tasks)}
 
-    def save_inbox(self) -> tuple[dict[str, object], Rejections]:
+    def save_inbox(self) -> tuple[dict[str, JudgeResult], Rejections]:
         """Saves the judgments files in the inbox, and returns their results and the errors of those rejected, by name."""
         return apply(self.inbox, {'judgments': self.judge_file})
 
@@ -367,8 +327,8 @@ class Search[S: AreaSearch, C: SiteCard]:
             current = self.store.listing(listing['id'])['content_fingerprint'] == fingerprint
         except KeyError:
             current = False
-        previous: Features = (stored_features(self.store.features(listing['id'])) if current else None) or {}
-        features: Features = {**previous, 'facts': {**facts, 'areas': areas}, 'must_haves': previous.get('must_haves', {})}
+        previous: RankingFeatures = (self.store.features(listing['id']) if current else None) or {}
+        features: RankingFeatures = {**previous, 'facts': {**facts, 'areas': areas}, 'must_haves': previous.get('must_haves', {})}
         _ = self.store.upsert_listing({**listing, 'status': 'available'}, matches_criteria=False)
         self.store.analyze(listing['id'], fingerprint, features)
 
@@ -378,7 +338,7 @@ class Search[S: AreaSearch, C: SiteCard]:
             return
         areas = sorted({area, *previous['areas']})
         self.state.saw(listing_id, previous['signature'], areas, self.now())
-        features = stored_features(self.store.features(listing_id))
+        features = self.store.features(listing_id)
         if features is not None:
             features = {**features, 'facts': {**features.get('facts', {}), 'areas': areas}}
             self.store.analyze(listing_id, self.store.listing(listing_id)['content_fingerprint'], features)
@@ -419,11 +379,11 @@ class Search[S: AreaSearch, C: SiteCard]:
         waiting: list[PendingListing] = []
         for item in self.store.state()['listings']:
             features = item['features'] if item.get('analysis_current') else None
-            if item['status'] != 'available' or judge(criteria, features) != PENDING:
+            if item['status'] != 'available' or evaluate(criteria, features) != PENDING:
                 continue
             description = item.get('description') or ''
             waiting.append({
-                'id': item['id'], 'fingerprint': item['content_fingerprint'], 'unjudged': unjudged(criteria, stored_features(features)),
+                'id': item['id'], 'fingerprint': item['content_fingerprint'], 'unjudged': unjudged(criteria, features),
                 'title': item.get('title'), 'address': item.get('address'), 'price': item.get('price'), 'price_note': item.get('price_note'),
                 'currency': item.get('currency'), 'rental_period': item.get('rental_period'), 'rooms': item.get('rooms'), 'size': item.get('size'),
                 'amenities': item.get('amenities'),
@@ -445,7 +405,7 @@ class Search[S: AreaSearch, C: SiteCard]:
             if not is_object(entry) or set(entry) != {'id', 'fingerprint', 'must_haves'} or not is_object(entry['must_haves']):
                 raise ValueError('Each judgment needs exactly id, fingerprint and must_haves, an object.')
             identifier, fingerprint = listing_key(entry, 'Each judgment')
-            allowed = required(criteria, stored_features(self.store.features(identifier)))
+            allowed = required(criteria, self.store.features(identifier))
             must_haves: MustHaves = {}
             for phrase, value in entry['must_haves'].items():
                 if phrase not in allowed:
@@ -459,14 +419,14 @@ class Search[S: AreaSearch, C: SiteCard]:
             if self.store.listing(judgment['id'])['content_fingerprint'] != judgment['fingerprint']:
                 result['stale'].append(judgment['id'])
                 continue
-            features: Features = stored_features(self.store.features(judgment['id'])) or {'must_haves': {}}
+            features: RankingFeatures = self.store.features(judgment['id']) or {'must_haves': {}}
             features = {**features, 'must_haves': {**features.get('must_haves', {}), **judgment['must_haves']}}
             self.store.analyze(judgment['id'], judgment['fingerprint'], features)
             verdict = evaluate(criteria, features)
             result['saved'] += 1
             result['shown'] += verdict == INSIDE
             result['outside'] += verdict == OUTSIDE
-        _ = self.store.apply_criteria(judge)
+        _ = self.store.apply_criteria(evaluate)
         return result
 
     def status(self) -> StatusReport:

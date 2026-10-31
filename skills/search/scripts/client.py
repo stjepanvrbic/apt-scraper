@@ -20,6 +20,13 @@ class Fetcher(Protocol):
     def get(self, url: str) -> tuple[int, str]: ...
 
 
+class NoClient:
+    """The client of a command that searches nothing. A site that asks it for a page is a mistake, and it says so."""
+
+    def get(self, url: str) -> tuple[int, str]:
+        raise RuntimeError(f'This command searches nothing, so it cannot fetch {url}.')
+
+
 class Client:
     def __init__(self, pause: tuple[float, float] = PAUSE_SECONDS) -> None:
         from curl_cffi import requests

@@ -67,7 +67,7 @@ def main(argv: Sequence[str]) -> None:
     from encoder_sweep import photos_of, variants
     from PIL import Image, ImageOps
 
-    spec = variants(arguments.models)[arguments.variant]
+    spec = variants()[arguments.variant]
     directory = arguments.models / spec['model']
     model: encoder.TowerModel = {
         'graph': spec['graph'], 'output': 'pooler_output' if spec['kind'] == 'siglip' else 'image_embeddings', 'preprocessing': spec['preprocessing'],

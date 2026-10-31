@@ -20,8 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'skills/gallery/scripts'))
 sys.path.insert(0, str(ROOT / 'tests'))
 
-from photo_catalog import entries  # noqa: E402
-from encoder_sweep import PROBES, AucReport, EvaluateReport, Probe, RoomReport, Rule, VariantReport, agreed, variants  # noqa: E402
+from photo_catalog import Probe, entries  # noqa: E402
+from encoder_sweep import PROBES, AucReport, EvaluateReport, RoomReport, Rule, VariantReport, agreed, variants  # noqa: E402
 
 if TYPE_CHECKING:
     import numpy as np
@@ -138,7 +138,7 @@ def main(argv: Sequence[str]) -> None:
     import numpy as np
 
     variant, models, sweep, output = argv[0], Path(argv[1]), Path(argv[2]), Path(argv[3])
-    spec = variants(models)[variant]
+    spec = variants()[variant]
     if spec['kind'] != 'siglip':
         raise ValueError('The build supports the SigLIP 2 family, whose text tower and tokenizer it runs.')
     directory = models / spec['model']

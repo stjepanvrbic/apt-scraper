@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Literal, TypedDict, cast
 HOUSE_ROOMS = {'bathroom': 'bathroom', 'bedroom': 'bedroom', 'kitchen': 'kitchen', 'frontal': 'exterior'}
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
-from photo_catalog import GATE_PROBES, PROBE_PROMPTS as CATALOG_PROBES, ROOM_PROMPTS  # noqa: E402
+from photo_catalog import GATE_PROBES, PROBE_PROMPTS as CATALOG_PROBES, ROOM_PROMPTS, Probe  # noqa: E402
 
 if TYPE_CHECKING:
     import numpy as np
@@ -37,7 +37,6 @@ if TYPE_CHECKING:
 
     Vector = NDArray[np.float32]
 
-Probe = Literal['carpet', 'exposed brick', 'balcony', 'bathtub', 'open kitchen']
 Rule = Literal['raw', 'contrast', 'centered']
 Kind = Literal['siglip', 'openclip']
 Source = Literal['owner', 'houses']
@@ -45,7 +44,7 @@ Split = Literal['dev', 'test']
 
 # Several phrasings per class, as shipped; a class scores by its best phrasing (max) or the mean of its unit text
 # vectors (mean). Only the gate's probes have reference labels.
-PROBE_PROMPTS = {name: CATALOG_PROBES[name] for name in GATE_PROBES}
+PROBE_PROMPTS: dict[Probe, list[str]] = {name: CATALOG_PROBES[name] for name in GATE_PROBES}
 # Contrasts, fixed after the first candidate's raw scores and before any other candidate: what a photo shows instead.
 CONTRAST_PROMPTS = {
     'carpet': ['a room with hardwood floors', 'a room with tile floors', 'a room with laminate floors'],
@@ -54,7 +53,7 @@ CONTRAST_PROMPTS = {
     'bathtub': ['a bathroom with a walk-in shower and no bathtub', 'a glass shower stall'],
     'open kitchen': ['a closed kitchen separated from the other rooms by walls', 'a small galley kitchen'],
 }
-PROBES = cast(tuple[Probe, ...], tuple(PROBE_PROMPTS))
+PROBES: tuple[Probe, ...] = tuple(PROBE_PROMPTS)
 PROBE_RULES: tuple[Rule, ...] = ('raw', 'contrast', 'centered')
 
 
@@ -217,7 +216,7 @@ def required(value: str | None, option: str) -> str:
     return value
 
 
-def variants(models: str | Path | None) -> dict[str, Variant]:  # pyright: ignore[reportUnusedParameter]  # the table is the same for every models directory
+def variants() -> dict[str, Variant]:
     """Candidate graphs and their published preprocessing. Each SigLIP 2 size is published as fp32, fp16 and int8;
     the OpenCLIP exports' fp16 and int8 graphs are converted locally (encoder_convert.py)."""
     result: dict[str, Variant] = {}
@@ -293,7 +292,7 @@ def text(args: Arguments) -> None:
     import onnxruntime as ort
     from transformers import AutoTokenizer
 
-    spec = variants(args.models)[args.variant]
+    spec = variants()[args.variant]
     directory = Path(required(args.models, '--models')) / spec['model']
     entries = prompt_list()
     prompts = [entry[2].lower() for entry in entries]
@@ -339,7 +338,7 @@ def images(args: Arguments) -> None:
     import numpy as np
     import onnxruntime as ort
 
-    spec = variants(args.models)[args.variant]
+    spec = variants()[args.variant]
     photos = photos_of(Path(args.work))
     out = Path(args.work) / args.variant
     out.mkdir(parents=True, exist_ok=True)
@@ -515,10 +514,10 @@ def probe_report(photos: Sequence[SweepPhoto], vectors: Vector, texts: Vector, e
             'bathtub': test['bathtub'], 'open kitchen': test['open kitchen']}
 
 
-def evaluate_variant(work: Path, variant: str, models: str | None, labels: Labels) -> VariantReport:
+def evaluate_variant(work: Path, variant: str, labels: Labels) -> VariantReport:
     import numpy as np
 
-    spec = variants(models)[variant]
+    spec = variants()[variant]
     photos = photos_of(work)
     vectors = cast('Vector', np.load(work / variant / 'vectors.npy'))
     entries = prompts_of(work / spec['model'])
@@ -557,7 +556,7 @@ def summarized(value: AucReport) -> tuple[float | None, int]:
 def evaluate(args: Arguments) -> None:
     work = Path(args.work)
     labels = cast(Labels, json.loads(Path(args.labels).read_text(encoding='utf-8'))) if args.labels else {}
-    reports = [evaluate_variant(work, variant, args.models, labels) for variant in args.variants]
+    reports = [evaluate_variant(work, variant, labels) for variant in args.variants]
     text_ = json.dumps({'reports': reports}, indent=1, allow_nan=False) + '\n'
     if args.output:
         _ = Path(args.output).write_text(text_, encoding='utf-8')
@@ -583,7 +582,7 @@ def compare(args: Arguments) -> None:
     reference, variant = args.variants
     if not args.output or not Path(args.output).is_file():
         raise SystemExit('compare needs --output, the evaluate report that chose the reference variant\'s padding and pooling.')
-    specs = variants(args.models)
+    specs = variants()
     spec = specs[variant]
     work = Path(args.work)
     photos = photos_of(work)
