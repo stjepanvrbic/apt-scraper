@@ -10,10 +10,30 @@ houses of the public dataset four to a sheet, one row of four photos each.
 import json
 import sys
 from pathlib import Path
+from typing import Literal, TypedDict, cast
 
 from PIL import Image, ImageDraw, ImageOps
 
 TILE = 300
+
+
+class Photo(TypedDict):
+    """A photo of the sweep's manifest.json (tests/encoder_sweep.py), the part the sheets read."""
+    source: Literal['owner', 'houses']
+    listing: str
+    path: str
+
+
+class SweepManifest(TypedDict):
+    photos: list[Photo]
+
+
+class SheetEntry(TypedDict):
+    """One line of index.json: which listing each tag on a sheet stands for."""
+    sheet: str
+    listings: dict[str, str]
+
+
 DEFINITIONS = """For each listing on a sheet, answer five questions from its photos only, each 1 (yes), 0 (no) or null (the photos
 cannot tell):
 
@@ -54,7 +74,7 @@ line: how many sheets and listings you labeled.
 """
 
 
-def tile(path, label):
+def tile(path: str, label: str) -> Image.Image:
     with Image.open(path) as source:
         image = ImageOps.exif_transpose(source).convert('RGB')
     image.thumbnail((TILE, TILE))
@@ -66,7 +86,7 @@ def tile(path, label):
     return canvas
 
 
-def sheet(rows, path):
+def sheet(rows: list[list[tuple[str, str]]], path: Path) -> None:
     width = max(len(row) for row in rows)
     canvas = Image.new('RGB', (width * TILE, len(rows) * TILE), 'white')
     for y, row in enumerate(rows):
@@ -75,14 +95,14 @@ def sheet(rows, path):
     canvas.save(path, quality=85)
 
 
-def main(argv):
-    photos = json.loads(Path(argv[0]).read_text(encoding='utf-8'))['photos']
+def main(argv: list[str]) -> None:
+    photos = cast(SweepManifest, json.loads(Path(argv[0]).read_text(encoding='utf-8')))['photos']
     output = Path(argv[1])
     output.mkdir(parents=True, exist_ok=True)
-    listings = {}
+    listings: dict[tuple[str, str], list[str]] = {}
     for photo in photos:
         listings.setdefault((photo['source'], photo['listing']), []).append(photo['path'])
-    index = []
+    index: list[SheetEntry] = []
     owner = [key for key in listings if key[0] == 'owner']
     for number, key in enumerate(owner, 1):
         paths = listings[key][:20]
@@ -98,9 +118,9 @@ def main(argv):
         rows = [[(path, f'H{key[1].split(":")[1]} #{i + 1}') for i, path in enumerate(listings[key])] for key in group]
         sheet(rows, output / name)
         index.append({'sheet': name, 'listings': {f'H{key[1].split(":")[1]}': key[1] for key in group}})
-    (output / 'index.json').write_text(json.dumps(index, indent=1) + '\n', encoding='utf-8')
-    (output / 'definitions.txt').write_text(DEFINITIONS + '\n', encoding='utf-8')
-    (output.parent / 'brief.md').write_text(BRIEF_HEAD + DEFINITIONS + BRIEF_TAIL, encoding='utf-8')
+    _ = (output / 'index.json').write_text(json.dumps(index, indent=1) + '\n', encoding='utf-8')
+    _ = (output / 'definitions.txt').write_text(DEFINITIONS + '\n', encoding='utf-8')
+    _ = (output.parent / 'brief.md').write_text(BRIEF_HEAD + DEFINITIONS + BRIEF_TAIL, encoding='utf-8')
     print(json.dumps({'sheets': len(index), 'owner': len(owner), 'houses': len(houses)}))
 
 

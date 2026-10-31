@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from typing import Literal, overload
 
 import numpy as np
 from numpy.typing import NDArray
@@ -11,8 +12,12 @@ class TokenList:
 
 class PreTrainedTokenizer:
     pad_token_id: int | None
+    @overload
     def __call__(self, text: str | Sequence[str], *, padding: bool | str = False, max_length: int | None = None,
-                 truncation: bool = False, return_tensors: str | None = None) -> BatchEncoding: ...
+                 truncation: bool = False, return_tensors: Literal['np']) -> BatchEncoding: ...
+    @overload
+    def __call__(self, text: str, *, padding: bool | str = False, max_length: int | None = None,
+                 truncation: bool = False, return_tensors: None = None) -> TokenList: ...
 
 class AutoTokenizer:
     @classmethod
