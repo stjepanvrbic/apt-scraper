@@ -14,19 +14,17 @@ from pathlib import Path
 from typing import TypedDict, Unpack, cast, override
 from unittest.mock import patch
 
-from code_features import RankingFeatures
-from geodata import Location
-from shapes import Criteria, LocationPriorities, Place, Preferences, Settings, ViewingAvailability
-from store import CriteriaApplied, CriteriaVerdict, Geocode, ListingStore, TimeZoneDataMissing
-from test_gallery_store import listing
-
 SCRIPT = Path(__file__).resolve().parents[1] / 'skills/interview/scripts/settings.py'
-sys.path.insert(0, str(SCRIPT.parent))
+sys.path[:0] = [str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'), str(SCRIPT.parent)]
 
 import geodata  # noqa: E402
 import settings as settings_script  # noqa: E402
-from geodata import ATTRIBUTION, SourceUnavailable  # noqa: E402
+from code_features import RankingFeatures  # noqa: E402
+from geodata import ATTRIBUTION, Location, SourceUnavailable  # noqa: E402
 from settings import Located, SaveReport, StatusReport  # noqa: E402
+from shapes import Criteria, LocationPriorities, Place, Preferences, Settings, ViewingAvailability  # noqa: E402
+from store import CriteriaApplied, CriteriaVerdict, Geocode, ListingStore, TimeZoneDataMissing  # noqa: E402
+from test_gallery_store import listing  # noqa: E402
 
 
 class Complete(TypedDict):

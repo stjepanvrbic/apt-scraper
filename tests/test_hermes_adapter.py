@@ -1,6 +1,7 @@
 import asyncio
 import shutil
 import sqlite3
+import sys
 import tempfile
 import types
 import unittest
@@ -10,9 +11,11 @@ from pathlib import Path
 from typing import NotRequired, Protocol, TypedDict, cast
 from unittest.mock import patch
 
-from chat import ChatMessage, Controls, run_turn
-from schema import MIGRATIONS, notes_session_per_database
-from store import ListingStore
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
+
+from chat import ChatMessage, Controls, run_turn  # noqa: E402
+from schema import MIGRATIONS, notes_session_per_database  # noqa: E402
+from store import ListingStore  # noqa: E402
 
 
 class Emitter(Protocol):
