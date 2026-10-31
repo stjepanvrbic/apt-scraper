@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Runs every check on macOS or Linux in a fresh virtual environment: Ruff, the Python suite with zero skips, then
-# the gallery's lint, build, build-output check and Playwright suite. Needs Python 3.14 and Node 24. CI runs it
+# Runs every check on macOS or Linux in a fresh virtual environment: Ruff, basedpyright, the Python suite with zero
+# skips, then the gallery's lint, build, build-output check and Playwright suite. Needs Python 3.14 and Node 24. CI runs it
 # on fresh machines.
 #   tests/run.sh [--work <directory>]     the virtual environment and the test report go in --work, default a new
 #                                         directory under TMPDIR
@@ -29,6 +29,9 @@ python -m pip install --disable-pip-version-check --quiet -r "$ROOT/tests/requir
 
 step 'Ruff'
 (cd "$ROOT" && ruff check .)
+
+step 'basedpyright'
+(cd "$ROOT" && basedpyright)
 
 step 'Python suite'
 (cd "$ROOT" && python -m pytest tests -q -rs -p no:cacheprovider --junitxml "$WORK/pytest.xml")

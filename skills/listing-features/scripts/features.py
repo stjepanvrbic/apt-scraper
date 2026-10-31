@@ -33,21 +33,25 @@ import sys
 import urllib.error
 import urllib.request
 from collections import Counter
+from collections.abc import Callable, Container, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from string import Template
+from typing import Literal, TypedDict, Unpack, cast
 
 SKILLS = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SKILLS / 'gallery' / 'scripts'))
 sys.path.insert(0, str(SKILLS / 'contact' / 'scripts'))
 
 from contact import tell_user, usable  # noqa: E402
-from geodata import SourceUnavailable, fetch_stations  # noqa: E402
-from inbox import apply, batches, correction, discard, inbox_directory, listing_key, load_batches, save_batches  # noqa: E402
-from record import CATEGORIES, FLAGS, NOT_SHOWN, RATINGS, ROOM_TYPES, UNIT_LEVELS, choices, validate_judgments  # noqa: E402
-from scoring import labeled, stated_phrases  # noqa: E402
-from store import READ_ATTEMPTS, ListingStore, extraction_read, store_path  # noqa: E402
+from geodata import Response, SourceUnavailable, Station, fetch_stations  # noqa: E402
+from inbox import Rejections, apply, batches, correction, discard, inbox_directory, listing_key, load_batches, save_batches  # noqa: E402
+from queries import SnapshotListing  # noqa: E402
+from record import CATEGORIES, FLAGS, NOT_SHOWN, RATINGS, ROOM_TYPES, UNIT_LEVELS, UnitLevel, choices, validate_judgments  # noqa: E402
+from scoring import Direction, FeatureReading, labeled, stated_phrases  # noqa: E402
+from shapes import Listing, Settings, is_array, is_object  # noqa: E402
+from store import READ_ATTEMPTS, FeatureRecord, ListingDetail, ListingStore, SavedExtraction, UnreadNote, extraction_read, store_path  # noqa: E402
 
 ATTENTION = 3
 PARALLEL_TASKS = 10
@@ -66,22 +70,195 @@ MEDIA = SKILLS / 'gallery' / 'web' / 'media'
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36'
 EXTENSIONS = {'JPEG': 'jpg', 'PNG': 'png', 'WEBP': 'webp', 'GIF': 'gif'}
 COMPARE_INVITATION = ('Your first apartments are ready to compare. Please answer 5 to 8 questions in the gallery\'s Compare tab. '
-                      'For each pair, choose the apartment you prefer, or skip if you cannot decide. '
-                      'Your choices will count the next time you ask me to score and rerank.')
+                      + 'For each pair, choose the apartment you prefer, or skip if you cannot decide. '
+                      + 'Your choices will count the next time you ask me to score and rerank.')
+
+Fetch = Callable[[str], bytes | None]
+"""Downloads a photo: its bytes, or None when the site no longer has it."""
+Stations = Callable[[str], list[Station]]
+"""Fetches the rapid-transit stations of a transit feed."""
+
+
+class ListingContent(TypedDict):
+    """The part of a stored listing a model read is keyed by: its id and the fingerprint of its current content."""
+    id: str
+    content_fingerprint: str
+
+
+class ListingFields(TypedDict):
+    """What a listing site says about a listing, as a task file shows it to the model."""
+    title: str | None
+    address: str | None
+    price: str
+    rooms: str | None
+    size: str | None
+    amenities: list[str]
+    description: str | None
+
+
+class PhotoFailure(TypedDict):
+    """Since when a listing's photos could not be downloaded, and the last reason."""
+    since: str
+    reason: str
+
+
+class StationFailure(TypedDict):
+    """The transit feed whose stations could not be fetched, since when, when last tried and why."""
+    url: str
+    since: str
+    tried: str
+    reason: str
+
+
+class JobStateChanges(TypedDict, total=False):
+    """The parts of the job's state one update writes. compare_invited_at is the key the job wrote before the store
+    recorded the invitation's deliveries; the store's compare_invitation migration reads it."""
+    problems: list[str]
+    photos_unavailable: dict[str, PhotoFailure]
+    stations_unavailable: StationFailure | None
+    handed: list[str]
+    compare_invited_at: str | None
+
+
+class JobState(TypedDict):
+    problems: list[str]
+    photos_unavailable: dict[str, PhotoFailure]
+    stations_unavailable: StationFailure | None
+    handed: list[str]
+
+
+class PreparedPhotos(TypedDict):
+    """The URLs of a listing's unique photos in the order the sheets number them, and the names of the photo and sheet
+    files in the listing content's work directory."""
+    photos: list[str]
+    files: list[str]
+    sheets: list[str]
+
+
+class PreparedTask(PreparedPhotos):
+    id: str
+    fingerprint: str
+
+
+class TaskManifest(PreparedTask):
+    """task.json in a listing content's work directory, with the stated preferences its task asks the model to judge."""
+    phrases: list[str]
+
+
+class ExtractionTask(TypedDict):
+    """One delegate_task call of an extraction: its goal, and the contact sheets attached."""
+    goal: str
+    images: list[str]
+
+
+class JudgmentTask(TypedDict):
+    goal: str
+
+
+class RecordDigest(TypedDict):
+    """A feature record as a judgment task shows it: without the photos, and with only the ratings a photo showed."""
+    summary: str
+    rooms_photographed: dict[str, int]
+    traits: list[str]
+    concerns: list[str]
+    floor: str
+    style: str
+    outdoor_space: str
+    building_type: str
+    unit_level: UnitLevel
+    flags: dict[str, bool]
+    ratings: dict[str, int]
+
+
+class JudgmentListing(TypedDict):
+    """A listing as a judgment task file shows it, with the preferences left to judge."""
+    id: str
+    fingerprint: str
+    unjudged: list[str]
+    listing: ListingFields
+    record: RecordDigest
+
+
+class PreferenceToRead(TypedDict):
+    kind: Direction
+    phrase: str
+
+
+class NoteToRead(TypedDict):
+    id: int
+    listing: str
+    text: str
+
+
+class ReadingsTask(TypedDict):
+    """What the readings task file gives the model: the features a reading may name, and the stated preferences and
+    notes to read."""
+    vocabulary: dict[str, str]
+    preferences: list[PreferenceToRead]
+    notes: list[NoteToRead]
+
+
+class Work(TypedDict):
+    """The model reads waiting, from outstanding: each kind split into those still given to the agent and those given
+    up after READ_ATTEMPTS attempts, with the stated preferences an extraction judges and the current records."""
+    notes: list[UnreadNote]
+    notes_given_up: list[UnreadNote]
+    unread: list[tuple[Direction, str]]
+    unread_given_up: list[tuple[Direction, str]]
+    phrases: list[str]
+    records: dict[str, FeatureRecord]
+    extract: list[SnapshotListing]
+    extract_given_up: list[SnapshotListing]
+    reread_given_up: list[SnapshotListing]
+    judge: list[tuple[SnapshotListing, list[str]]]
+    judge_given_up: list[tuple[SnapshotListing, list[str]]]
+
+
+class SavedRecord(SavedExtraction):
+    saved: str
+
+
+class JudgeResult(TypedDict):
+    saved: int
+    stale: list[str]
+
+
+class ReadResult(TypedDict):
+    preferences: int
+    notes: int
+
+
+class CompareAsked(TypedDict):
+    recorded: bool
+
+
+class Status(TypedDict):
+    problems: list[str]
+    records: int
+    waiting: int
+    given_up: list[str]
+    awaiting_judgment: int
+    awaiting_reading: int
+    photos_unavailable: dict[str, PhotoFailure]
+    ask_to_compare: bool
+
+
+Prepared = tuple[list[str], list[str], list[str]]
+"""What a preparation step returns: the report's lines, the reads it hands over and the names of the inbox files to keep."""
 
 
 class PhotosUnavailable(Exception):
     """A photo could not be downloaded for a reason that may pass, so the listing waits for a later run."""
 
 
-def download(url):
+def download(url: str) -> bytes | None:
     """The photo's bytes, or None when the site no longer has it."""
     if url.startswith('/media/'):
         path = MEDIA / url.removeprefix('/media/')
         return path.read_bytes() if path.is_file() else None
     request = urllib.request.Request(url, headers={'User-Agent': USER_AGENT})
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with cast(Response, urllib.request.urlopen(request, timeout=30)) as response:
             return response.read()
     except urllib.error.HTTPError as error:
         if error.code in (404, 410):
@@ -91,55 +268,55 @@ def download(url):
         raise PhotosUnavailable(f'{url} could not be downloaded: {error}.') from None
 
 
-def failure(error):
+def failure(error: BaseException) -> str:
     return f'{type(error).__name__}: {error}'
 
 
-def extracted_preferences(settings, readings):
+def extracted_preferences(settings: Settings, readings: Mapping[tuple[Direction, str], Sequence[FeatureReading]]) -> list[str]:
     """The stated likes and dislikes an extraction judges: every one whose reading names no record feature, or which
     is not read yet."""
     return list(dict.fromkeys(phrase for kind, phrase in stated_phrases(settings) if not readings.get((kind, phrase))))
 
 
-def judged_preferences(settings, readings):
+def judged_preferences(settings: Settings, readings: Mapping[tuple[Direction, str], Sequence[FeatureReading]]) -> list[str]:
     """The stated likes and dislikes judged later for listings extracted before: those read as naming no record
     feature, which the ranking counts through these judgments."""
     return list(dict.fromkeys(phrase for kind, phrase in stated_phrases(settings) if readings.get((kind, phrase)) == []))
 
 
-def needs_record(listing):
+def needs_record(listing: SnapshotListing) -> bool:
     """A listing the ranking ranks, or one the user labeled, which the ranking learns from even when it is not shown."""
     return bool(listing['matches_criteria'] and listing['status'] == 'available' and not listing['dismissed'] or labeled(listing))
 
 
-def judgment_read(listing, phrase):
+def judgment_read(listing: ListingContent, phrase: str) -> str:
     return json.dumps(['preference', listing['id'], listing['content_fingerprint'], phrase], ensure_ascii=False)
 
 
-def note_read(note):
+def note_read(note: UnreadNote) -> str:
     return json.dumps(['note', note['id']])
 
 
-def preference_read(kind, phrase):
+def preference_read(kind: str, phrase: str) -> str:
     return json.dumps(['preference reading', kind, phrase], ensure_ascii=False)
 
 
-def work_directory(workspace, listing_id, fingerprint):
+def work_directory(workspace: Path, listing_id: str, fingerprint: str) -> Path:
     return workspace / f'{re.sub(r"[^A-Za-z0-9._-]", "_", listing_id)}-{fingerprint[:16]}'
 
 
-def record_file_name(listing):
+def record_file_name(listing: ListingContent) -> str:
     """The name of the inbox file the extraction of a listing's content saves its record in."""
     return f'extraction-{work_directory(Path(), listing["id"], listing["content_fingerprint"]).name}.json'
 
 
-def price_text(listing):
+def price_text(listing: Listing) -> str:
     if listing.get('price') is None:
         return listing.get('price_note') or 'not listed'
     return ' '.join(str(part) for part in (listing['price'], listing.get('currency'), listing.get('rental_period') and f'a {listing["rental_period"]}') if part)
 
 
-def listing_fields(listing, limit=None):
+def listing_fields(listing: Listing, limit: int | None = None) -> ListingFields:
     """What a listing site says about the listing, as data for a model. It enters a prompt only JSON-encoded, so no line
     of a title or description can pass for a line of the instructions around it."""
     description = listing.get('description') or None
@@ -149,20 +326,20 @@ def listing_fields(listing, limit=None):
             'size': listing.get('size'), 'amenities': listing.get('amenities') or [], 'description': description}
 
 
-def chunks(items, size):
+def chunks[T](items: Sequence[T], size: int) -> list[Sequence[T]]:
     return [items[start:start + size] for start in range(0, len(items), size)]
 
 
-def bullet_lines(items):
+def bullet_lines(items: Iterable[str]) -> str:
     return '\n'.join(f'  - {item}' for item in items)
 
 
-def photo_overview(count):
+def photo_overview(count: int) -> str:
     if not count:
         return 'This listing has no photos. Read it from its text and give every rating that needs a photo as "not shown".'
     ranges = [f'sheet {sheet + 1} shows photos {sheet * 9 + 1} to {min(count, sheet * 9 + 9)}' for sheet in range((count + 8) // 9)]
     return (f'The contact sheets attached to your task show all {count} unique photos of the listing, in order: '
-            f'{", ".join(ranges)}. Each photo has its number in yellow in its top-left corner. Look at every photo on the sheets.')
+            + f'{", ".join(ranges)}. Each photo has its number in yellow in its top-left corner. Look at every photo on the sheets.')
 
 
 class RunState:
@@ -172,27 +349,37 @@ class RunState:
     run, after it applied the inbox, counts as a failed attempt then, so an attempt counts only once its wake has
     ended."""
 
-    def __init__(self, path):
-        self.path = path
+    def __init__(self, path: Path) -> None:
+        self.path: Path = path
 
-    def load(self):
-        return {'problems': [], 'photos_unavailable': {}, 'stations_unavailable': None, 'handed': [],
-                **(json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {})}
+    def load(self) -> JobState:
+        state: JobState = {'problems': [], 'photos_unavailable': {}, 'stations_unavailable': None, 'handed': []}
+        if self.path.exists():
+            state.update(cast(JobStateChanges, json.loads(self.path.read_text(encoding='utf-8'))))
+        return state
 
-    def update(self, **values):
-        value = {**self.load(), **values}
+    def update(self, **values: Unpack[JobStateChanges]) -> None:
+        value: dict[str, object] = {**self.load(), **values}
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_name(self.path.name + '.tmp')
-        temporary.write_text(json.dumps(value, ensure_ascii=False), encoding='utf-8')
+        _ = temporary.write_text(json.dumps(value, ensure_ascii=False), encoding='utf-8')
         os.replace(temporary, self.path)
 
 
 class Features:
-    def __init__(self, store, state, workspace, fetch, now, stations):
+    store: ListingStore
+    state: RunState
+    workspace: Path
+    fetch: Fetch
+    now: Callable[[], datetime]
+    stations: Stations
+    inbox: Path
+
+    def __init__(self, store: ListingStore, state: RunState, workspace: Path, fetch: Fetch, now: Callable[[], datetime], stations: Stations) -> None:
         self.store, self.state, self.workspace, self.fetch, self.now, self.stations = store, state, workspace, fetch, now, stations
         self.inbox = inbox_directory('features')
 
-    def outstanding(self):
+    def outstanding(self) -> Work:
         """The listings without a record of their current content, and the extracted listings with stated preferences not
         judged yet, each split into those still given to the agent and those given up after READ_ATTEMPTS attempts. Listings the
         user labeled come first, then the longest known. A listing whose record's room types the photo encoder
@@ -200,8 +387,9 @@ class Features:
         snapshot = self.store.state()
         records, attempts = self.store.feature_records(), self.store.read_attempts()
         readings = self.store.preference_readings()
-        phrases = extracted_preferences(snapshot['settings'], readings)
-        later = judged_preferences(snapshot['settings'], readings)
+        settings = snapshot['settings']
+        phrases = extracted_preferences(settings, readings)
+        later = judged_preferences(settings, readings)
         listings = sorted((listing for listing in snapshot['listings'] if needs_record(listing)),
                           key=lambda listing: (not labeled(listing), listing['first_seen'], listing['id']))
         rereads = self.store.photo_rereads()
@@ -228,7 +416,7 @@ class Features:
                                for listing, missing in judge if any(attempts.get(judgment_read(listing, phrase), 0) >= READ_ATTEMPTS for phrase in missing)],
         }
 
-    def run(self):
+    def run(self) -> tuple[list[str], bool]:
         """One pass of the job: the files the last wake wrote into the inbox, the stations, the extraction tasks, the
         readings and judgments waiting for the agent, and then the Compare invitation. A step that fails becomes one of
         the run's problems without stopping the others, except the invitation, whose failure its record in the store
@@ -239,7 +427,7 @@ class Features:
         if self.store.missing_settings():
             self.state.update(problems=[])
             return ['The interview is not complete, so no listing is extracted.'], False
-        problems = []
+        problems: list[str] = []
         applied = self.step(problems, 'Saving what the last wake wrote', self.save_inbox)
         if applied is None:
             self.state.update(problems=problems)
@@ -252,15 +440,18 @@ class Features:
         reading = self.step(problems, 'Preparing the readings', lambda: self.prepare_readings(work, rejected))
         judgment = self.step(problems, 'Preparing the judgment tasks', lambda: self.prepare_judgments(work, SUBAGENTS_PER_WAKE - len(tasks), rejected))
         prepared = [extraction, reading, judgment]
-        (extraction_lines, _, _), (reading_lines, readings, _), (judgment_lines, judgments, _) = (step or ([], [], []) for step in prepared)
+        empty: Prepared = ([], [], [])
+        extraction_lines, _, _ = extraction or empty
+        reading_lines, readings, _ = reading or empty
+        judgment_lines, judgments, _ = judgment or empty
         if all(prepared):
-            discard(self.inbox, rejected, [name for _, _, files in prepared for name in files])
+            discard(self.inbox, rejected, [name for step in prepared if step for name in step[2]])
         handed = [extraction_read(listing['id'], listing['content_fingerprint']) for listing in tasks] + readings + judgments
         self.state.update(problems=problems, handed=handed)
         return [*saved_lines, *lines, *extraction_lines, *reading_lines, *judgment_lines, *problems,
                 *self.deliver_compare_invitation()], bool(handed)
 
-    def save_inbox(self):
+    def save_inbox(self) -> tuple[list[str], Rejections]:
         """Saves the records, readings and judgments in the inbox, and returns the report's line about them and the
         errors of the files rejected, by file name. The line names files only: a rejection's error may quote what a
         subagent read from a listing, so it goes into the task handed again, never into the agent's report."""
@@ -271,7 +462,7 @@ class Features:
                 + (f' ({", ".join(sorted(rejected))}).' if rejected else '.')], rejected
 
     @staticmethod
-    def step(problems, name, action):
+    def step[T](problems: list[str], name: str, action: Callable[[], T]) -> T | None:
         """What action returns, or None when it fails, with the failure added to problems."""
         try:
             return action()
@@ -279,7 +470,7 @@ class Features:
             problems.append(f'{name} failed. {failure(error)}')
             return None
 
-    def count_attempts(self):
+    def count_attempts(self) -> Work:
         """Counts a failed attempt for each read the last run handed to the agent that still waits, and returns the work
         waiting now. The handed reads are forgotten before they are counted, so a run that fails before it hands
         new ones over cannot count the same wake twice."""
@@ -289,7 +480,7 @@ class Features:
         self.store.record_read_attempts([read for read in handed if read in waiting], waiting)
         return self.outstanding()
 
-    def prepare_extractions(self, work, rejected):
+    def prepare_extractions(self, work: Work, rejected: Mapping[str, str]) -> tuple[list[str], list[SnapshotListing], list[str]]:
         """Prepares the extraction tasks of this wake and returns the report's lines, the listings prepared and the
         names of their record files. A listing whose last record was rejected comes first, with the error for its
         subagent to correct the record. A wake holds at most SUBAGENTS_PER_WAKE extractions, because Hermes blocks the
@@ -299,12 +490,15 @@ class Features:
         now = self.now()
         deadline = now + PREPARE_BUDGET
         tags = self.tag_lines()
-        tasks, unavailable, deferred = [], {}, 0
+        tasks: list[tuple[SnapshotListing, ExtractionTask]] = []
+        unavailable: dict[str, PhotoFailure] = {}
+        deferred = 0
         for listing in sorted(work['extract'], key=lambda listing: record_file_name(listing) not in rejected):
             if self.now() >= deadline or len(tasks) == SUBAGENTS_PER_WAKE:
                 deferred += 1
                 continue
-            since = photos_unavailable.get(listing['id'], {}).get('since')
+            failed = photos_unavailable.get(listing['id'])
+            since = failed['since'] if failed else None
             overdue = since is not None and now - datetime.fromisoformat(since) >= PHOTO_PATIENCE
             try:
                 tasks.append((listing, self.prepare(listing, work['phrases'], tags, rejected.get(record_file_name(listing)), leave_out_failing=overdue)))
@@ -314,7 +508,7 @@ class Features:
         self.remove_work_directories({self.workspace / 'judgments', *(work_directory(self.workspace, listing['id'], listing['content_fingerprint'])
                                                                        for listing in work['extract'])})
         lines = [f'{len(work["extract"])} listings wait for extraction: {len(tasks)} prepared below, {deferred + len(unavailable)} wait '
-                 f'for the next run, {len(work["extract_given_up"])} given up after {READ_ATTEMPTS} attempts.']
+                 + f'for the next run, {len(work["extract_given_up"])} given up after {READ_ATTEMPTS} attempts.']
         if unavailable:
             lines.append(f'The photos of {len(unavailable)} listings could not be downloaded now, so they wait for the next run.')
         if tasks:
@@ -322,7 +516,7 @@ class Features:
                       json.dumps(chunks([task for _, task in tasks], PARALLEL_TASKS), ensure_ascii=False)]
         return lines, [listing for listing, _ in tasks], [record_file_name(listing) for listing, _ in tasks]
 
-    def prepare_readings(self, work, rejected):
+    def prepare_readings(self, work: Work, rejected: Mapping[str, str]) -> Prepared:
         """Writes the readings task file when notes or stated preferences wait for a reading, and returns the report's
         lines, the reads it hands over, every note and stated preference waiting, and the name of its readings file."""
         task_file = self.workspace / 'readings.md'
@@ -331,14 +525,14 @@ class Features:
             return [], [], []
         file = self.inbox / 'readings.json'
         self.workspace.mkdir(parents=True, exist_ok=True)
-        task_file.write_text(Template(READING_TEMPLATE.read_text(encoding='utf-8')).substitute(
+        _ = task_file.write_text(Template(READING_TEMPLATE.read_text(encoding='utf-8')).substitute(
             readings_json=json.dumps(self.readings(work), ensure_ascii=False, indent=1), readings_file=file.as_posix(),
             correction=correction(file, rejected.get(file.name))), encoding='utf-8')
         reads = [note_read(note) for note in work['notes']] + [preference_read(*item) for item in work['unread']]
         return [f'{len(work["notes"])} notes and {len(work["unread"])} stated preferences wait for a reading.',
                 f'Readings task file: {task_file.as_posix()}'], reads, [file.name]
 
-    def prepare_judgments(self, work, subagents, rejected):
+    def prepare_judgments(self, work: Work, subagents: int, rejected: Mapping[str, str]) -> Prepared:
         """Writes the task file of one judgment subagent per batch of JUDGMENT_BATCH listings waiting for judgments of
         preferences stated after their extraction, for at most subagents batches, and returns the report's lines with
         their delegate_task calls, the reads the batches hand over and the names of the judgments files to keep. A batch
@@ -357,13 +551,13 @@ class Features:
         tasks = [self.judgment_task(directory / f'{name}.md', batch, work['records'], rejected.get(f'judgments-{name}.json'))
                  for name, batch in named.items()]
         lines = [f'{len(work["judge"])} listings wait for judgments of preferences stated after their extraction: '
-                 f'{sum(len(batch) for batch in named.values())} in the tasks below, the rest wait for a later run.']
+                 + f'{sum(len(batch) for batch in named.values())} in the tasks below, the rest wait for a later run.']
         if tasks:
             lines += ['Judgment calls, in order, one delegate_task call each:', json.dumps(chunks(tasks, PARALLEL_TASKS), ensure_ascii=False)]
         reads = [judgment_read(listing, phrase) for batch in named.values() for listing, phrases in batch for phrase in phrases]
         return lines, reads, [f'judgments-{name}.json' for name in every if name in named or name in again]
 
-    def deliver_compare_invitation(self):
+    def deliver_compare_invitation(self) -> list[str]:
         """Delivers the Compare invitation once it is due and neither the gateway nor the gallery has: through the
         messaging gateway when it is connected and no conversation has asked yet, otherwise in the gallery, whose
         invitation the next conversation passes on. A send or gateway check that fails is recorded in the invitation's
@@ -377,18 +571,18 @@ class Features:
             surface = 'gallery'
             try:
                 if 'conversation' not in invitation['delivered'] and usable('gateway'):
-                    tell_user(COMPARE_INVITATION)
+                    _ = tell_user(COMPARE_INVITATION)
                     surface = 'gateway'
             except Exception as error:
                 self.store.fail_compare_invitation(failure(error))
                 raise
-            self.store.deliver_compare_invitation(surface)
+            _ = self.store.deliver_compare_invitation(surface)
             return []
         except Exception as error:
-            return [f'The invitation to answer questions in the Compare tab could not be delivered, so the next conversation '
-                    f'asks and the next run tries again. {failure(error)}']
+            return ['The invitation to answer questions in the Compare tab could not be delivered, so the next conversation '
+                    + f'asks and the next run tries again. {failure(error)}']
 
-    def refresh_stations(self):
+    def refresh_stations(self) -> list[str]:
         """Fetches the rapid-transit stations of the transit feed once, and again only when the feed changes. A feed is tens
         of megabytes, so a failed fetch is tried again after STATION_RETRY."""
         feed = self.store.transit_feed()
@@ -409,11 +603,11 @@ class Features:
         self.state.update(stations_unavailable=None)
         return [f'{len(stations)} rapid-transit stations fetched from {feed["url"]}.']
 
-    def compare_asked(self):
+    def compare_asked(self) -> CompareAsked:
         """Records that a conversation asked the user to answer Compare questions, once."""
         return {'recorded': self.store.deliver_compare_invitation('conversation')}
 
-    def ask_to_compare(self):
+    def ask_to_compare(self) -> bool:
         """Whether a conversation should ask the user to answer Compare questions, from the invitation's record: it is
         due, neither the gateway nor a conversation has delivered it, and the gallery has, the job's last attempt failed,
         or the job's next run will deliver it in the gallery, because the gateway is not connected. The gateway is
@@ -432,7 +626,7 @@ class Features:
             return True
 
     @staticmethod
-    def reads(work):
+    def reads(work: Work) -> set[str]:
         """Every model read that waits, given up or not."""
         reads = {extraction_read(listing['id'], listing['content_fingerprint'])
                  for listing in work['extract'] + work['extract_given_up'] + work['reread_given_up']}
@@ -440,43 +634,44 @@ class Features:
         reads |= {preference_read(*item) for item in work['unread'] + work['unread_given_up']}
         return reads | {judgment_read(listing, phrase) for listing, phrases in work['judge'] + work['judge_given_up'] for phrase in phrases}
 
-    def tag_lines(self):
+    def tag_lines(self) -> list[str]:
         """The tag list, most used first, as the extraction task shows it."""
         tags = sorted(self.tag_counts(self.store.feature_records()).items(), key=lambda item: (-item[1], item[0]))
         return [f'{tag} ({count} listing{"" if count == 1 else "s"})' for tag, count in tags]
 
-    def tag_counts(self, records):
+    def tag_counts(self, records: Mapping[str, FeatureRecord]) -> dict[str, int]:
         """Every tag of the tag list with the number of listings whose current record uses it."""
         used = Counter(tag for record in records.values() for field in ('traits', 'concerns') for tag in record['extraction'][field])
         return {tag: used[tag] for tag in self.store.tags()}
 
-    def prepare(self, listing, phrases, tags, rejection, *, leave_out_failing):
+    def prepare(self, listing: SnapshotListing, phrases: list[str], tags: Sequence[str], rejection: str | None, *, leave_out_failing: bool) -> ExtractionTask:
         """Writes the child's task in the listing content's own directory. Its photos and sheets are prepared once per
         content, and the task file is written again on every run, so it always has the current preferences, the tag
         list as the saved records left it and the error of its last record when that was rejected."""
         directory = work_directory(self.workspace, listing['id'], listing['content_fingerprint'])
         manifest_file = directory / 'task.json'
+        manifest: PreparedTask
         if manifest_file.exists():
-            manifest = json.loads(manifest_file.read_text(encoding='utf-8'))
+            manifest = cast(TaskManifest, json.loads(manifest_file.read_text(encoding='utf-8')))
         else:
             manifest = {'id': listing['id'], 'fingerprint': listing['content_fingerprint'],
                         **self.prepare_photos(listing, directory, leave_out_failing=leave_out_failing)}
         files = [directory / name for name in manifest['files']]
         task_file = directory / 'task.md'
-        task_file.write_text(self.task_text(listing, phrases, files, tags, self.inbox / record_file_name(listing), rejection), encoding='utf-8')
-        manifest_file.write_text(json.dumps({**manifest, 'phrases': phrases}, ensure_ascii=False), encoding='utf-8')
+        _ = task_file.write_text(self.task_text(listing, phrases, files, tags, self.inbox / record_file_name(listing), rejection), encoding='utf-8')
+        _ = manifest_file.write_text(json.dumps({**manifest, 'phrases': phrases}, ensure_ascii=False), encoding='utf-8')
         return {'goal': f'Extract the feature record of listing {listing["id"]}. Read your task file {task_file.as_posix()} with '
-                        'read_file first and follow it exactly. The attached images are the contact sheets it describes.',
+                        + 'read_file first and follow it exactly. The attached images are the contact sheets it describes.',
                 'images': [(directory / name).as_posix() for name in manifest['sheets']]}
 
-    def prepare_photos(self, listing, directory, *, leave_out_failing):
+    def prepare_photos(self, listing: Listing, directory: Path, *, leave_out_failing: bool) -> PreparedPhotos:
         """Downloads the listing's photos, keeps the unique ones and tiles them into contact sheets in directory. Returns
         the URLs of the unique photos in the order the sheets number them, and the names of the photo and sheet files.
         A photo that cannot be downloaded now raises PhotosUnavailable, unless leave_out_failing and another photo loaded."""
         from photos import contact_sheets, distinct_photos, without_near_duplicates
         from PIL import Image
 
-        def attempt(url):
+        def attempt(url: str) -> tuple[bytes | None, PhotosUnavailable | None]:
             try:
                 return self.fetch(url), None
             except PhotosUnavailable as error:
@@ -488,35 +683,35 @@ class Features:
         failing = [error for _, error in results.values() if error]
         if failing and (not leave_out_failing or len(failing) == len(urls)):
             raise PhotosUnavailable(f'{len(failing)} of {len(urls)} photos could not be downloaded, such as: {failing[0]}')
-        contents = {url: content for url, (content, error) in results.items() if error is None}
-        images = []
-        for url in contents:
-            if contents[url] is None:
-                continue
+        contents = {url: content for url, (content, error) in results.items() if error is None and content is not None}
+        images: list[tuple[str, Image.Image]] = []
+        for url, content in contents.items():
             try:
-                image = Image.open(io.BytesIO(contents[url]))
-                image.load()
+                image = Image.open(io.BytesIO(content))
+                _ = image.load()
             except (OSError, SyntaxError, ValueError, Image.DecompressionBombError):
                 continue
             images.append((url, image))
         unique = without_near_duplicates(images)
         shutil.rmtree(directory, ignore_errors=True)
         directory.mkdir(parents=True)
-        files = []
+        files: list[str] = []
         for number, (url, image) in enumerate(unique, 1):
-            files.append(f'photo-{number:02}.{EXTENSIONS.get(image.format, "png")}')
             if image.format in EXTENSIONS:
-                (directory / files[-1]).write_bytes(contents[url])
+                files.append(f'photo-{number:02}.{EXTENSIONS[image.format]}')
+                _ = (directory / files[-1]).write_bytes(contents[url])
             else:
+                files.append(f'photo-{number:02}.png')
                 image.save(directory / files[-1], 'PNG')
-        sheets = []
+        sheets: list[str] = []
         for number, sheet in enumerate(contact_sheets([image for _, image in unique]), 1):
             sheets.append(f'sheet-{number}.jpg')
             sheet.save(directory / sheets[-1], 'JPEG', quality=85)
         return {'photos': [url for url, _ in unique], 'files': files, 'sheets': sheets}
 
     @staticmethod
-    def task_text(listing, phrases, files, tags, record_file, rejection):
+    def task_text(listing: SnapshotListing | ListingDetail, phrases: Iterable[str], files: Sequence[Path], tags: Iterable[str], record_file: Path,
+                  rejection: str | None) -> str:
         return Template(EXTRACTION_TEMPLATE.read_text(encoding='utf-8')).substitute(
             listing_id=listing['id'], fingerprint=listing['content_fingerprint'], photo_count=len(files),
             photo_overview=photo_overview(len(files)),
@@ -531,111 +726,119 @@ class Features:
             preferences=bullet_lines(json.dumps(phrase, ensure_ascii=False) for phrase in phrases) or '  (none)',
             record_file=record_file.as_posix(), correction=correction(record_file, rejection))
 
-    def remove_work_directories(self, keep):
+    def remove_work_directories(self, keep: Container[Path]) -> None:
         if self.workspace.exists():
             for directory in self.workspace.iterdir():
                 if directory.is_dir() and directory not in keep:
                     shutil.rmtree(directory, ignore_errors=True)
 
-    def save(self, value):
-        if not isinstance(value, dict) or set(value) != {'id', 'fingerprint', 'record'}:
+    def save(self, value: object) -> SavedRecord:
+        if not is_object(value) or set(value) != {'id', 'fingerprint', 'record'}:
             raise ValueError('The file must hold a JSON object with exactly id, fingerprint and record.')
-        directory = work_directory(self.workspace, *listing_key(value, 'The record'))
+        identifier, fingerprint = listing_key(value, 'The record')
+        directory = work_directory(self.workspace, identifier, fingerprint)
         try:
-            manifest = json.loads((directory / 'task.json').read_text(encoding='utf-8'))
+            manifest = cast(TaskManifest, json.loads((directory / 'task.json').read_text(encoding='utf-8')))
         except FileNotFoundError:
-            raise ValueError(f'No extraction of {value["id"]} with this fingerprint is waiting: the listing changed or its record is '
-                             'saved already. Stop.') from None
-        result = self.store.save_extraction(value['id'], value['fingerprint'], value['record'], photos=manifest['photos'], phrases=manifest['phrases'])
+            raise ValueError(f'No extraction of {identifier} with this fingerprint is waiting: the listing changed or its record is '
+                             + 'saved already. Stop.') from None
+        result = self.store.save_extraction(identifier, fingerprint, value['record'], photos=manifest['photos'], phrases=manifest['phrases'])
         shutil.rmtree(directory, ignore_errors=True)
-        return {'saved': value['id'], **result}
+        return {'saved': identifier, 'new_tags': result['new_tags']}
 
-    def judgment_task(self, task_file, batch, records, rejection):
+    def judgment_task(self, task_file: Path, batch: Sequence[tuple[SnapshotListing, list[str]]], records: Mapping[str, FeatureRecord],
+                      rejection: str | None) -> JudgmentTask:
         judgments_file = self.inbox / f'judgments-{task_file.stem}.json'
-        listings = [{'id': listing['id'], 'fingerprint': listing['content_fingerprint'], 'unjudged': phrases,
-                     'listing': listing_fields(listing, JUDGMENT_DESCRIPTION_LIMIT), 'record': self.digest(records[listing['id']])}
-                    for listing, phrases in batch]
-        task_file.write_text(Template(JUDGMENT_TEMPLATE.read_text(encoding='utf-8')).substitute(
+        listings: list[JudgmentListing] = [{'id': listing['id'], 'fingerprint': listing['content_fingerprint'], 'unjudged': phrases,
+                                            'listing': listing_fields(listing, JUDGMENT_DESCRIPTION_LIMIT), 'record': self.digest(records[listing['id']])}
+                                           for listing, phrases in batch]
+        _ = task_file.write_text(Template(JUDGMENT_TEMPLATE.read_text(encoding='utf-8')).substitute(
             count=len(batch), listings_json=json.dumps(listings, ensure_ascii=False, indent=1), judgments_file=judgments_file.as_posix(),
             correction=correction(judgments_file, rejection)), encoding='utf-8')
         return {'goal': f'Judge stated preferences for {len(batch)} listings. Read your task file {task_file.as_posix()} with read_file '
-                        'first and follow it exactly.'}
+                        + 'first and follow it exactly.'}
 
     @staticmethod
-    def digest(record):
+    def digest(record: FeatureRecord) -> RecordDigest:
         extraction = record['extraction']
         rooms = Counter(photo['room'] for photo in extraction['photos'])
         return {'summary': extraction['summary'], 'rooms_photographed': dict(rooms), 'traits': extraction['traits'],
-                'concerns': extraction['concerns'], **{name: extraction[name] for name in CATEGORIES}, 'unit_level': extraction['unit_level'],
+                'concerns': extraction['concerns'], 'floor': extraction['floor'], 'style': extraction['style'],
+                'outdoor_space': extraction['outdoor_space'], 'building_type': extraction['building_type'], 'unit_level': extraction['unit_level'],
                 'flags': {flag: value for flag, value in extraction['flags'].items() if value is not None},
                 'ratings': {name: rating['value'] for name, rating in extraction['ratings'].items() if rating != NOT_SHOWN}}
 
-    def judge(self, value):
-        if not isinstance(value, dict) or set(value) != {'judgments'} or not isinstance(value['judgments'], list):
+    def judge(self, value: object) -> JudgeResult:
+        if not is_object(value) or set(value) != {'judgments'} or not is_array(value['judgments']):
             raise ValueError('The file must hold a JSON object with only "judgments", an array.')
         work = self.outstanding()
         waiting = {listing['id']: (listing['content_fingerprint'], phrases) for listing, phrases in work['judge']}
         handed = self.handed_reads('preference')
-        saves, stale = [], []
+        saves: list[tuple[str, str, dict[str, object], list[str]]] = []
+        stale: list[str] = []
         for entry in value['judgments']:
-            if not isinstance(entry, dict) or set(entry) != {'id', 'fingerprint', 'preferences'} or not isinstance(entry['preferences'], dict):
+            if not is_object(entry) or set(entry) != {'id', 'fingerprint', 'preferences'} or not is_object(entry['preferences']):
                 raise ValueError('Each judgment needs exactly id, fingerprint and preferences, an object.')
-            listing_key(entry, 'Each judgment')
-            given = {phrase for _, identifier, _, phrase in handed if identifier == entry['id']}
-            if entry['id'] not in waiting or waiting[entry['id']][0] != entry['fingerprint']:
-                if entry['id'] not in waiting and not given:
-                    raise ValueError(f'{entry["id"]} waits for no preference judgment.')
-                stale.append(entry['id'])
+            identifier, fingerprint = listing_key(entry, 'Each judgment')
+            given = {phrase for _, handed_id, _, phrase in handed if handed_id == identifier}
+            if identifier not in waiting or waiting[identifier][0] != fingerprint:
+                if identifier not in waiting and not given:
+                    raise ValueError(f'{identifier} waits for no preference judgment.')
+                stale.append(identifier)
                 continue
-            unjudged = waiting[entry['id']][1]
+            unjudged = waiting[identifier][1]
             if set(entry['preferences']) - set(unjudged) - given or set(unjudged) & given - set(entry['preferences']):
-                raise ValueError(f'Judge exactly the unjudged preferences of {entry["id"]}: {json.dumps(unjudged, ensure_ascii=False)}.')
+                raise ValueError(f'Judge exactly the unjudged preferences of {identifier}: {json.dumps(unjudged, ensure_ascii=False)}.')
             current = {phrase: judgment for phrase, judgment in entry['preferences'].items() if phrase in unjudged}
             try:
-                validate_judgments(current, list(current))
+                _ = validate_judgments(current, list(current))
             except ValueError as error:
-                raise ValueError(f'{entry["id"]}: {error}') from None
+                raise ValueError(f'{identifier}: {error}') from None
             if current:
-                saves.append((entry['id'], entry['fingerprint'], current, list(current)))
+                saves.append((identifier, fingerprint, current, list(current)))
             else:
-                stale.append(entry['id'])
+                stale.append(identifier)
         self.store.judge_preferences(saves)
         return {'saved': len(saves), 'stale': stale}
 
-    def handed_reads(self, kind):
+    def handed_reads(self, kind: Literal['preference', 'preference reading']) -> list[list[str]]:
         """The reads of a kind the last run handed to the agent, each as the list its key encodes. The inbox is applied
         before the run counts attempts, so these are the reads the files in the inbox were written for."""
-        return [read for read in map(json.loads, self.state.load()['handed']) if read[0] == kind]
+        reads = [cast(list[object], json.loads(read)) for read in self.state.load()['handed']]
+        return [cast(list[str], read) for read in reads if read[0] == kind]
 
-    def readings(self, work):
+    def readings(self, work: Work) -> ReadingsTask:
         """Every note and stated preference waiting for a reading, with the features a reading may name."""
         return {'vocabulary': self.store.reading_vocabulary(),
                 'preferences': [{'kind': kind, 'phrase': phrase} for kind, phrase in work['unread']],
                 'notes': [{'id': note['id'], 'listing': note['listing_id'], 'text': note['text']} for note in work['notes']]}
 
-    def read(self, value):
-        if not isinstance(value, dict) or set(value) != {'preferences', 'notes'} or not all(isinstance(value[key], list) for key in value):
+    def read(self, value: object) -> ReadResult:
+        if not is_object(value) or set(value) != {'preferences', 'notes'} or not is_array(value['preferences']) or not is_array(value['notes']):
             raise ValueError('The file must hold a JSON object with exactly "preferences" and "notes", both arrays.')
-        preferences, notes = [], []
+        preferences: list[tuple[str, str, object]] = []
+        notes: list[tuple[int, dict[str, object]]] = []
         stated = set(stated_phrases(self.store.settings()))
         given = {(kind, phrase) for _, kind, phrase in self.handed_reads('preference reading')}
         for item in value['preferences']:
-            if not isinstance(item, dict) or set(item) != {'kind', 'phrase', 'features'}:
+            if not is_object(item) or set(item) != {'kind', 'phrase', 'features'}:
                 raise ValueError('Each preference reading has exactly kind, phrase and features.')
-            if not isinstance(item['kind'], str) or not isinstance(item['phrase'], str):
+            kind, phrase = item['kind'], item['phrase']
+            if not isinstance(kind, str) or not isinstance(phrase, str):
                 raise ValueError("Each preference reading's kind and phrase are the text the task file gives.")
-            if (item['kind'], item['phrase']) in stated or (item['kind'], item['phrase']) not in given:
-                preferences.append((item['kind'], item['phrase'], item['features']))
+            if (kind, phrase) in stated or (kind, phrase) not in given:
+                preferences.append((kind, phrase, item['features']))
         for item in value['notes']:
-            if not isinstance(item, dict) or set(item) != {'id', 'sentiment', 'likes', 'dislikes'}:
+            if not is_object(item) or set(item) != {'id', 'sentiment', 'likes', 'dislikes'}:
                 raise ValueError('Each note reading has exactly id, sentiment, likes and dislikes.')
-            if type(item['id']) is not int:
+            note_id = item['id']
+            if type(note_id) is not int:
                 raise ValueError("Each note reading's id is the number the task file gives.")
-            notes.append((item['id'], {key: item[key] for key in ('sentiment', 'likes', 'dislikes')}))
+            notes.append((note_id, {key: item[key] for key in ('sentiment', 'likes', 'dislikes')}))
         self.store.save_readings(notes=notes, preferences=preferences)
         return {'preferences': len(preferences), 'notes': len(notes)}
 
-    def status(self):
+    def status(self) -> Status:
         state = self.state.load()
         problems = list(state['problems'])
         if self.store.missing_settings():
@@ -645,42 +848,42 @@ class Features:
         given_up = [listing['id'] for listing in work['extract_given_up']]
         if given_up:
             problems.append(f'Extraction failed {READ_ATTEMPTS} times for {len(given_up)} listings, so they are ranked only from what code reads '
-                            f'about them until their content changes or the user asks to retry: {", ".join(given_up)}.')
+                            + f'about them until their content changes or the user asks to retry: {", ".join(given_up)}.')
         if work['judge_given_up']:
             problems.append(f'Preferences could not be judged in {READ_ATTEMPTS} attempts for {len(work["judge_given_up"])} listings, so those '
-                            f'preferences do not count for them until the user asks to retry: '
-                            f'{", ".join(listing["id"] for listing, _ in work["judge_given_up"])}.')
+                            + 'preferences do not count for them until the user asks to retry: '
+                            + f'{", ".join(listing["id"] for listing, _ in work["judge_given_up"])}.')
         if work['notes_given_up'] or work['unread_given_up']:
             problems.append(f'{len(work["notes_given_up"])} notes and {len(work["unread_given_up"])} stated preferences could not be read in '
-                            f'{READ_ATTEMPTS} attempts, so they do not count in the ranking until the user asks to retry.')
+                            + f'{READ_ATTEMPTS} attempts, so they do not count in the ranking until the user asks to retry.')
         now = self.now()
         if state['stations_unavailable']:
             failure = state['stations_unavailable']
             problems.append(f'The rapid-transit stations of {failure["url"]} could not be fetched since '
-                            f'{datetime.fromisoformat(failure["since"]):%Y-%m-%d %H:%M} UTC, so no listing has a distance to a station. '
-                            f'The job tries again every {STATION_RETRY // timedelta(hours=1)} hours. {failure["reason"]}')
+                            + f'{datetime.fromisoformat(failure["since"]):%Y-%m-%d %H:%M} UTC, so no listing has a distance to a station. '
+                            + f'The job tries again every {STATION_RETRY // timedelta(hours=1)} hours. {failure["reason"]}')
         stalled = {identifier: entry for identifier, entry in state['photos_unavailable'].items()
                    if now - datetime.fromisoformat(entry['since']) >= PHOTO_PATIENCE}
         if stalled:
             problems.append(f'No photo of {len(stalled)} listings could be downloaded for over an hour, so they have no feature record '
-                            'and are not ranked yet. The job keeps trying every 10 minutes: '
+                            + 'and are not ranked yet. The job keeps trying every 10 minutes: '
                             + '; '.join(f'{identifier} since {datetime.fromisoformat(entry["since"]):%Y-%m-%d %H:%M} UTC ({entry["reason"]})'
                                         for identifier, entry in stalled.items()) + '.')
         return {'problems': problems, 'records': len(work['records']), 'waiting': len(work['extract']), 'given_up': given_up,
                 'awaiting_judgment': len(work['judge']), 'awaiting_reading': len(work['notes']) + len(work['unread']),
                 'photos_unavailable': state['photos_unavailable'], 'ask_to_compare': self.ask_to_compare()}
 
-    def retry(self):
+    def retry(self) -> None:
         self.store.reset_read_attempts()
 
 
-def open_features():
+def open_features() -> Features:
     path = store_path()
     return Features(ListingStore(path), RunState(path.parent / 'features.json'), path.parent / 'extraction', download,
                     lambda: datetime.now(timezone.utc), fetch_stations)
 
 
-def run():
+def run() -> int:
     """The cron job's command. Every failure ends here, recorded for status, so Hermes does not wake the model for it."""
     state = RunState(store_path().parent / 'features.json')
     try:
@@ -695,15 +898,19 @@ def run():
     return 0
 
 
-def main(argv):
+class Arguments(argparse.Namespace):
+    command: str = ''
+
+
+def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(description='Keep a feature record for every listing the ranking needs.')
     commands = parser.add_subparsers(dest='command', required=True)
-    commands.add_parser('run')
-    commands.add_parser('tags')
-    commands.add_parser('status')
-    commands.add_parser('retry')
-    commands.add_parser('compare-asked')
-    arguments = parser.parse_args(argv)
+    _ = commands.add_parser('run')
+    _ = commands.add_parser('tags')
+    _ = commands.add_parser('status')
+    _ = commands.add_parser('retry')
+    _ = commands.add_parser('compare-asked')
+    arguments = parser.parse_args(argv, namespace=Arguments())
     if arguments.command == 'run':
         return run()
     try:
@@ -721,7 +928,7 @@ def main(argv):
             print('\n'.join(features.tag_lines()))
         return 0
     except (ValueError, KeyError, OSError, sqlite3.Error, RuntimeError) as error:
-        print(error.args[0] if isinstance(error, KeyError) else error, file=sys.stderr)
+        print(cast(object, error.args[0]) if isinstance(error, KeyError) else error, file=sys.stderr)
         return 1
 
 

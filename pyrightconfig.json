@@ -1,0 +1,23 @@
+{
+  "typeCheckingMode": "all",
+  "pythonVersion": "3.14",
+  "include": [
+    "tests",
+    "skills",
+    "scripts",
+    "typings"
+  ],
+  "extraPaths": [
+    "tests",
+    "skills/gallery/scripts",
+    "skills/search/scripts",
+    "skills/ranking/scripts",
+    "skills/ranking/encoder",
+    "skills/listing-features/scripts",
+    "skills/contact/scripts",
+    "skills/account-connections/scripts",
+    "skills/interview/scripts"
+  ],
+  "reportUninitializedInstanceVariable": false,
+  "reportMissingModuleSource": false
+}

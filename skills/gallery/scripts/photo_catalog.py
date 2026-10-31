@@ -6,6 +6,11 @@ phrasings; a photo's score for it is the cosine with their mean or with the best
 and a listing's score is that of its best photo. The room types are those of extraction (record.py ROOM_TYPES), each
 with phrasings scored the same way."""
 
+from typing import Literal
+
+Probe = Literal['carpet', 'exposed brick', 'balcony', 'bathtub', 'open kitchen']
+"""The quality gate's sanity probes, measured against reference labels before any probe enters the model."""
+
 ROOM_PROMPTS = {
     'kitchen': ['a photo of a kitchen', 'a kitchen in an apartment', 'kitchen cabinets, countertops and appliances'],
     'bathroom': ['a photo of a bathroom', 'a bathroom with a toilet, a sink and a shower', 'a bathroom in an apartment'],
@@ -59,19 +64,19 @@ PROBE_PROMPTS = {
     'small rooms': ['a small cramped room', 'a tiny bedroom'],
     'spacious rooms': ['a large spacious room', 'a big open living room'],
 }
-GATE_PROBES = ('carpet', 'exposed brick', 'balcony', 'bathtub', 'open kitchen')
+GATE_PROBES: tuple[Probe, ...] = ('carpet', 'exposed brick', 'balcony', 'bathtub', 'open kitchen')
 
 # Per-room best-match similarity to the favorites is a column for these rooms.
 MATCH_ROOMS = ('kitchen', 'bathroom', 'living', 'bedroom')
 
 
-def entries():
+def entries() -> list[tuple[str, str, str]]:
     """Every phrasing in the order of the rows of probes.npy: rooms first, then probes."""
     return ([('room', name, text) for name, texts in ROOM_PROMPTS.items() for text in texts]
             + [('probe', name, text) for name, texts in PROBE_PROMPTS.items() for text in texts])
 
 
-def vocabulary():
+def vocabulary() -> dict[str, str]:
     """The reading vocabulary's photo features: what the photos look like, by probe."""
     return {f'photo:{name}': f'the photos show {texts[0].removeprefix("a ").removeprefix("an ")}'
             for name, texts in PROBE_PROMPTS.items()}

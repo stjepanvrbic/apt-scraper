@@ -1,16 +1,19 @@
 """Experimental grouped priors, evaluated before changing the installed scoring model."""
 
 import math
+from collections.abc import Sequence
 from dataclasses import replace
 from statistics import fmean, pstdev
 
-from scoring import COMPOSITES, Column, Model, design, display, fit, in_fit, label, objective, observations, prior, sparse_row
+from measurement import HistoryInputs, ReplayEvent
+from scoring import (COMPOSITES, Column, Design, Fit, Model, Observations, RankingInputs, design, display, fit, in_fit, label, objective,
+                     observations, prior, sparse_row)
 SCALE_FLOOR = 0.1
 AGE_FLOOR = 0.1
 HALF_LIVES = (math.inf, 90, 30, 7)
 
 
-def composite_design(inputs):
+def composite_design(inputs: RankingInputs) -> Design:
     original = design(inputs)
     dense = original.dense_count
     columns = list(original.columns[:dense])
@@ -18,8 +21,7 @@ def composite_design(inputs):
     raw = [dict(row) for row in original.raw]
     means = list(original.prior_mean[:dense])
     for name, components in COMPOSITES.items():
-        positions = [original.index(f'rating:{component}') for component in components]
-        positions = [position for position in positions if position is not None]
+        positions = [position for component in components if (position := original.index(f'rating:{component}')) is not None]
         if not positions:
             continue
         averages = [fmean(row[position] for position in positions) for row in original.rows]
@@ -46,7 +48,7 @@ def composite_design(inputs):
                    raw=tuple(raw), prior_mean=tuple(means + list(original.prior_mean[dense:])))
 
 
-def group(name):
+def group(name: str) -> str:
     if name.startswith(('tag:', 'hypothesis:')):
         return name
     if name.startswith('composite:'):
@@ -69,31 +71,31 @@ def group(name):
     return 'price and size'
 
 
-def prior_variances(model_design):
+def prior_variances(model_design: Design) -> list[float]:
     components = {f'rating:{rating}' for ratings in COMPOSITES.values() for rating in ratings}
     return [1e6, *[0.25 ** 2 if column.name in components else 1.0 for column in model_design.columns]]
 
 
-def aged(data, inputs, half_life):
+def aged(data: Observations, inputs: RankingInputs, half_life: float) -> Observations:
     now = inputs.get('as_of_day', 0)
     listing_days = inputs.get('label_days', {})
     explicit = {listing['id'] for listing in inputs['listings'] if label(listing, inputs['sentiments'].get(listing['id'])) is not None}
     pair_days = dict(zip(map(tuple, inputs['pairs']), inputs.get('pair_days', [])))
-    weights = []
+    weights: list[float] = []
     for weight, listing, pair in zip(data.weights, data.listings, data.pairs):
-        day = pair_days.get(pair) if pair else listing_days.get(listing) if listing in explicit else None
+        day = pair_days.get(pair) if pair else listing_days.get(listing) if listing is not None and listing in explicit else None
         decay = max(AGE_FLOOR, 2 ** (-max(0, now - day) / half_life)) if day is not None else 1.0
         weights.append(weight * decay)
     return replace(data, weights=weights)
 
 
-def evidence(data, result, mean, precision, dense_count):
+def evidence(data: Observations, result: Fit, mean: Sequence[float], precision: Sequence[float], dense_count: int) -> float:
     return (-objective(data, result.weights, mean, precision, dense_count)
             + sum(math.log(value) for value in precision) / 2
             - sum(math.log(row[-1]) for row in result.factor.lower))
 
 
-def fit_candidate(inputs, *, half_life=math.inf, evidence_steps=20):
+def fit_candidate(inputs: RankingInputs, *, half_life: float = math.inf, evidence_steps: int = 20) -> Model:
     model_design = composite_design(inputs)
     mean, _ = prior(model_design, 1)
     data = aged(observations(model_design, inputs, 0.05), inputs, half_life)
@@ -103,13 +105,13 @@ def fit_candidate(inputs, *, half_life=math.inf, evidence_steps=20):
     count = len(inputs['pairs']) + sum(label(listing, inputs['sentiments'].get(listing['id'])) is not None for listing in inputs['listings'])
     if count < 10:
         return Model(model_design, full, 1.0, 0.05, data, (mean, precision))
-    groups = {}
+    groups: dict[str, list[int]] = {}
     for position, column in enumerate(model_design.columns, 1):
         groups.setdefault(group(column.name), []).append(position)
     base_variances = prior_variances(model_design)
     current = evidence(data, full, mean, precision, model_design.dense_count)
     for _ in range(evidence_steps):
-        diagonal = []
+        diagonal: list[float] = []
         for position in range(len(mean)):
             unit = [float(index == position) for index in range(len(mean))]
             transformed = full.factor.forward(unit)
@@ -136,29 +138,29 @@ def fit_candidate(inputs, *, half_life=math.inf, evidence_steps=20):
     return Model(model_design, full, 1.0, 0.05, data, (mean, precision))
 
 
-def choose_half_life(history):
+def choose_half_life(history: Sequence[ReplayEvent]) -> float:
     """Compare settings only on already-observed outcomes and their original pre-action snapshots."""
     from measurement import utilities
     if len(history) < 10:
         return math.inf
-    history = [event for event in history if {event['listing'], event['other']} <= {
-        listing['id'] for listing in event['inputs']['listings'] if in_fit(listing)}]
-    if len(history) < 10:
+    scorable = [(event['listing'], other, event['inputs']) for event in history if (other := event['other']) is not None
+                and {event['listing'], other} <= {listing['id'] for listing in event['inputs']['listings'] if in_fit(listing)}]
+    if len(scorable) < 10:
         return math.inf
-    losses = {}
+    losses: dict[float, float] = {}
     for half_life in HALF_LIVES:
         losses[half_life] = 0
-        for event in history[-10:]:
-            values = utilities(fit_candidate(event['inputs'], half_life=half_life, evidence_steps=0))
-            difference = values[event['listing']] - values[event['other']]
+        for listing, other, inputs in scorable[-10:]:
+            values = utilities(fit_candidate(inputs, half_life=half_life, evidence_steps=0))
+            difference = values[listing] - values[other]
             losses[half_life] += max(-difference, 0) + math.log1p(math.exp(-abs(difference)))
-    return min(HALF_LIVES, key=losses.get)
+    return min(HALF_LIVES, key=lambda half_life: losses[half_life])
 
 
-def tuned_candidate(inputs):
-    history = [event for event in inputs.get('history', []) if event['kind'] == 'pair']
+def tuned_candidate(inputs: RankingInputs | HistoryInputs) -> Model:
+    history = [event for event in inputs['history'] if event['kind'] == 'pair'] if 'history' in inputs else []
     return fit_candidate(inputs, half_life=choose_half_life(history))
 
 
-def composite_reason(model, identifier, name):
+def composite_reason(model: Model, identifier: str, name: str) -> str | None:
     return display(model.design, model.design.ids.index(identifier), f'composite:{name}')

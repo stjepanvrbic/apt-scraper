@@ -31,12 +31,15 @@ import os
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable, Mapping
 from datetime import date, datetime, timedelta
 from email.utils import parseaddr
 from pathlib import Path
+from typing import Literal, TypedDict, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -46,16 +49,98 @@ sys.path.insert(0, str(SKILLS / 'account-connections' / 'scripts'))
 
 import connections  # noqa: E402
 from scratch import read_scratch_object  # noqa: E402
-from store import VIEWING_MINUTES, WEEKDAYS, ListingStore, ViewingConflict, store_path, viewing_time  # noqa: E402
+from shapes import AgentField, Listing, ViewingAvailability, is_array, is_object, loads  # noqa: E402
+from store import (VIEWING_MINUTES, WEEKDAYS, ContactRecord, DueReason, ListingDetail, ListingStore, QuestionRecord, ViewingConflict,  # noqa: E402
+                   ViewingRecord, store_path, viewing_time)
 
 NOT_CONNECTED = 3
 WAITING_FOR_USER = 4
 COMMAND_TIMEOUT_SECONDS = 120
 REQUIRE_TIMEOUT_SECONDS = 200
 CHANNEL_LABELS = {'gmail': 'Gmail', 'imessage': 'iMessage'}
-AGENT_DETAILS = (('name', 'Listing agent'), ('email', 'Email'), ('phone', 'Phone'), ('contact_form', 'Contact form'))
+AGENT_DETAILS: tuple[tuple[AgentField, str], ...] = (('name', 'Listing agent'), ('email', 'Email'), ('phone', 'Phone'),
+                                                      ('contact_form', 'Contact form'))
 LISTING_FACTS = ('id', 'title', 'price', 'price_note', 'currency', 'rental_period', 'size', 'rooms', 'address',
                  'description', 'amenities', 'sources', 'status')
+
+
+class SentMessage(TypedDict):
+    """What a channel reports of a message it sent."""
+    id: str
+    threadId: str | None
+
+
+class CalendarEvent(TypedDict):
+    """What the conflict notice reads of an event Google Calendar lists."""
+    summary: str
+    start: str
+    end: str
+
+
+class EventTime(TypedDict):
+    dateTime: str
+    timeZone: str
+
+
+class Event(TypedDict):
+    """The calendar event of a viewing, as viewing_calendar.py saves it."""
+    summary: str
+    location: str
+    description: str
+    status: Literal['confirmed']
+    start: EventTime
+    end: EventTime
+
+
+class SendResult(TypedDict):
+    sent: bool
+    message_id: str
+    thread_id: str | None
+
+
+class SubmittedResult(TypedDict):
+    recorded: bool
+    message_id: str
+
+
+class AskResult(TypedDict):
+    question: int
+
+
+class ToldResult(TypedDict):
+    told: bool
+
+
+class AnswerResult(TypedDict):
+    answered: int
+
+
+class AgreeResult(TypedDict):
+    viewing: str
+    booked: bool
+    calendar_error: str | None
+
+
+class CancelResult(TypedDict):
+    canceled: str
+    calendar_error: str | None
+
+
+class DueItem(TypedDict):
+    """A contact that needs action, with what the agent needs to act on it."""
+    reason: DueReason
+    listing: dict[str, object]
+    contact: ContactRecord | None
+    correspondence: list[dict[str, object]]
+    viewings: list[dict[str, object]]
+    approvals: list[dict[str, object]]
+    answers: list[dict[str, object]]
+
+
+class WorkResult(TypedDict):
+    due: list[DueItem]
+    waiting: list[QuestionRecord]
+    viewing_availability: ViewingAvailability | None
 
 
 class NotConnected(Exception):
@@ -66,7 +151,7 @@ class WaitingForUser(Exception):
     pass
 
 
-def require(channel):
+def require(channel: str) -> None:
     """The gate every send passes. Exit code 3 means the channel is not connected; any other nonzero
     code means the check itself failed, and the channel is not used either way."""
     script = SKILLS / 'account-connections' / 'scripts' / 'connections.py'
@@ -77,7 +162,7 @@ def require(channel):
         raise RuntimeError(f'The connection check for {channel} failed: {(process.stderr or process.stdout).strip()}')
 
 
-def usable(channel):
+def usable(channel: str) -> bool:
     try:
         require(channel)
     except NotConnected:
@@ -85,7 +170,7 @@ def usable(channel):
     return True
 
 
-def execute(command, name, timeout=COMMAND_TIMEOUT_SECONDS):
+def execute(command: list[str], name: str, timeout: float = COMMAND_TIMEOUT_SECONDS) -> subprocess.CompletedProcess[str]:
     """Runs through the connection script's runner, which kills the whole process tree on a timeout, because
     launchers such as hermes.exe keep the output pipes open in a child."""
     runner = connections.Runner()
@@ -96,7 +181,7 @@ def execute(command, name, timeout=COMMAND_TIMEOUT_SECONDS):
         raise RuntimeError(str(error)) from None
 
 
-def run(command, name):
+def run(command: list[str], name: str) -> str:
     process = execute(command, name)
     if process.returncode != 0:
         lines = (process.stderr.strip() or process.stdout.strip() or f'exit code {process.returncode}').splitlines()
@@ -104,98 +189,150 @@ def run(command, name):
     return process.stdout
 
 
-def google_api(*arguments):
+def google_api(*arguments: str) -> object:
     script = Path(os.environ['HERMES_HOME']) / 'skills' / 'productivity' / 'google-workspace' / 'scripts' / 'google_api.py'
-    return json.loads(run([sys.executable, str(script), *arguments], 'Google ' + ' '.join(arguments[:2])))
+    return loads(run([sys.executable, str(script), *arguments], 'Google ' + ' '.join(arguments[:2])))
 
 
-def tool(name):
+def as_object(value: object, name: str) -> dict[str, object]:
+    """A JSON object a connector printed, whose fields are narrowed where they are read."""
+    if not is_object(value):
+        raise RuntimeError(f'{name} did not answer with an object.')
+    return value
+
+
+def as_objects(value: object, name: str) -> list[dict[str, object]]:
+    if not is_array(value):
+        raise RuntimeError(f'{name} did not answer with a list.')
+    return [as_object(item, name) for item in value]
+
+
+def required_text(item: Mapping[str, object], key: str, name: str) -> str:
+    value = item.get(key)
+    if not isinstance(value, str):
+        raise RuntimeError(f'{name} did not report {key}.')
+    return value
+
+
+def optional_text(item: Mapping[str, object], key: str) -> str | None:
+    """The field's text, or None when it is missing, null or not text."""
+    value = item.get(key)
+    return value if isinstance(value, str) else None
+
+
+def tool(name: str) -> str:
     path = shutil.which(name)
     if path is None:
         raise RuntimeError(f'The {name} command is not on PATH.')
     return path
 
 
-def imsg(*arguments):
-    output = run([tool('imsg'), *arguments], 'imsg ' + arguments[0])
-    return [json.loads(line) for line in output.splitlines() if line.strip()] if '--json' in arguments else output
+def imsg(*arguments: str) -> str:
+    return run([tool('imsg'), *arguments], 'imsg ' + arguments[0])
 
 
-def same_handle(first, second):
+def imsg_records(*arguments: str) -> list[dict[str, object]]:
+    """The records imsg prints one per line with --json."""
+    output = imsg(*arguments, '--json')
+    return [as_object(loads(line), 'imsg ' + arguments[0]) for line in output.splitlines() if line.strip()]
+
+
+def chat_handles(chat: Mapping[str, object]) -> list[str]:
+    """The identifier and the participants of a chat imsg listed."""
+    participants = chat.get('participants')
+    handles = [chat.get('identifier'), *(participants if is_array(participants) else ())]
+    return [handle for handle in handles if isinstance(handle, str)]
+
+
+def same_handle(first: str, second: str) -> bool:
     digits = [re.sub(r'\D', '', value or '') for value in (first, second)]
     if min(map(len, digits)) >= 7:
         return digits[0][-10:] == digits[1][-10:]
     return bool(first) and first.strip().lower() == (second or '').strip().lower()
 
 
-def label(listing):
+def label(listing: Listing) -> str:
     return ', '.join(part for part in (listing.get('title'), listing.get('address')) if part) or listing['id']
 
 
-def contact_of(store, listing_id):
+def contact_of(store: ListingStore, listing_id: str) -> tuple[ListingDetail, ContactRecord]:
     listing = store.listing(listing_id)
-    if not listing['contact']:
+    contact = listing['contact']
+    if not contact:
         raise KeyError(f'No contact request for {listing_id}.')
-    return listing
+    return listing, contact
 
 
-def hold_for_user(store, listing_id):
+def hold_for_user(store: ListingStore, listing_id: str) -> None:
     if store.open_questions(listing_id):
         raise WaitingForUser(f'{listing_id} is waiting for the user to answer a question. Nothing was sent.')
 
 
-def tell_user(text):
+def tell_user(text: str) -> dict[str, object]:
     """Sends to the gateway platform whose check passed, through a file so the text reaches Hermes unchanged."""
     require('gateway')
-    platform = connections.load_status()['gateway']['platform']
+    platform = connections.load_status()['gateway'].get('platform')
+    if platform is None:
+        raise KeyError('platform')
     with tempfile.NamedTemporaryFile('w', encoding='utf-8', suffix='.txt', delete=False) as file:
-        file.write(text)
+        _ = file.write(text)
     try:
-        result = json.loads(run([tool('hermes'), 'send', '--to', platform, '--json', '--file', file.name], 'hermes send'))
+        result = loads(run([tool('hermes'), 'send', '--to', platform, '--json', '--file', file.name], 'hermes send'))
     finally:
         os.unlink(file.name)
+    if not is_object(result):
+        raise RuntimeError(f'The message to the user was not delivered: {result}')
     if result.get('error') or result.get('skipped') or not result.get('success'):
         raise RuntimeError(f'The message to the user was not delivered: {result.get("error") or result.get("note") or result}')
     return result
 
 
-def send_email(listing, text, subject):
-    contact = listing['contact']
+def sent_message(value: object) -> SentMessage:
+    """What Gmail reports of the message it sent."""
+    message = as_object(value, 'Gmail')
+    return {'id': required_text(message, 'id', 'Gmail'), 'threadId': optional_text(message, 'threadId')}
+
+
+def send_email(listing: ListingDetail, contact: ContactRecord, text: str, subject: object) -> tuple[SentMessage, str | None]:
     history = listing['correspondence']
     incoming = [item for item in history if item['channel'] == 'email' and item['direction'] == 'incoming']
     outgoing = [item for item in history if item['channel'] == 'email' and item['direction'] == 'outgoing']
     if incoming:
-        return google_api('gmail', 'reply', incoming[-1]['external_message_id'], '--body', text), None
+        return sent_message(google_api('gmail', 'reply', incoming[-1]['external_message_id'], '--body', text)), None
     address = contact['agent'].get('email')
     if not address:
         raise ValueError('The listing agent has no email address.')
     if outgoing:
-        return google_api('gmail', 'send', '--to', address, '--subject', 'Re: ' + contact['subject'], '--body', text,
-                          '--thread-id', outgoing[-1]['external_thread_id']), None
-    if not subject:
+        thread_id, first_subject = outgoing[-1]['external_thread_id'], contact['subject']
+        if thread_id is None or first_subject is None:
+            raise ValueError('The first email of this contact has no thread or no subject to follow up in.')
+        return sent_message(google_api('gmail', 'send', '--to', address, '--subject', 'Re: ' + first_subject, '--body', text,
+                                       '--thread-id', thread_id)), None
+    if not isinstance(subject, str) or not subject:
         raise ValueError('A first email needs a subject.')
-    return google_api('gmail', 'send', '--to', address, '--subject', subject, '--body', text), subject
+    return sent_message(google_api('gmail', 'send', '--to', address, '--subject', subject, '--body', text)), subject
 
 
-def send_text(listing, text):
-    handle = listing['contact']['agent'].get('phone')
+def send_text(contact: ContactRecord, text: str) -> SentMessage:
+    handle = contact['agent'].get('phone')
     if not handle:
         raise ValueError('The listing agent has no phone number.')
-    imsg('send', '--to', handle, '--text', text)
-    for chat in imsg('chats', '--limit', '200', '--json'):
-        if any(same_handle(handle, participant) for participant in [chat.get('identifier'), *chat.get('participants', [])]):
-            for message in imsg('history', '--chat-id', str(chat['id']), '--limit', '10', '--json'):
+    _ = imsg('send', '--to', handle, '--text', text)
+    for chat in imsg_records('chats', '--limit', '200'):
+        if any(same_handle(handle, participant) for participant in chat_handles(chat)):
+            for message in imsg_records('history', '--chat-id', str(chat['id']), '--limit', '10'):
                 if message.get('is_from_me') and message.get('text') == text:
-                    return {'id': message['guid'], 'threadId': message.get('chat_guid') or chat.get('guid')}
+                    return {'id': required_text(message, 'guid', 'imsg history'),
+                            'threadId': optional_text(message, 'chat_guid') or optional_text(chat, 'guid')}
     return {'id': f'imessage:{uuid4()}', 'threadId': None}
 
 
-def command_send(store, value):
+def command_send(store: ListingStore, value: dict[str, object]) -> SendResult:
     listing_id, channel, text = value.get('listing'), value.get('channel'), value.get('text')
-    if channel not in ('email', 'imessage') or not isinstance(text, str) or not text.strip():
+    if not isinstance(listing_id, str) or channel not in ('email', 'imessage') or not isinstance(text, str) or not text.strip():
         raise ValueError('send needs listing, channel email or imessage, and text.')
-    listing = contact_of(store, listing_id)
-    if listing['contact']['status'] == 'closed':
+    listing, contact = contact_of(store, listing_id)
+    if contact['status'] == 'closed':
         raise ValueError(f'The contact for {listing_id} is closed.')
     hold_for_user(store, listing_id)
     try:
@@ -204,34 +341,34 @@ def command_send(store, value):
         store.set_contact(listing_id, 'failed', error=f'Could not write to the listing agent. {error}')
         raise
     if channel == 'email':
-        sent, subject = send_email(listing, text, value.get('subject'))
+        sent, subject = send_email(listing, contact, text, value.get('subject'))
     else:
-        sent, subject = send_text(listing, text), None
-    store.correspond(listing_id, 'outgoing', channel, text, external_message_id=sent['id'], external_thread_id=sent.get('threadId') or None)
+        sent, subject = send_text(contact, text), None
+    _ = store.correspond(listing_id, 'outgoing', channel, text, external_message_id=sent['id'], external_thread_id=sent['threadId'] or None)
     store.set_contact(listing_id, 'contacted', channel=channel, subject=subject)
-    return {'sent': True, 'message_id': sent['id'], 'thread_id': sent.get('threadId') or None}
+    return {'sent': True, 'message_id': sent['id'], 'thread_id': sent['threadId'] or None}
 
 
-def command_submitted(store, value):
+def command_submitted(store: ListingStore, value: dict[str, object]) -> SubmittedResult:
     listing_id, text, url = value.get('listing'), value.get('text'), value.get('url')
-    if not isinstance(text, str) or not text.strip() or not isinstance(url, str):
+    if not isinstance(listing_id, str) or not isinstance(text, str) or not text.strip() or not isinstance(url, str):
         raise ValueError('submitted needs listing, the text you submitted and the form URL.')
-    contact_of(store, listing_id)
+    _ = contact_of(store, listing_id)
     identifier = f'form:{uuid4()}'
-    store.correspond(listing_id, 'outgoing', 'contact_form', text, external_message_id=identifier, external_thread_id=url)
+    _ = store.correspond(listing_id, 'outgoing', 'contact_form', text, external_message_id=identifier, external_thread_id=url)
     store.set_contact(listing_id, 'contacted', channel='contact_form')
     return {'recorded': True, 'message_id': identifier}
 
 
-def command_ask(store, value):
+def command_ask(store: ListingStore, value: dict[str, object]) -> AskResult:
     listing_id, question = value.get('listing'), value.get('question')
-    if not isinstance(question, str) or not question.strip():
+    if not isinstance(listing_id, str) or not isinstance(question, str) or not question.strip():
         raise ValueError('ask needs listing and question.')
-    listing = contact_of(store, listing_id)
+    listing, _ = contact_of(store, listing_id)
     link = listing['sources'][0]['url']
     try:
         result = tell_user(f'Question about {label(listing)} ({link}):\n\n{question.strip()}\n\n'
-                           'Reply here, and I will continue with the listing agent.')
+                           + 'Reply here, and I will continue with the listing agent.')
     except NotConnected as error:
         store.set_contact(listing_id, 'failed', error=f'A question for you could not be sent. {error} The question: {question.strip()}')
         raise
@@ -240,26 +377,32 @@ def command_ask(store, value):
                                        external_message_id=str(message_id) if message_id is not None else None)}
 
 
-def command_tell(store, value):
-    text = value.get('text')
+def command_tell(store: ListingStore, value: dict[str, object]) -> ToldResult:
+    text, listing_id = value.get('text'), value.get('listing')
     if not isinstance(text, str) or not text.strip():
         raise ValueError('tell needs text.')
-    if value.get('listing'):
-        listing = contact_of(store, value['listing'])
+    if listing_id:
+        if not isinstance(listing_id, str):
+            raise ValueError('tell names the listing by its id.')
+        listing, _ = contact_of(store, listing_id)
         text = f'{label(listing)} ({listing["sources"][0]["url"]}):\n\n{text.strip()}'
-    tell_user(text)
+    _ = tell_user(text)
     return {'told': True}
 
 
-def command_answer(store, value):
-    if type(value.get('question')) is not int or not isinstance(value.get('answer'), str):
+def command_answer(store: ListingStore, value: dict[str, object]) -> AnswerResult:
+    question, answer = value.get('question'), value.get('answer')
+    if type(question) is not int or not isinstance(answer, str):
         raise ValueError('answer needs the question number and the answer.')
-    store.answer_question(value['question'], value['answer'], share=value.get('share'))
-    return {'answered': value['question']}
+    store.answer_question(question, answer, share=value.get('share'))
+    return {'answered': question}
 
 
-def within_availability(availability, start):
-    local = start.astimezone(ZoneInfo(availability['timezone']))
+def within_availability(availability: ViewingAvailability, start: datetime) -> bool:
+    zone = availability.get('timezone')
+    if zone is None:
+        raise KeyError('timezone')
+    local = start.astimezone(ZoneInfo(zone))
     end = local + timedelta(minutes=VIEWING_MINUTES)
     if end.date() != local.date():
         return False
@@ -271,35 +414,43 @@ def within_availability(availability, start):
                for window in availability.get('weekly', []))
 
 
-def calendar_conflicts(store, start):
+def calendar_conflicts(store: ListingStore, start: datetime) -> list[CalendarEvent]:
     """All-day events are left out: the saved availability's unavailable dates are where whole days off live. Events
     of agreed and booked viewings are left out too: the store's overlap rule decides about those, with its own answer,
     and a moved viewing must not clash with its own event."""
     end = start + timedelta(minutes=VIEWING_MINUTES)
     viewings = {event_id for viewing in store.scheduled_viewings()
                 for event_id in (viewing['calendar_event_id'], created_event_id(viewing['id']))}
-    events = google_api('calendar', 'list', '--start', start.isoformat(), '--end', end.isoformat(), '--max', '10')
-    return [event for event in events
-            if 'T' in event.get('start', '') and event.get('status') != 'cancelled' and event.get('id') not in viewings]
+    events = as_objects(google_api('calendar', 'list', '--start', start.isoformat(), '--end', end.isoformat(), '--max', '10'),
+                        'Google Calendar')
+    conflicts: list[CalendarEvent] = []
+    for event in events:
+        begins, summary = optional_text(event, 'start') or '', optional_text(event, 'summary')
+        if 'T' in begins and event.get('status') != 'cancelled' and event.get('id') not in viewings:
+            conflicts.append({'summary': 'an event' if summary is None else summary, 'start': begins,
+                              'end': required_text(event, 'end', 'Google Calendar')})
+    return conflicts
 
 
-def created_event_id(viewing_id):
+def created_event_id(viewing_id: str) -> str:
     """The identifier of the event this script creates for a viewing. Calendar event identifiers allow only lowercase
     a to v and digits, 5 to 1024 characters (Calendar API, Events resource `id`), which a UUID without hyphens satisfies."""
     return viewing_id.replace('-', '')
 
 
-def local_start(store, viewing):
-    zone = (store.settings().get('viewing_availability') or {}).get('timezone', 'UTC')
+def local_start(store: ListingStore, viewing: ViewingRecord) -> tuple[datetime, str]:
+    availability = store.settings().get('viewing_availability')
+    zone = availability.get('timezone', 'UTC') if availability else 'UTC'
     return datetime.fromisoformat(viewing['time']).astimezone(ZoneInfo(zone)), zone
 
 
-def viewing_event(store, viewing):
+def viewing_event(store: ListingStore, viewing: ViewingRecord) -> Event:
     listing = store.listing(viewing['listing_id'])
-    agent = listing['contact']['agent'] if listing['contact'] else listing['agent']
+    contact = listing['contact']
+    agent = contact['agent'] if contact else listing['agent']
     start, zone = local_start(store, viewing)
     lines = [label(listing), *(f'{source["label"]}: {source["url"]}' for source in listing['sources']), '',
-             *(f'{name}: {agent[key]}' for key, name in AGENT_DETAILS if agent.get(key))]
+             *(f'{name}: {value}' for key, name in AGENT_DETAILS if (value := agent.get(key)))]
     if viewing['details'].strip():
         lines += ['', viewing['details'].strip()]
     return {'summary': f'Apartment viewing: {listing.get("address") or label(listing)}', 'location': listing.get('address') or '',
@@ -308,32 +459,38 @@ def viewing_event(store, viewing):
             'end': {'dateTime': (start + timedelta(minutes=VIEWING_MINUTES)).isoformat(), 'timeZone': zone}}
 
 
-def write_calendar(*arguments):
+def write_calendar(*arguments: str) -> object:
     script = Path(__file__).resolve().with_name('viewing_calendar.py')
-    return json.loads(run([sys.executable, str(script), *arguments], 'Google Calendar ' + arguments[0]))
+    return loads(run([sys.executable, str(script), *arguments], 'Google Calendar ' + arguments[0]))
 
 
-def save_event(store, viewing):
+def save_event(store: ListingStore, viewing: ViewingRecord) -> bool:
     with tempfile.NamedTemporaryFile('w', encoding='utf-8', suffix='.json', delete=False) as file:
         json.dump({'event_id': viewing['calendar_event_id'], 'new_id': created_event_id(viewing['id']),
                    'event': viewing_event(store, viewing)}, file, ensure_ascii=False)
     try:
-        saved = write_calendar('save', file.name)
+        saved = as_object(write_calendar('save', file.name), 'Google Calendar')
     finally:
         os.unlink(file.name)
-    return store.record_booking(viewing['id'], viewing['time'], viewing['details'], saved['id'])
+    return store.record_booking(viewing['id'], viewing['time'], viewing['details'], required_text(saved, 'id', 'Google Calendar'))
 
 
-def remove_event(store, viewing):
-    write_calendar('delete', viewing['calendar_event_id'])
-    store.record_event_removed(viewing['id'], viewing['calendar_event_id'])
+def remove_event(store: ListingStore, viewing: ViewingRecord) -> bool:
+    event_id = viewing['calendar_event_id']
+    if event_id is None:
+        raise ValueError(f'The viewing {viewing["id"]} has no calendar event to remove.')
+    _ = write_calendar('delete', event_id)
+    _ = store.record_event_removed(viewing['id'], event_id)
     return False
 
 
-def sync_calendar(store):
+def sync_calendar(store: ListingStore) -> tuple[set[str], dict[str, tuple[ViewingRecord, str]]]:
     """Returns the ids of the viewings it booked and, per viewing whose write failed, the viewing and the error. A
     failed write does not hold up the others. A calendar that is not connected fails every remaining write unsent."""
-    booked, failures, disconnected = set(), {}, None
+    booked: set[str] = set()
+    failures: dict[str, tuple[ViewingRecord, str]] = {}
+    disconnected: str | None = None
+    writes: list[tuple[Callable[[ListingStore, ViewingRecord], bool], ViewingRecord]]
     writes = [(save_event, viewing) for viewing in store.agreed_viewings()]
     writes += [(remove_event, viewing) for viewing in store.canceled_viewing_events()]
     for write, viewing in writes:
@@ -348,11 +505,16 @@ def sync_calendar(store):
             disconnected = str(error)
             failures[viewing['id']] = (viewing, disconnected)
         except (RuntimeError, ValueError, KeyError, OSError, sqlite3.Error) as error:
-            failures[viewing['id']] = (viewing, str(error.args[0] if isinstance(error, KeyError) else error))
+            failures[viewing['id']] = (viewing, error_text(error))
     return booked, failures
 
 
-def sync_after(store, viewing_id):
+def error_text(error: Exception) -> str:
+    """A KeyError's message is its key, which str() would quote."""
+    return str(error.args[0] if isinstance(error, KeyError) else error)
+
+
+def sync_after(store: ListingStore, viewing_id: str) -> tuple[bool, str | None]:
     """Runs after a command has committed its change, so a failure is reported in its output and never fails the
     command, which would otherwise read as "nothing was recorded"."""
     try:
@@ -362,23 +524,26 @@ def sync_after(store, viewing_id):
     return viewing_id in booked, failures[viewing_id][1] if viewing_id in failures else None
 
 
-def calendar_notices(store, failures):
+def calendar_notices(store: ListingStore, failures: Mapping[str, tuple[ViewingRecord, str]]) -> dict[str, str]:
     """One notice per distinct error, naming the viewings it holds up."""
-    viewings_by_error = {}
+    viewings_by_error: dict[str, list[ViewingRecord]] = {}
     for viewing, error in failures.values():
         viewings_by_error.setdefault(error, []).append(viewing)
-    notices = {}
+    notices: dict[str, str] = {}
     for error, viewings in viewings_by_error.items():
         names = ', '.join(f'{label(store.listing(viewing["listing_id"]))} on {local_start(store, viewing)[0]:%a %d %b at %H:%M}'
                           for viewing in viewings)
         notices['calendar: ' + error] = (f'I could not update your Google Calendar for the viewing of {names}: {error} '
-                                         'I will keep trying every few minutes.')
+                                         + 'I will keep trying every few minutes.')
     return notices
 
 
-def command_agree(store, value):
+def command_agree(store: ListingStore, value: dict[str, object]) -> AgreeResult:
     listing_id, time, details = value.get('listing'), value.get('time'), value.get('details', '')
-    contact_of(store, listing_id)
+    viewing = value.get('viewing')
+    if not isinstance(listing_id, str) or viewing is not None and not isinstance(viewing, str):
+        raise ValueError('agree needs listing and time, and the id of the viewing it moves.')
+    _ = contact_of(store, listing_id)
     start = datetime.fromisoformat(viewing_time(time))
     if value.get('user_confirmed') is not True:
         availability = store.settings().get('viewing_availability')
@@ -387,18 +552,18 @@ def command_agree(store, value):
         require('calendar')
         conflicts = calendar_conflicts(store, start)
         if conflicts:
-            names = ', '.join(f'{event.get("summary", "an event")} ({event["start"]} to {event["end"]})' for event in conflicts)
+            names = ', '.join(f'{event["summary"]} ({event["start"]} to {event["end"]})' for event in conflicts)
             raise WaitingForUser(f'The calendar has {names} at {time}. Ask the user before agreeing to it.')
     try:
-        viewing_id = store.agree_viewing(listing_id, time, details, viewing_id=value.get('viewing'))
+        viewing_id = store.agree_viewing(listing_id, time, details, viewing_id=viewing)
     except ViewingConflict as conflict:
         raise WaitingForUser(f'{conflict} Propose another time.') from None
     booked, error = sync_after(store, viewing_id)
     return {'viewing': viewing_id, 'booked': booked, 'calendar_error': error}
 
 
-def command_work(store):
-    due = []
+def command_work(store: ListingStore) -> WorkResult:
+    due: list[DueItem] = []
     for item in store.due_contacts():
         listing = store.listing(item['listing_id'])
         due.append({
@@ -415,21 +580,21 @@ def command_work(store):
     return {'due': due, 'waiting': store.open_questions(), 'viewing_availability': store.settings().get('viewing_availability')}
 
 
-def record(store, listing_id, channel, message_id, thread_id, text):
+def record(store: ListingStore, listing_id: str, channel: str, message_id: str, thread_id: str | None, text: str | None) -> None:
     if not store.has_message(listing_id, channel, message_id):
-        store.correspond(listing_id, 'incoming', channel, (text or '').strip()[:20000] or '(The message has no text.)',
-                         external_message_id=message_id, external_thread_id=thread_id)
+        _ = store.correspond(listing_id, 'incoming', channel, (text or '').strip()[:20000] or '(The message has no text.)',
+                             external_message_id=message_id, external_thread_id=thread_id)
 
 
-def only(listing_ids):
+def only(listing_ids: list[str]) -> str | None:
     """A reply outside a known thread is filed only when exactly one open contact uses that address or number."""
     return listing_ids[0] if len(listing_ids) == 1 else None
 
 
-def poll_gmail(store, contacts):
+def poll_gmail(store: ListingStore, contacts: list[ContactRecord]) -> None:
     owners = store.thread_owners('email')
-    senders = {}
-    queries = set()
+    senders: dict[str, list[str]] = {}
+    queries: set[str] = set()
     for contact in contacts:
         address = (contact['agent'].get('email') or '').lower()
         terms = [f'from:{address}'] if address else []
@@ -440,51 +605,57 @@ def poll_gmail(store, contacts):
         if terms:
             since = (datetime.fromisoformat(contact['requested_at']) - timedelta(days=1)).strftime('%Y/%m/%d')
             queries.add(f'-from:me after:{since} ' + (terms[0] if len(terms) == 1 else '{' + ' '.join(terms) + '}'))
-    seen = set()
+    seen: set[str] = set()
     for query in sorted(queries):
-        for message in google_api('gmail', 'search', query, '--max', '25'):
-            if message['id'] in seen:
+        for message in as_objects(google_api('gmail', 'search', query, '--max', '25'), 'Gmail'):
+            message_id = required_text(message, 'id', 'Gmail')
+            if message_id in seen:
                 continue
-            seen.add(message['id'])
-            listing_id = owners.get(message.get('threadId')) or only(senders.get(parseaddr(message.get('from', ''))[1].lower(), []))
-            if listing_id and not store.has_message(listing_id, 'email', message['id']):
-                full = google_api('gmail', 'get', message['id'])
-                record(store, listing_id, 'email', message['id'], message.get('threadId'), full.get('body') or full.get('snippet'))
+            seen.add(message_id)
+            thread_id = optional_text(message, 'threadId')
+            sender = parseaddr(optional_text(message, 'from') or '')[1].lower()
+            listing_id = (thread_id and owners.get(thread_id)) or only(senders.get(sender, []))
+            if listing_id and not store.has_message(listing_id, 'email', message_id):
+                full = as_object(google_api('gmail', 'get', message_id), 'Gmail')
+                record(store, listing_id, 'email', message_id, thread_id, optional_text(full, 'body') or optional_text(full, 'snippet'))
 
 
-def poll_imessage(store, contacts):
+def poll_imessage(store: ListingStore, contacts: list[ContactRecord]) -> None:
     owners = store.thread_owners('imessage')
     requested = {contact['listing_id']: contact['requested_at'] for contact in contacts}
-    phones = [(contact['listing_id'], contact['agent']['phone']) for contact in contacts if contact['agent'].get('phone')]
+    phones = [(contact['listing_id'], phone) for contact in contacts if (phone := contact['agent'].get('phone'))]
     if not phones and not owners:
         return
-    for chat in imsg('chats', '--limit', '200', '--json'):
-        handles = [chat.get('identifier'), *chat.get('participants', [])]
-        listing_id = owners.get(chat.get('guid')) or only([listing for listing, phone in phones
-                                                            if any(same_handle(phone, handle) for handle in handles)])
+    for chat in imsg_records('chats', '--limit', '200'):
+        handles, guid = chat_handles(chat), optional_text(chat, 'guid')
+        listing_id = (guid and owners.get(guid)) or only([listing for listing, phone in phones
+                                                           if any(same_handle(phone, handle) for handle in handles)])
         if listing_id not in requested:
             continue
-        for message in imsg('history', '--chat-id', str(chat['id']), '--start', requested[listing_id], '--limit', '50', '--json'):
-            if not message.get('is_from_me') and message.get('text'):
-                record(store, listing_id, 'imessage', message['guid'], message.get('chat_guid') or chat.get('guid'), message['text'])
+        for message in imsg_records('history', '--chat-id', str(chat['id']), '--start', requested[listing_id], '--limit', '50'):
+            text = optional_text(message, 'text')
+            if not message.get('is_from_me') and text:
+                record(store, listing_id, 'imessage', required_text(message, 'guid', 'imsg history'),
+                       optional_text(message, 'chat_guid') or guid, text)
 
 
-def notice_state_path():
+def notice_state_path() -> Path:
     return Path(os.environ['HERMES_HOME']) / 'apt-scraper' / 'contact-notices.json'
 
 
-def report_errors(notices):
+def report_errors(notices: Mapping[str, str]) -> None:
     """Tells the user once about each new error of a background step, so an outage does not message them every tick.
     `notices` maps each failing step to what the user is told."""
     path = notice_state_path()
+    reported: dict[str, str]
     try:
-        reported = json.loads(path.read_text(encoding='utf-8'))
+        reported = cast(dict[str, str], json.loads(path.read_text(encoding='utf-8')))
     except (FileNotFoundError, json.JSONDecodeError):
         reported = {}
     for step, notice in notices.items():
         if reported.get(step) != notice:
             try:
-                tell_user(notice)
+                _ = tell_user(notice)
             except (NotConnected, RuntimeError, OSError) as failure:
                 print(f'Telling the user "{notice}" did not work: {failure}', file=sys.stderr)
                 continue
@@ -492,14 +663,14 @@ def report_errors(notices):
     current = {step: notice for step, notice in reported.items() if step in notices}
     if current:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(current), encoding='utf-8')
+        _ = path.write_text(json.dumps(current), encoding='utf-8')
     else:
         path.unlink(missing_ok=True)
 
 
-def command_due(store):
+def command_due(store: ListingStore) -> int:
     contacts = store.active_contacts()
-    notices = {}
+    notices: dict[str, str] = {}
     for channel, poll in (('gmail', poll_gmail), ('imessage', poll_imessage)):
         if not contacts:
             continue
@@ -508,7 +679,7 @@ def command_due(store):
                 poll(store, contacts)
         except (RuntimeError, ValueError, KeyError, OSError) as error:
             notices[channel] = (f'I could not check {CHANNEL_LABELS[channel]} for replies from listing agents: {error} '
-                                'I will keep trying every few minutes.')
+                                + 'I will keep trying every few minutes.')
     notices.update(calendar_notices(store, sync_calendar(store)[1]))
     report_errors(notices)
     due = store.due_contacts()
@@ -532,24 +703,33 @@ def command_due(store):
     return 0
 
 
-FILE_COMMANDS = {'send': command_send, 'submitted': command_submitted, 'ask': command_ask, 'tell': command_tell,
-                 'answer': command_answer, 'agree': command_agree}
+FILE_COMMANDS: dict[str, Callable[[ListingStore, dict[str, object]], Mapping[str, object]]] = {
+    'send': command_send, 'submitted': command_submitted, 'ask': command_ask, 'tell': command_tell,
+    'answer': command_answer, 'agree': command_agree}
 
 
-def main(argv=None):
+class Arguments(argparse.Namespace):
+    command: str = ''
+    file: Path = Path()
+    listing: str = ''
+    viewing: str = ''
+    error: str = ''
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='Correspond with listing agents and ask the user about listings.')
     commands = parser.add_subparsers(dest='command', required=True)
     for name in ('work', 'questions', 'due'):
-        commands.add_parser(name)
+        _ = commands.add_parser(name)
     for name in FILE_COMMANDS:
-        commands.add_parser(name).add_argument('file', type=Path)
+        _ = commands.add_parser(name).add_argument('file', type=Path)
     for name in ('done', 'close'):
-        commands.add_parser(name).add_argument('listing')
-    commands.add_parser('cancel').add_argument('viewing')
+        _ = commands.add_parser(name).add_argument('listing')
+    _ = commands.add_parser('cancel').add_argument('viewing')
     failing = commands.add_parser('fail')
-    failing.add_argument('listing')
-    failing.add_argument('error')
-    arguments = parser.parse_args(argv)
+    _ = failing.add_argument('listing')
+    _ = failing.add_argument('error')
+    arguments = parser.parse_args(argv, namespace=Arguments())
     store = ListingStore(store_path())
     if arguments.command == 'due':
         return command_due(store)
@@ -562,7 +742,7 @@ def main(argv=None):
         result = {'handled': arguments.listing}
     elif arguments.command == 'cancel':
         store.cancel_viewing(arguments.viewing, possible_event_id=created_event_id(arguments.viewing))
-        result = {'canceled': arguments.viewing, 'calendar_error': sync_after(store, arguments.viewing)[1]}
+        result = CancelResult(canceled=arguments.viewing, calendar_error=sync_after(store, arguments.viewing)[1])
     elif arguments.command == 'close':
         store.set_contact(arguments.listing, 'closed')
         result = {'closed': arguments.listing}
@@ -587,5 +767,5 @@ if __name__ == '__main__':
         print(error, file=sys.stderr)
         sys.exit(WAITING_FOR_USER)
     except (ValueError, KeyError, OSError, RuntimeError) as error:
-        print(error.args[0] if isinstance(error, KeyError) else error, file=sys.stderr)
+        print(error_text(error), file=sys.stderr)
         sys.exit(1)

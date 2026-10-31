@@ -26,8 +26,10 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Protocol, TextIO, TypedDict, cast
 
 SKILLS = Path(__file__).resolve().parents[1] / 'skills'
 ENCODER = SKILLS / 'ranking' / 'encoder'
@@ -39,47 +41,63 @@ NO_WAKE = json.dumps({'wakeAgent': False})
 
 sys.path.insert(0, str(ENCODER))
 
-from assets import prepare, ready, urlopen  # noqa: E402
+from assets import Download, Manifest, prepare, ready, urlopen  # noqa: E402
 
 
-def environment_python(directory):
+class Quality(TypedDict):
+    passed: bool
+
+
+class ModelManifest(Manifest):
+    """The part of model.json the installer and the cron run read beyond the pinned files: the gate's verdict."""
+    name: str
+    quality: Quality
+
+
+class Run(Protocol):
+    """subprocess.run as this script calls it; the tests replace it with a recorder that returns a CompletedProcess."""
+    def __call__(self, args: list[str], *, check: bool = ..., env: Mapping[str, str] = ..., stdout: int | TextIO = ...,
+                 stderr: int = ..., text: bool = ..., encoding: str = ..., errors: str = ...) -> subprocess.CompletedProcess[str]: ...
+
+
+def environment_python(directory: Path) -> Path:
     return directory / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
 
 
-def isolated():
+def isolated() -> dict[str, str]:
     """Hermes may point PYTHONPATH at its own packages, which must not load into the encoder's Python."""
     return {key: value for key, value in os.environ.items() if key not in ('PYTHONPATH', 'PYTHONHOME')}
 
 
-def stamp():
+def stamp() -> str:
     return hashlib.sha256(REQUIREMENTS.read_bytes()).hexdigest() + '\n' + sys.version
 
 
-def build(directory, run):
+def build(directory: Path, run: Run) -> None:
     stamp_file = directory / 'installed.txt'
     stamp_file.unlink(missing_ok=True)
-    run([sys.executable, '-m', 'venv', '--clear', str(directory)], check=True, env=isolated(), stdout=sys.stderr)
-    run([str(environment_python(directory)), '-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', '--require-hashes',
-         '--only-binary', ':all:', '--no-deps', '-r', str(REQUIREMENTS)], check=True, env=isolated(), stdout=sys.stderr)
-    stamp_file.write_text(stamp(), encoding='utf-8')
+    _ = run([sys.executable, '-m', 'venv', '--clear', str(directory)], check=True, env=isolated(), stdout=sys.stderr)
+    _ = run([str(environment_python(directory)), '-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', '--require-hashes',
+             '--only-binary', ':all:', '--no-deps', '-r', str(REQUIREMENTS)], check=True, env=isolated(), stdout=sys.stderr)
+    _ = stamp_file.write_text(stamp(), encoding='utf-8')
 
 
-def current(directory):
+def current(directory: Path) -> bool:
     stamp_file = directory / 'installed.txt'
     return stamp_file.exists() and stamp_file.read_text(encoding='utf-8') == stamp()
 
 
-def paths(home):
+def paths(home: Path) -> tuple[Path, Path, Path]:
     workspace = home / 'workspace' / 'encoder'
     return workspace / 'environment', workspace / 'model', workspace / 'status.json'
 
 
-def write_status(path, **values):
+def write_status(path: Path, **values: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({'checked_at': datetime.now(timezone.utc).isoformat(), **values}) + '\n', encoding='utf-8')
+    _ = path.write_text(json.dumps({'checked_at': datetime.now(timezone.utc).isoformat(), **values}) + '\n', encoding='utf-8')
 
 
-def failed_gate(manifest):
+def failed_gate(manifest: ModelManifest) -> str | None:
     """Why the shipped model stays off for good, or None when its quality measurements passed."""
     if manifest['quality']['passed']:
         return None
@@ -87,9 +105,9 @@ def failed_gate(manifest):
             'ranking uses no photo embedding.')
 
 
-def install(home, run, opener):
+def install(home: Path, run: Run, opener: Callable[[str], Download]) -> int:
     environment, model, status = paths(home)
-    manifest = json.loads(MANIFEST.read_text(encoding='utf-8'))
+    manifest = cast(ModelManifest, json.loads(MANIFEST.read_text(encoding='utf-8')))
     if reason := failed_gate(manifest):
         write_status(status, problem=None, off=reason)
         print(reason)
@@ -102,7 +120,7 @@ def install(home, run, opener):
     size = sum(item['bytes'] for item in manifest['files'])
     print(f'Downloading the photo encoder {manifest["name"]} ({size / 1e6:,.0f} MB) unless it is already here.', file=sys.stderr)
     try:
-        prepare(manifest, model, opener=opener)
+        _ = prepare(manifest, model, opener=opener)
     except (OSError, ValueError) as error:
         print(f'The photo encoder could not be downloaded: {error}', file=sys.stderr)
         return MODEL_FAILED
@@ -116,14 +134,15 @@ def install(home, run, opener):
     return 0
 
 
-def encode_once(home, run, opener):
+def encode_once(home: Path, run: Run, opener: Callable[[str], Download]) -> None:
     environment, model, status = paths(home)
-    manifest = json.loads(MANIFEST.read_text(encoding='utf-8'))
+    manifest = cast(ModelManifest, json.loads(MANIFEST.read_text(encoding='utf-8')))
     if reason := failed_gate(manifest):
         write_status(status, problem=None, off=reason)
         print(NO_WAKE)
         return
-    problem, summary = None, None
+    problem: str | None = None
+    summary: object = None
     # The first run builds the environment and downloads the image tower, as `install` does by hand; later runs
     # rebuild the environment when Hermes's Python or the requirements changed.
     if not environment_python(environment).exists() or not ready(manifest, model) or not current(environment):
@@ -136,14 +155,14 @@ def encode_once(home, run, opener):
             last = (result.stderr or '').strip().splitlines()[-1:] or ['no error output']
             problem = f'The encoder stopped with exit code {result.returncode}: {last[0]}'
         else:
-            summary = json.loads(result.stdout.strip().splitlines()[-1])
+            summary = cast(object, json.loads(result.stdout.strip().splitlines()[-1]))
     write_status(status, problem=problem, last=summary)
     if problem:
         print(problem)
     print(NO_WAKE)
 
 
-def main(arguments, run=subprocess.run, opener=urlopen):
+def main(arguments: list[str], run: Run = subprocess.run, opener: Callable[[str], Download] = urlopen) -> int:
     home = Path(os.environ['HERMES_HOME'])
     if arguments == ['install']:
         return install(home, run, opener)

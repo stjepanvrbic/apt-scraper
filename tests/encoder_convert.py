@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 
-def main(argv):
+def main(argv: list[str]) -> None:
     import onnx
     from onnxconverter_common import float16
     from onnxruntime.quantization import QuantType, quantize_dynamic

@@ -7,22 +7,36 @@ are spaced by a random pause, and one session keeps the site's cookies for the w
 
 import random
 import time
+from typing import Protocol
 
 PAUSE_SECONDS = (4.0, 9.0)
 TIMEOUT_SECONDS = 30
 HEADERS = {'Accept-Language': 'en-US,en;q=0.9'}
 
 
+class Fetcher(Protocol):
+    """What a site module needs of the client: the status code and text of a page."""
+
+    def get(self, url: str) -> tuple[int, str]: ...
+
+
+class NoClient:
+    """The client of a command that searches nothing. A site that asks it for a page is a mistake, and it says so."""
+
+    def get(self, url: str) -> tuple[int, str]:
+        raise RuntimeError(f'This command searches nothing, so it cannot fetch {url}.')
+
+
 class Client:
-    def __init__(self, pause=PAUSE_SECONDS):
+    def __init__(self, pause: tuple[float, float] = PAUSE_SECONDS) -> None:
         from curl_cffi import requests
 
-        self.errors = requests.RequestsError
-        self.session = requests.Session(impersonate='chrome')
-        self.pause = pause
-        self.last = None
+        self.errors: type[requests.RequestsError] = requests.RequestsError
+        self.session: requests.Session = requests.Session(impersonate='chrome')
+        self.pause: tuple[float, float] = pause
+        self.last: float | None = None
 
-    def get(self, url):
+    def get(self, url: str) -> tuple[int, str]:
         if self.last is not None:
             time.sleep(max(0.0, self.last + random.uniform(*self.pause) - time.monotonic()))
         try:

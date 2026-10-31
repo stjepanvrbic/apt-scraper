@@ -1,14 +1,15 @@
 """Prior-only cold-start comparisons, evaluated before replacing the installed selector."""
 
 import copy
+from collections.abc import Iterable
 
-from scoring import (DEFAULT_HYPERPARAMETERS, Factor, Fit, Model, design, label, observations,
+from scoring import (DEFAULT_HYPERPARAMETERS, Factor, Fit, Model, Question, RankingInputs, design, label, observations,
                      prior, questions, select_questions)
 
 COLD_ANSWERS = 8
 
 
-def cold_questions(inputs, count, answered):
+def cold_questions(inputs: RankingInputs, count: int, answered: Iterable[Iterable[str]]) -> list[Question]:
     explicit = sum(label(listing, inputs['sentiments'].get(listing['id'])) is not None for listing in inputs['listings'])
     if explicit or len(inputs['pairs']) >= COLD_ANSWERS:
         return questions(inputs, DEFAULT_HYPERPARAMETERS, count, answered)

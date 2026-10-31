@@ -20,7 +20,9 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Protocol, TextIO
 
 SKILLS = Path(__file__).resolve().parents[1] / 'skills'
 REQUIREMENTS = SKILLS / 'search' / 'requirements.txt'
@@ -29,34 +31,42 @@ ENVIRONMENT_FAILED = 5
 NO_WAKE = json.dumps({'wakeAgent': False})
 
 
-def environment_python(directory):
+class Runner(Protocol):
+    """subprocess.run, as this script calls it: a command with the environment to run it in."""
+
+    def __call__(self, command: list[str], /, *, env: Mapping[str, str], check: bool = False, stdout: TextIO | None = None,
+                 stderr: int | None = None, text: bool = False, encoding: str | None = None,
+                 errors: str | None = None) -> subprocess.CompletedProcess[str]: ...
+
+
+def environment_python(directory: Path) -> Path:
     return directory / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
 
 
-def isolated():
+def isolated() -> dict[str, str]:
     """Hermes may point PYTHONPATH at its own packages, which must not load into the search's Python."""
     return {key: value for key, value in os.environ.items() if key not in ('PYTHONPATH', 'PYTHONHOME')}
 
 
-def stamp():
+def stamp() -> str:
     return hashlib.sha256(REQUIREMENTS.read_bytes()).hexdigest() + '\n' + sys.version
 
 
-def build(directory, run):
+def build(directory: Path, run: Runner) -> None:
     stamp_file = directory / 'installed.txt'
     stamp_file.unlink(missing_ok=True)
-    run([sys.executable, '-m', 'venv', '--clear', str(directory)], check=True, env=isolated(), stdout=sys.stderr)
-    run([str(environment_python(directory)), '-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', '--require-hashes',
-         '--only-binary', ':all:', '--no-deps', '-r', str(REQUIREMENTS)], check=True, env=isolated(), stdout=sys.stderr)
-    stamp_file.write_text(stamp(), encoding='utf-8')
+    _ = run([sys.executable, '-m', 'venv', '--clear', str(directory)], check=True, env=isolated(), stdout=sys.stderr)
+    _ = run([str(environment_python(directory)), '-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', '--require-hashes',
+             '--only-binary', ':all:', '--no-deps', '-r', str(REQUIREMENTS)], check=True, env=isolated(), stdout=sys.stderr)
+    _ = stamp_file.write_text(stamp(), encoding='utf-8')
 
 
-def current(directory):
+def current(directory: Path) -> bool:
     stamp_file = directory / 'installed.txt'
     return stamp_file.exists() and stamp_file.read_text(encoding='utf-8') == stamp()
 
 
-def search_once(home, directory, run):
+def search_once(directory: Path, run: Runner) -> None:
     sys.path[:0] = [str(SKILLS / 'gallery' / 'scripts'), str(SKILLS / 'search' / 'scripts')]
     from state import SearchState
     from store import ListingStore, store_path
@@ -86,7 +96,7 @@ def search_once(home, directory, run):
         print(NO_WAKE)
 
 
-def main(arguments, run=subprocess.run):
+def main(arguments: list[str], run: Runner = subprocess.run) -> int:
     home = Path(os.environ['HERMES_HOME'])
     directory = home / 'workspace' / 'search' / 'environment'
     if arguments == ['install']:
@@ -98,7 +108,7 @@ def main(arguments, run=subprocess.run):
         print(f'Search environment ready in {directory}.')
         return 0
     try:
-        search_once(home, directory, run)
+        search_once(directory, run)
     except Exception as error:
         print(f'The search could not start: {type(error).__name__}: {error}')
         print(NO_WAKE)

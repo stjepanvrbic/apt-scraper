@@ -10,20 +10,32 @@ the peak resident memory of the process and the bytes a user downloads.
 import argparse
 import ctypes
 import json
-import os
 import sys
 import time
+from collections.abc import Sequence
 from pathlib import Path
+from typing import final
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'skills/ranking/encoder'), str(ROOT / 'tests')]
 
 
-def peak_resident_bytes():
-    if os.name == 'nt':
+class Arguments(argparse.Namespace):
+    work: Path = Path()
+    models: Path = Path()
+    variant: str = ''
+    photos: int = 300
+    threads: int = 4
+
+
+def peak_resident_bytes() -> int:
+    if sys.platform == 'win32':
         from ctypes import wintypes
 
+        @final
         class Counters(ctypes.Structure):
+            cb: int
+            peak_working: int
             _fields_ = [('cb', wintypes.DWORD), ('faults', wintypes.DWORD),
                         *[(name, ctypes.c_size_t) for name in ('peak_working', 'working', 'peak_paged', 'paged',
                                                               'peak_nonpaged', 'nonpaged', 'pagefile', 'peak_pagefile')]]
@@ -36,40 +48,42 @@ def peak_resident_bytes():
         if not info(process(), ctypes.byref(counters), counters.cb):
             raise ctypes.WinError()
         return counters.peak_working
-    import resource
-    value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return value if sys.platform == 'darwin' else value * 1024
+    else:
+        import resource
+        value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return value if sys.platform == 'darwin' else value * 1024
 
 
-def main(argv):
+def main(argv: Sequence[str]) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('work', type=Path)
-    parser.add_argument('models', type=Path)
-    parser.add_argument('variant')
-    parser.add_argument('--photos', type=int, default=300)
-    parser.add_argument('--threads', type=int, default=4)
-    arguments = parser.parse_args(argv)
+    _ = parser.add_argument('work', type=Path)
+    _ = parser.add_argument('models', type=Path)
+    _ = parser.add_argument('variant')
+    _ = parser.add_argument('--photos', type=int, default=300)
+    _ = parser.add_argument('--threads', type=int, default=4)
+    arguments = parser.parse_args(argv, namespace=Arguments())
     import encoder
     import numpy as np
-    from encoder_sweep import variants
+    from encoder_sweep import photos_of, variants
     from PIL import Image, ImageOps
 
-    spec = variants(arguments.models)[arguments.variant]
+    spec = variants()[arguments.variant]
     directory = arguments.models / spec['model']
-    model = {'graph': spec['graph'], 'output': 'pooler_output' if spec['kind'] == 'siglip' else 'image_embeddings',
-             'dimensions': None, 'preprocessing': spec['preprocessing']}
+    model: encoder.TowerModel = {
+        'graph': spec['graph'], 'output': 'pooler_output' if spec['kind'] == 'siglip' else 'image_embeddings', 'preprocessing': spec['preprocessing'],
+        'dimensions': None}  # pyright: ignore[reportAssignmentType]  # the measurement never embeds, so the tower's dimension stays unknown
     started = time.perf_counter()
     tower = encoder.Tower(directory, model, arguments.threads)
     load = time.perf_counter() - started
-    photos = json.loads((arguments.work / 'manifest.json').read_text(encoding='utf-8'))['photos'][:arguments.photos]
+    photos = photos_of(arguments.work)[:arguments.photos]
     started = time.perf_counter()
     for start in range(0, len(photos), encoder.BATCH):
-        images = []
+        images: list[Image.Image] = []
         for photo in photos[start:start + encoder.BATCH]:
             with Image.open(photo['path']) as source:
                 images.append(ImageOps.exif_transpose(source).convert('RGB'))
         pixels = [encoder.preprocess(image, model['preprocessing']) for image in images]
-        tower.session.run([model['output']], {tower.input.name: np.stack(pixels).astype(tower.dtype)})
+        _ = tower.session.run([model['output']], {tower.input.name: np.stack(pixels).astype(tower.dtype)})
     seconds = time.perf_counter() - started
     graph = directory / spec['graph']
     download = sum(path.stat().st_size for path in graph.parent.glob(graph.name + '*'))

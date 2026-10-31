@@ -1,5 +1,5 @@
-# Runs every check on Windows in a fresh virtual environment: Ruff, the Python suite with zero skips, then the
-# gallery's lint, build, build-output check and Playwright suite. Needs Python 3.14 and Node 24. CI runs it on a
+# Runs every check on Windows in a fresh virtual environment: Ruff, basedpyright, the Python suite with zero
+# skips, then the gallery's lint, build, build-output check and Playwright suite. Needs Python 3.14 and Node 24. CI runs it on a
 # fresh machine.
 #   tests\run.ps1 [-Work <directory>] [-Python <interpreter command>]
 param(
@@ -27,6 +27,9 @@ Invoke-Checked "python -m pip install --disable-pip-version-check --quiet -r `"$
 Write-Step 'Ruff'
 Set-Location $root
 Invoke-Checked 'ruff check .'
+
+Write-Step 'basedpyright'
+Invoke-Checked 'basedpyright'
 
 Write-Step 'Python suite'
 Invoke-Checked "python -m pytest tests -q -rs -p no:cacheprovider --junitxml `"$Work\pytest.xml`""

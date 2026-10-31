@@ -1,19 +1,23 @@
 import tempfile
 import unittest
 from pathlib import Path
+from typing import override
 from unittest.mock import patch
 
-from test_gallery_store import ListingStore, book, listing
+from test_gallery_store import book, listing, present
+from chat import ChatPrompt
+from store import ListingStore
 
 
 class SearchRankingTests(unittest.TestCase):
-    def setUp(self):
+    @override
+    def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.path = Path(directory.name) / 'listings.sqlite3'
-        self.store = ListingStore(self.path)
+        self.path: Path = Path(directory.name) / 'listings.sqlite3'
+        self.store: ListingStore = ListingStore(self.path)
 
-    def test_search_and_ranking_preserve_each_others_data_and_detect_changes(self):
+    def test_search_and_ranking_preserve_each_others_data_and_detect_changes(self) -> None:
         result = self.store.upsert_listing(listing())
         self.assertTrue(result['changed'])
         self.assertTrue(result['needs_analysis'])
@@ -43,9 +47,9 @@ class SearchRankingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'changed'):
             self.store.rank('example:100', fingerprint, 1, {'text': 'Stale result.'})
 
-    def test_contact_channel_agent_and_approval_are_scoped_to_request(self):
-        self.store.upsert_listing(listing())
-        self.store.upsert_listing(listing(id='other:200'))
+    def test_contact_channel_agent_and_approval_are_scoped_to_request(self) -> None:
+        _ = self.store.upsert_listing(listing())
+        _ = self.store.upsert_listing(listing(id='other:200'))
         self.store.request_contact('example:100')
         self.store.set_contact('example:100', 'in_progress', channel='email', agent={'email': 'office@example.com'})
         approval = self.store.approve_information('example:100', 'name', 'Test Person', 'arrange viewing')
@@ -55,17 +59,17 @@ class SearchRankingTests(unittest.TestCase):
         self.store.revoke_approval(approval)
         self.assertEqual(self.store.approved_information('example:100', 'arrange viewing'), [])
         self.store.set_contact('example:100', 'failed', channel='email', error='Mailbox unavailable')
-        saved = type(self.store)(self.path).listing('example:100')['contact']
+        saved = present(type(self.store)(self.path).listing('example:100')['contact'])
         self.assertEqual(saved['status'], 'failed')
         self.assertEqual(saved['channel'], 'email')
-        self.assertEqual(saved['agent']['email'], 'office@example.com')
+        self.assertEqual(saved['agent'].get('email'), 'office@example.com')
         self.assertEqual(saved['error'], 'Mailbox unavailable')
 
-    def test_multiple_viewings_move_and_cancel_without_losing_event_identity(self):
-        self.store.upsert_listing(listing())
+    def test_multiple_viewings_move_and_cancel_without_losing_event_identity(self) -> None:
+        _ = self.store.upsert_listing(listing())
         first = book(self.store, 'example:100', '2026-10-30T15:00:00-05:00', 'Lobby', 'calendar-first')
         second = book(self.store, 'example:100', '2026-11-01T10:00:00-06:00', 'Second visit', 'calendar-second')
-        self.store.agree_viewing('example:100', '2026-10-31T15:00:00-05:00', 'Moved', viewing_id=first)
+        _ = self.store.agree_viewing('example:100', '2026-10-31T15:00:00-05:00', 'Moved', viewing_id=first)
         self.store.cancel_viewing(first, possible_event_id='unused')
         saved = type(self.store)(self.path).listing('example:100')['viewings']
         self.assertEqual(len(saved), 2)
@@ -75,27 +79,27 @@ class SearchRankingTests(unittest.TestCase):
         self.assertEqual(moved['time'], '2026-10-31T20:00:00+00:00')
         self.assertEqual(next(viewing for viewing in saved if viewing['id'] == second)['status'], 'booked')
 
-    def test_drawer_and_export_order_viewings_by_time_not_identifier(self):
-        self.store.upsert_listing(listing())
+    def test_drawer_and_export_order_viewings_by_time_not_identifier(self) -> None:
+        _ = self.store.upsert_listing(listing())
         with patch('store.uuid4', side_effect=['first-id', 'second-id']):
             late = book(self.store, 'example:100', '2026-10-28T10:00:00Z', '', 'event-late')
             early = book(self.store, 'example:100', '2026-10-26T10:00:00Z', '', 'event-early')
         self.assertEqual([row['id'] for row in self.store.listing('example:100')['viewings']], [early, late])
         self.assertEqual([row['id'] for row in self.store.state()['listings'][0]['viewings']], [early, late])
 
-    def test_chat_persists_replies_and_rejects_overlapping_turns(self):
+    def test_chat_persists_replies_and_rejects_overlapping_turns(self) -> None:
         message = self.store.start_chat('Prefer a quiet street.', 'request-1')
         with self.assertRaisesRegex(ValueError, 'already'):
-            self.store.start_chat('Another message', 'request-2')
+            _ = self.store.start_chat('Another message', 'request-2')
         self.store.update_chat(message, content='I will prioritize quiet streets.', status='complete', session_id='session-one')
         saved = type(self.store)(self.path).chat_state()
         self.assertEqual([row['role'] for row in saved['messages']], ['user', 'agent'])
         self.assertEqual(saved['messages'][1]['content'], 'I will prioritize quiet streets.')
         self.assertEqual(saved['session_id'], 'session-one')
 
-    def test_stream_updates_preserve_question_and_error_until_explicitly_cleared(self):
+    def test_stream_updates_preserve_question_and_error_until_explicitly_cleared(self) -> None:
         identity = self.store.start_chat('Question', 'preserve-question')
-        prompt = {'prompt_id': 'approval', 'kind': 'approval', 'choices': ['once', 'deny']}
+        prompt: ChatPrompt = {'prompt_id': 'approval', 'kind': 'approval', 'choices': ['once', 'deny']}
         self.store.update_chat(identity, prompt=prompt, error='Earlier warning')
         self.store.update_chat(identity, content='Partial text', events=[])
         message = self.store.chat_state()['messages'][-1]
@@ -106,20 +110,20 @@ class SearchRankingTests(unittest.TestCase):
         self.assertIsNone(message['prompt'])
         self.assertIsNone(message['error'])
 
-    def test_correspondence_deduplicates_external_ids_without_changing_contact_state(self):
-        self.store.upsert_listing(listing())
+    def test_correspondence_deduplicates_external_ids_without_changing_contact_state(self) -> None:
+        _ = self.store.upsert_listing(listing())
         with self.assertRaises(KeyError):
-            self.store.correspond('example:100', 'incoming', 'email', 'Hello', external_message_id='m-1')
+            _ = self.store.correspond('example:100', 'incoming', 'email', 'Hello', external_message_id='m-1')
         self.store.request_contact('example:100')
         self.store.set_contact('example:100', 'failed', channel='email', error='Delivery failed')
         for _ in range(2):
-            self.store.correspond('example:100', 'incoming', 'email', 'Hello', external_message_id='m-1', external_thread_id='t-1')
+            _ = self.store.correspond('example:100', 'incoming', 'email', 'Hello', external_message_id='m-1', external_thread_id='t-1')
         saved = self.store.listing('example:100')
         self.assertEqual(len(saved['correspondence']), 1)
         self.assertEqual(saved['correspondence'][0]['external_thread_id'], 't-1')
-        self.assertEqual(saved['contact']['status'], 'failed')
-        self.assertEqual(saved['contact']['error'], 'Delivery failed')
+        self.assertEqual(present(saved['contact'])['status'], 'failed')
+        self.assertEqual(present(saved['contact'])['error'], 'Delivery failed')
         with self.assertRaises(ValueError):
-            self.store.correspond('example:100', 'incoming', 'invalid', 'Hello', external_message_id='m-2')
+            _ = self.store.correspond('example:100', 'incoming', 'invalid', 'Hello', external_message_id='m-2')
         self.store.request_contact('example:100')
-        self.assertEqual(self.store.listing('example:100')['contact']['status'], 'pending')
+        self.assertEqual(present(self.store.listing('example:100')['contact'])['status'], 'pending')

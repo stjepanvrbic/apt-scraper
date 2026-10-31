@@ -19,6 +19,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import TypedDict, cast
 
 sys.path.insert(0, str(Path(os.environ['HERMES_HOME']) / 'skills' / 'productivity' / 'google-workspace' / 'scripts'))
 
@@ -31,7 +32,19 @@ NOT_FOUND = 404
 GONE = 410
 
 
-def save(event_id, new_id, event):
+class SaveRequest(TypedDict):
+    """The file `save` reads, which contact.py writes."""
+    event_id: str | None
+    new_id: str
+    event: dict[str, object]
+
+
+class Deletion(TypedDict):
+    deleted: str
+    already_gone: bool
+
+
+def save(event_id: str | None, new_id: str, event: dict[str, object]) -> dict[str, object]:
     events = build_service('calendar', 'v3').events()
     if event_id:
         try:
@@ -47,9 +60,9 @@ def save(event_id, new_id, event):
     return events.patch(calendarId=CALENDAR, eventId=new_id, body=event).execute()
 
 
-def delete(event_id):
+def delete(event_id: str) -> Deletion:
     try:
-        build_service('calendar', 'v3').events().delete(calendarId=CALENDAR, eventId=event_id).execute()
+        _ = build_service('calendar', 'v3').events().delete(calendarId=CALENDAR, eventId=event_id).execute()
     except HttpError as error:
         if error.status_code not in (NOT_FOUND, GONE):
             raise
@@ -57,14 +70,14 @@ def delete(event_id):
     return {'deleted': event_id, 'already_gone': False}
 
 
-def main(argv):
+def main(argv: list[str]) -> int:
     if len(argv) != 2 or argv[0] not in ('save', 'delete'):
         print(__doc__, file=sys.stderr)
         return 2
     if argv[0] == 'delete':
         print(json.dumps(delete(argv[1])))
         return 0
-    value = json.loads(Path(argv[1]).read_text(encoding='utf-8'))
+    value = cast(SaveRequest, json.loads(Path(argv[1]).read_text(encoding='utf-8')))
     saved = save(value['event_id'], value['new_id'], value['event'])
     print(json.dumps({'id': saved['id'], 'htmlLink': saved.get('htmlLink')}))
     return 0

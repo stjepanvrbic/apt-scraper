@@ -5,6 +5,7 @@ takes (Hermes tools/delegate_tool_tasks.py, _MAX_TASK_IMAGES), show 72 photos. E
 photo, which the extraction uses to give each photo its room type."""
 
 import re
+from collections.abc import Iterable, Sequence
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -15,20 +16,20 @@ NEAR_DUPLICATE_DISTANCE = 6
 ZILLOW_PHOTO = re.compile(r'https://photos\.zillowstatic\.com/fp/([0-9A-Za-z]+)-[^/]*?(\d+)?\.\w+$')
 
 
-def photo_key(url):
+def photo_key(url: str) -> str:
     """Zillow serves one photo at several sizes under one key, such as fp/<key>-cc_ft_1536.jpg and fp/<key>-cc_ft_384.jpg."""
     match = ZILLOW_PHOTO.match(url)
     return match.group(1) if match else url
 
 
-def photo_width(url):
+def photo_width(url: str) -> int:
     match = ZILLOW_PHOTO.match(url)
     return int(match.group(2)) if match and match.group(2) else 0
 
 
-def distinct_photos(urls):
+def distinct_photos(urls: Iterable[str]) -> list[str]:
     """One URL per photo key, the widest, in the position of the key's first appearance."""
-    widest = {}
+    widest: dict[str, str] = {}
     for url in urls:
         key = photo_key(url)
         if key not in widest or photo_width(url) > photo_width(widest[key]):
@@ -36,7 +37,7 @@ def distinct_photos(urls):
     return list(widest.values())
 
 
-def difference_hash(image):
+def difference_hash(image: Image.Image) -> int:
     """64-bit difference hash: whether each pixel of a 9 by 8 grayscale thumbnail is brighter than its right neighbor."""
     pixels = image.convert('L').resize((9, 8), Image.Resampling.LANCZOS).tobytes()
     bits = 0
@@ -46,13 +47,14 @@ def difference_hash(image):
     return bits
 
 
-def distance(first, second):
+def distance(first: int, second: int) -> int:
     return (first ^ second).bit_count()
 
 
-def without_near_duplicates(photos):
+def without_near_duplicates(photos: Iterable[tuple[str, Image.Image]]) -> list[tuple[str, Image.Image]]:
     """Drops each (url, image) whose difference hash is within NEAR_DUPLICATE_DISTANCE bits of an earlier kept photo."""
-    kept, hashes = [], []
+    kept: list[tuple[str, Image.Image]] = []
+    hashes: list[int] = []
     for url, image in photos:
         value = difference_hash(image)
         if all(distance(value, other) > NEAR_DUPLICATE_DISTANCE for other in hashes):
@@ -61,7 +63,7 @@ def without_near_duplicates(photos):
     return kept
 
 
-def tile(image, number, font):
+def tile(image: Image.Image, number: int, font: ImageFont.FreeTypeFont | ImageFont.ImageFont) -> Image.Image:
     canvas = Image.new('RGB', TILE_SIZE, (24, 24, 24))
     fitted = image.convert('RGB')
     fitted.thumbnail(TILE_SIZE, Image.Resampling.LANCZOS)
@@ -74,10 +76,10 @@ def tile(image, number, font):
     return canvas
 
 
-def contact_sheets(images):
+def contact_sheets(images: Sequence[Image.Image]) -> list[Image.Image]:
     """Sheets of the images in order, the first image numbered 1. Unused tiles of the last sheet stay black."""
     font = ImageFont.load_default(size=36)
-    sheets = []
+    sheets: list[Image.Image] = []
     for start in range(0, len(images), COLUMNS * ROWS):
         sheet = Image.new('RGB', SHEET_SIZE, (0, 0, 0))
         for position, image in enumerate(images[start:start + COLUMNS * ROWS]):
