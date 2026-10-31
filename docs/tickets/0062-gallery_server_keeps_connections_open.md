@@ -17,7 +17,7 @@ The gallery server speaks HTTP/1.1 and keeps a browser's connections open across
 ## Acceptance
 
 - [ ] A test opens one connection to the server and gets three responses over it, each HTTP/1.1 without a `Connection: close` header.
-- [ ] Twenty thousand sequential requests to the server on a Windows runner complete over a handful of connections with the `TIME_WAIT` count flat, where against the HTTP/1.0 server each request opened a connection and the count climbed into the thousands.
+- [x] Twenty thousand sequential requests to the server on a Windows runner complete over a handful of connections with the `TIME_WAIT` count flat, where against the HTTP/1.0 server each request opened a connection and the count climbed into the thousands.
 - [ ] The CI workflow is green on Linux, macOS and Windows.
 
 ## Spec
@@ -37,3 +37,12 @@ The fix sets `protocol_version = 'HTTP/1.1'` on the handler. Every response alre
 ## Deviations
 
 ## Result
+
+Measured on a `windows-latest` runner, dynamic port range 49152 with 16,384 ports, `TcpTimedWaitDelay` at its default (the registry value is absent). Twenty thousand sequential `GET /` through one Node keep-alive agent:
+
+| Server | Connections opened | `TIME_WAIT` after 2,000 / 8,000 / 16,000 / 20,000 requests | Time |
+| --- | --- | --- | --- |
+| HTTP/1.0, before (run 41165832099) | 20,000 | 2,008 / 8,008 / 16,008 / 16,150 | 27.0 s |
+| HTTP/1.1, after (run 41165930197) | 1 | 3 / 3 / 3 / 3 | 6.5 s |
+
+Against the old server the `TIME_WAIT` count rose one per request until it covered the whole dynamic range, then held at about 16,150 while requests kept succeeding, so the sequential loop alone did not reach `ENOBUFS`; the navigation failure appeared in the real suite when the browser's parallel connections and the Python suite's own sockets came on top of a saturated range. Against the fixed server the loop used one connection, left the count where it started, and ran four times faster. The diagnostic branch that ran both was temporary and is deleted.
