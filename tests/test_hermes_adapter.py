@@ -4,51 +4,67 @@ import sqlite3
 import tempfile
 import types
 import unittest
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager, closing
 from pathlib import Path
+from typing import NotRequired, Protocol, TypedDict, cast
 from unittest.mock import patch
 
-from test_gallery_store import ListingStore
-from chat import Controls, run_turn
+from chat import ChatMessage, Controls, run_turn
 from schema import MIGRATIONS, notes_session_per_database
+from store import ListingStore
+
+
+class Emitter(Protocol):
+    """The part of the gallery's event sink the fake view drives."""
+    def on_text_delta(self, text: str | None) -> None: ...
+
+
+class Session(TypedDict):
+    """A session the fake gateway holds: its title, the working folder it was created with and its last error."""
+    title: object
+    cwd: str
+    error: NotRequired[str | None]
 
 
 class HermesAdapterTests(unittest.IsolatedAsyncioTestCase):
-    async def test_run_turn_streams_preserves_approval_and_submits_denial(self):
+    async def test_run_turn_streams_preserves_approval_and_submits_denial(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = ListingStore(Path(directory) / 'listings.sqlite3')
             identity = store.start_chat('Test request', 'test-request')
-            commands = []
-            submitted = []
+            commands: list[str] = []
+            submitted: list[str] = []
             class Client:
-                async def rpc(self, method, **arguments):
+                async def rpc(self, method: str, **_arguments: object) -> dict[str, object]:
                     if method == 'session.create':
                         return {'stored_session_id': 'session', 'pending': []}
                     return {'status': 'terminal', 'result': {'final_response': 'Action denied.'}}
             @asynccontextmanager
-            async def connect():
+            async def connect() -> AsyncGenerator[Client]:
                 yield Client()
             class View:
-                def __init__(self, client, snapshot, quiet, emitter):
-                    self.session_id = 'session'
-                    self.emitter = emitter
-                    self.changed = asyncio.Event()
-                    self.completions = {}
-                    self.prompts = {}
-                    self.failure = None
-                async def submit(self, text):
+                show_prompt: Callable[[dict[str, object]], None]
+
+                def __init__(self, client: Client, snapshot: dict[str, object], quiet: bool, emitter: Emitter) -> None:
+                    self.session_id: str = 'session'
+                    self.emitter: Emitter = emitter
+                    self.changed: asyncio.Event = asyncio.Event()
+                    self.completions: dict[str, dict[str, object]] = {}
+                    self.prompts: dict[str, dict[str, object]] = {}
+                    self.failure: BaseException | None = None
+                async def submit(self, text: str) -> dict[str, object]:
                     submitted.append(text)
                     return {'admission_id': 'admission'}
-                async def render(self):
+                async def render(self) -> None:
                     for _ in range(100):
                         self.emitter.on_text_delta('x')
-                    prompt = {'kind': 'approval', 'prompt_id': 'approval', 'choices': ['once', 'deny'], 'execution_generation': 1}
+                    prompt: dict[str, object] = {'kind': 'approval', 'prompt_id': 'approval', 'choices': ['once', 'deny'], 'execution_generation': 1}
                     self.prompts['approval'] = prompt
                     self.show_prompt(prompt)
                     self.emitter.on_text_delta('Waiting')
                     self.changed.set()
-                    await asyncio.Event().wait()
-                async def command(self, command):
+                    _ = await asyncio.Event().wait()
+                async def command(self, command: str) -> None:
                     commands.append(command)
                     self.prompts.clear()
                     self.completions['admission'] = {'outcome': 'completed', 'text': 'Action denied.'}
@@ -76,45 +92,45 @@ class HermesAdapterTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('interview skill', submitted[0])
             self.assertNotIn('update_settings', submitted[0])
 
-    async def test_each_database_has_its_own_session_that_outlives_its_folder(self):
-        sessions = {}
+    async def test_each_database_has_its_own_session_that_outlives_its_folder(self) -> None:
+        sessions: dict[str, Session] = {}
 
         class Client:
-            async def rpc(self, method, **arguments):
+            async def rpc(self, method: str, **arguments: object) -> dict[str, object]:
                 if method == 'session.create':
                     # Hermes 0.22.5 resumes the session that holds a requested title instead of creating one.
                     titled = next((identity for identity, session in sessions.items()
                                    if arguments.get('title') and session['title'] == arguments['title']), None)
                     identity = titled or f'session-{len(sessions)}'
-                    sessions.setdefault(identity, {'title': arguments.get('title'), 'cwd': arguments['cwd']})
+                    _ = sessions.setdefault(identity, {'title': arguments.get('title'), 'cwd': str(arguments['cwd'])})
                     return {'stored_session_id': identity, 'pending': []}
                 if method == 'session.resume':
                     return {'stored_session_id': arguments['session_id'], 'pending': []}
-                return {'result': {'error': sessions[arguments['session_id']].get('error')}}
+                return {'result': {'error': sessions[str(arguments['session_id'])].get('error')}}
 
         @asynccontextmanager
-        async def connect():
+        async def connect() -> AsyncGenerator[Client]:
             yield Client()
 
         class View:
-            def __init__(self, client, snapshot, quiet, emitter):
-                self.session_id = snapshot['stored_session_id']
-                self.changed = asyncio.Event()
-                self.completions = {}
-                self.prompts = {}
-                self.failure = None
+            def __init__(self, client: Client, snapshot: dict[str, object], quiet: bool, emitter: Emitter) -> None:
+                self.session_id: str = cast(str, snapshot['stored_session_id'])
+                self.changed: asyncio.Event = asyncio.Event()
+                self.completions: dict[str, dict[str, object]] = {}
+                self.prompts: dict[str, dict[str, object]] = {}
+                self.failure: BaseException | None = None
 
-            async def submit(self, text):
+            async def submit(self, _text: str) -> dict[str, object]:
                 session = sessions[self.session_id]
                 # A session runs turns only in the working folder it was created with.
                 session['error'] = None if Path(session['cwd']).is_dir() else 'gateway.errors.workspace_unavailable'
                 self.completions['admission'] = {'outcome': 'failed' if session['error'] else 'completed', 'text': 'OK'}
                 return {'admission_id': 'admission'}
 
-            async def render(self):
-                await asyncio.Event().wait()
+            async def render(self) -> None:
+                _ = await asyncio.Event().wait()
 
-        async def turn(store):
+        async def turn(store: ListingStore) -> ChatMessage:
             identity = store.start_chat('Hello', f'request-{store.chat_state()["total"]}')
             await run_turn(store, identity, 'Hello', Controls())
             return store.chat_state()['messages'][-1]
@@ -134,12 +150,12 @@ class HermesAdapterTests(unittest.IsolatedAsyncioTestCase):
             sample = ListingStore(first_folder / 'sample.sqlite3')
             real = ListingStore(other_folder / 'listings.sqlite3')
             with patch.dict('sys.modules', modules):
-                await turn(sample)
-                await turn(real)
+                _ = await turn(sample)
+                _ = await turn(real)
                 self.assertNotEqual(sample.chat_state()['session_id'], real.chat_state()['session_id'])
                 moved_folder = Path(directory) / 'moved'
                 moved_folder.mkdir()
-                shutil.copy2(sample.path, moved_folder / 'sample.sqlite3')
+                _ = shutil.copy2(sample.path, moved_folder / 'sample.sqlite3')
                 shutil.rmtree(first_folder)
                 moved = ListingStore(moved_folder / 'sample.sqlite3')
                 for store in (moved, real):
@@ -147,11 +163,11 @@ class HermesAdapterTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual((message['status'], message['error'], message['content']), ('complete', None, 'OK'))
             self.assertEqual(len(sessions), 2)
 
-    async def test_a_session_written_back_by_a_process_that_predates_the_migration_is_not_resumed(self):
-        calls = []
+    async def test_a_session_written_back_by_a_process_that_predates_the_migration_is_not_resumed(self) -> None:
+        calls: list[tuple[str, object]] = []
 
         class Client:
-            async def rpc(self, method, **arguments):
+            async def rpc(self, method: str, **arguments: object) -> dict[str, object]:
                 calls.append((method, arguments.get('session_id')))
                 if method == 'session.create':
                     return {'stored_session_id': 'local-own', 'pending': []}
@@ -160,35 +176,35 @@ class HermesAdapterTests(unittest.IsolatedAsyncioTestCase):
                 return {'result': {}}
 
         @asynccontextmanager
-        async def connect():
+        async def connect() -> AsyncGenerator[Client]:
             yield Client()
 
         class View:
-            def __init__(self, client, snapshot, quiet, emitter):
-                self.session_id = snapshot['stored_session_id']
-                self.changed = asyncio.Event()
-                self.completions = {}
-                self.prompts = {}
-                self.failure = None
+            def __init__(self, client: Client, snapshot: dict[str, object], quiet: bool, emitter: Emitter) -> None:
+                self.session_id: str = cast(str, snapshot['stored_session_id'])
+                self.changed: asyncio.Event = asyncio.Event()
+                self.completions: dict[str, dict[str, object]] = {}
+                self.prompts: dict[str, dict[str, object]] = {}
+                self.failure: BaseException | None = None
 
-            async def submit(self, text):
+            async def submit(self, _text: str) -> dict[str, object]:
                 self.completions['admission'] = {'outcome': 'completed', 'text': 'OK'}
                 return {'admission_id': 'admission'}
 
-            async def render(self):
-                await asyncio.Event().wait()
+            async def render(self) -> None:
+                _ = await asyncio.Event().wait()
 
-        def write_shared_session(path):
+        def write_shared_session(path: Path) -> None:
             # The write a gallery server started before the update makes when its turn finishes.
             with closing(sqlite3.connect(path)) as connection, connection:
-                connection.execute("UPDATE chat_session SET session_id = 'local-shared-titled' WHERE id = 1")
+                _ = connection.execute("UPDATE chat_session SET session_id = 'local-shared-titled' WHERE id = 1")
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'listings.sqlite3'
             with closing(sqlite3.connect(path)) as connection, connection:
                 for index, migration in enumerate(MIGRATIONS[:MIGRATIONS.index(notes_session_per_database)]):
                     migration(connection)
-                    connection.execute(f'PRAGMA user_version = {index + 1}')
+                    _ = connection.execute(f'PRAGMA user_version = {index + 1}')
             write_shared_session(path)
             store = ListingStore(path)
             modules = {

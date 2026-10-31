@@ -8,12 +8,17 @@ import threading
 import sqlite3
 import time
 import traceback
+from collections.abc import Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import TypedDict, cast, final, override
 from urllib.parse import parse_qs, unquote, urlsplit
-from chat import ChatController
+from chat import ChatController, MessageStatus, Runner, ToolEvent
+from launch import Health
 from rerank import pairwise_questions, rerank
-from hypotheses import active as active_hypotheses, decide as decide_hypothesis
+from hypotheses import ActiveHypothesis, active as active_hypotheses, decide as decide_hypothesis
+from shapes import is_object, loads
+from store import ListingDetail, ListingStore, RerankRecord
 
 
 STATIC = Path(__file__).resolve().parents[1] / 'web'
@@ -22,34 +27,76 @@ DISCARD_LIMIT = 1000000
 CLOSE_SECONDS = 5
 
 
-def comparison(store):
+class CompareQuestion(TypedDict):
+    listings: list[ListingDetail]
+
+
+class Comparison(TypedDict):
+    """What /api/compare answers: the next pairwise question, if any, and how many were answered."""
+    question: CompareQuestion | None
+    answered: int
+
+
+class RerankStatus(TypedDict):
+    """What /api/rerank answers to a GET: whether scoring runs, the last rerank and the hypotheses under test."""
+    running: bool
+    last_rerank: RerankRecord | None
+    hypotheses: list[ActiveHypothesis]
+
+
+class PublicMessage(TypedDict):
+    """A chat message as the browser sees it: without the gateway's session and admission ids, and with the prompt
+    stripped of its execution generation."""
+    id: int
+    role: str
+    content: str
+    status: MessageStatus
+    events: list[ToolEvent]
+    prompt: Mapping[str, object] | None
+    error: str | None
+    created_at: str
+
+
+class ChatPage(TypedDict):
+    active: bool
+    total: int
+    messages: list[PublicMessage]
+
+
+def comparison(store: ListingStore) -> Comparison:
     pairs = pairwise_questions(store, 1)
-    question = None
+    question: CompareQuestion | None = None
     if pairs:
         question = {'listings': [store.listing(identifier, visible_only=True) for identifier in pairs[0]['listings']]}
     return {'question': question, 'answered': len(store.pairwise_answers())}
 
 
+@final
 class GalleryServer(ThreadingHTTPServer):
-    def server_bind(self):
+    access_token: str
+
+    @override
+    def server_bind(self) -> None:
         # Not HTTPServer's server_bind, whose reverse lookup of the address through socket.getfqdn can take a
         # minute on macOS and leaves the gallery unreachable while the launcher waits for it.
         socketserver.TCPServer.server_bind(self)
-        self.server_name, self.server_port = self.server_address[0], self.server_address[1]
+        host, port = cast(tuple[str, int], self.server_address)
+        self.server_name, self.server_port = host, port
 
 
-def make_server(store, port=8765, chat_runner=None, install_id='development'):
+def make_server(store: ListingStore, port: int = 8765, chat_runner: Runner | None = None, install_id: str = 'development') -> GalleryServer:
     access_token = secrets.token_urlsafe(32)
     chat = ChatController(store, chat_runner)
     rerank_lock = threading.Lock()
     class Handler(BaseHTTPRequestHandler):
-        def log_message(self, format, *arguments):
+        @override
+        def log_message(self, format: str, *arguments: object) -> None:
             pass
 
-        def reply(self, status, value):
+        def reply(self, status: int, value: object) -> None:
             self.send_bytes(status, json.dumps(value, ensure_ascii=False).encode(), 'application/json; charset=utf-8')
 
-        def send_bytes(self, status, content, content_type):
+        def send_bytes(self, status: int, content: bytes, content_type: str) -> None:
             self.send_response(status)
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(len(content)))
@@ -58,10 +105,11 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
             self.send_header('Referrer-Policy', 'no-referrer')
             self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
             self.end_headers()
-            self.wfile.write(content)
+            _ = self.wfile.write(content)
 
-        def allowed(self):
-            hosts = {f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}'}
+        def allowed(self) -> bool:
+            port = cast(GalleryServer, self.server).server_port
+            hosts = {f'127.0.0.1:{port}', f'localhost:{port}'}
             origin = self.headers.get('Origin')
             if self.headers.get('Host') not in hosts or (origin and origin not in {f'http://{host}' for host in hosts}):
                 self.reply(403, {'error': 'Only requests from this local gallery are accepted.'})
@@ -72,19 +120,21 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                 return False
             return True
 
-        def do_GET(self):
+        def do_GET(self) -> None:
             if not self.allowed():
                 return
             path = unquote(urlsplit(self.path).path)
             if path == '/api/health':
-                self.reply(200, {'application': 'apt-scraper-gallery', 'database': str(store.path), 'process_id': os.getpid(), 'install_id': install_id})
+                health: Health = {'application': 'apt-scraper-gallery', 'database': str(store.path), 'process_id': os.getpid(), 'install_id': install_id}
+                self.reply(200, health)
             elif path.startswith('/api/'):
                 try:
                     query = parse_qs(urlsplit(self.path).query)
                     if path == '/api/revision':
                         result = {'revision': store.revision()}
                     elif path == '/api/rerank':
-                        result = {'running': rerank_lock.locked(), 'last_rerank': store.last_rerank(), 'hypotheses': active_hypotheses(store)}
+                        status: RerankStatus = {'running': rerank_lock.locked(), 'last_rerank': store.last_rerank(), 'hypotheses': active_hypotheses(store)}
+                        result = status
                     elif path == '/api/compare':
                         result = comparison(store)
                     elif path == '/api/compare/invitation':
@@ -98,19 +148,22 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                             name: int(query.get(name, ['1'])[0]) for name in ('notes_page', 'correspondence_page', 'viewings_page')})
                     elif path == '/api/chat':
                         state = store.chat_state(int(query.get('page', ['1'])[0]))
-                        result = {'active': state['active'], 'total': state['total'], 'messages': []}
+                        page: ChatPage = {'active': state['active'], 'total': state['total'], 'messages': []}
                         for message in state['messages']:
-                            public = {key: message[key] for key in ('id', 'role', 'content', 'status', 'events', 'prompt', 'error', 'created_at')}
+                            public: PublicMessage = {'id': message['id'], 'role': message['role'], 'content': message['content'],
+                                                     'status': message['status'], 'events': message['events'], 'prompt': message['prompt'],
+                                                     'error': message['error'], 'created_at': message['created_at']}
                             if public['prompt']:
                                 public['prompt'] = {key: value for key, value in public['prompt'].items() if key != 'execution_generation'}
-                            result['messages'].append(public)
+                            page['messages'].append(public)
+                        result = page
                     else:
                         raise KeyError('Page not found.')
                     self.reply(200, result)
                 except ValueError as error:
                     self.reply(400, {'error': str(error)})
                 except KeyError as error:
-                    self.reply(404, {'error': str(error.args[0])})
+                    self.reply(404, {'error': str(cast(object, error.args[0]))})
                 except sqlite3.Error:
                     self.reply(500, {'error': 'Could not read the listing store. Check the gallery log.'})
                     raise
@@ -122,7 +175,7 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                 content_type = {'.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html'}.get(target.suffix)
                 self.send_bytes(200, target.read_bytes(), content_type or mimetypes.guess_type(target)[0] or 'application/octet-stream')
 
-        def read_body(self):
+        def read_body(self) -> bytes | None:
             if 'Transfer-Encoding' in self.headers:
                 return None
             try:
@@ -131,18 +184,19 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                 return None
             return self.rfile.read(length) if 0 <= length <= DISCARD_LIMIT else None
 
-        def close_unread(self):
+        def close_unread(self) -> None:
             deadline = time.monotonic() + CLOSE_SECONDS
+            connection = cast(socket.socket, self.connection)
             try:
-                self.connection.shutdown(socket.SHUT_WR)
+                connection.shutdown(socket.SHUT_WR)
                 while (remaining := deadline - time.monotonic()) > 0:
-                    self.connection.settimeout(remaining)
-                    if not self.connection.recv(65536):
+                    connection.settimeout(remaining)
+                    if not connection.recv(65536):
                         return
             except OSError:
                 pass
 
-        def do_POST(self):
+        def do_POST(self) -> None:
             # Closing a socket with unread data resets the connection and the client loses the reply, so the
             # body is read before any check, and a body of unknown or excessive length is drained after the reply.
             content = self.read_body()
@@ -153,8 +207,8 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                     raise ValueError('Request must use application/json.')
                 if content is None or not 0 < len(content) <= BODY_LIMIT:
                     raise ValueError(f'Request must declare a Content-Length from 1 to {BODY_LIMIT} bytes.')
-                body = json.loads(content)
-                if not isinstance(body, dict):
+                body = loads(content)
+                if not is_object(body):
                     raise ValueError('Request must be an object.')
                 parts = unquote(urlsplit(self.path).path).strip('/').split('/')
                 if parts == ['api', 'stop']:
@@ -177,10 +231,10 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                     return
                 elif parts == ['api', 'compare', 'answer']:
                     self.require_fields(body, {'chosen', 'other'})
-                    store.answer_pair(body['chosen'], body['other'])
+                    store.answer_pair(body['chosen'], body['other'])  # pyright: ignore[reportArgumentType]  # answer_pair validates the values itself
                 elif parts == ['api', 'compare', 'skip']:
                     self.require_fields(body, {'first', 'second'})
-                    store.skip_pair(body['first'], body['second'])
+                    store.skip_pair(body['first'], body['second'])  # pyright: ignore[reportArgumentType]  # skip_pair validates the values itself
                 elif len(parts) == 4 and parts[:2] == ['api', 'hypotheses']:
                     self.require_fields(body, set())
                     decide_hypothesis(store, parts[2], parts[3])
@@ -222,7 +276,7 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
             except (ValueError, UnicodeError) as error:
                 self.reply(400, {'error': str(error)})
             except KeyError as error:
-                self.reply(404, {'error': str(error.args[0])})
+                self.reply(404, {'error': str(cast(object, error.args[0]))})
             except sqlite3.Error:
                 self.reply(500, {'error': 'Could not save changes. Try again. Check the gallery log if this continues.'})
                 raise
@@ -231,7 +285,7 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                     self.close_unread()
 
         @staticmethod
-        def require_fields(body, fields):
+        def require_fields(body: Mapping[str, object], fields: set[str]) -> None:
             if set(body) != fields:
                 raise ValueError('Request fields do not match this action.')
 
