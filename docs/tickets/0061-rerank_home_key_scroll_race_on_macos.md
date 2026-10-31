@@ -16,7 +16,7 @@ The gallery's Playwright test of the favorites table's keyboard scrolling passes
 
 ## Acceptance
 
-- [ ] `rerank results and full explanations are accessible on desktop` and `on mobile` pass 24 of 24 repeats on a macOS runner, where before the fix 3 of 24 failed, and with the first attempt at a fix, the equality wait, 12 of 24.
+- [x] `rerank results and full explanations are accessible on desktop` and `on mobile` pass 24 of 24 repeats on a macOS runner, where before the fix 3 of 24 failed, and with the first attempt at a fix, the equality wait, 12 of 24.
 - [ ] The CI workflow is green on Linux, macOS and Windows.
 
 ## Spec
@@ -34,3 +34,5 @@ The test pressed Home as soon as `scrollTop` was greater than zero, that is, at 
 ## Deviations
 
 ## Result
+
+The 24-repeat run on a macOS runner passed 24 of 24 with the settled-scroll wait (GitHub Actions run 41160544247), against 3 of 24 failures before the fix (run 41159156179) and 12 of 24 with the equality wait (run 41159962501). The diagnostic branch that ran them was temporary and is deleted.
