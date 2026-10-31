@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import AxeBuilder from '@axe-core/playwright';
@@ -36,6 +36,18 @@ store.save_geocodes({'Work address': {'latitude': 41.88, 'longitude': -87.63, 'f
 store.update_settings(places=[{'name': 'Work', 'address': 'Work address'}], location_priorities={**SETTINGS['location_priorities'], 'places': 'high'})
 print('null')
 `);
+}
+
+async function scrolledDown(region: Locator) {
+  // A keyboard scroll animates, and Chromium drops a key that lands on the animation's last frame, so the next key
+  // waits until the position has stopped moving.
+  let previous = -1;
+  await expect.poll(async () => {
+    const top = await region.evaluate(element => element.scrollTop);
+    const settled = top > 0 && top === previous;
+    previous = top;
+    return settled;
+  }, { intervals: [200] }).toBe(true);
 }
 
 async function open(page: Page, url: string) {
@@ -273,7 +285,7 @@ print(json.dumps({'review': result, 'listing': store.listing(first)}))
     await page.screenshot({ path: testInfo.outputPath(`rerank-${viewport.name}.png`) });
     const favorites = page.getByRole('region', { name: 'All favorites and held-out ranks', exact: true });
     await favorites.press('End');
-    await expect.poll(() => favorites.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    await scrolledDown(favorites);
     const viewportBounds = await favorites.boundingBox();
     const headerBounds = await favorites.getByRole('row').first().boundingBox();
     expect(viewportBounds!.height).toBeLessThanOrEqual(190);
