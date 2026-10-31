@@ -121,6 +121,7 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
                 except KeyError as error:
                     self.reply(404, {'error': str(error.args[0])})
                 except sqlite3.Error:
+                    self.close_connection = True
                     self.reply(500, {'error': 'Could not read the listing store. Check the gallery log.'})
                     raise
             else:
@@ -236,6 +237,7 @@ def make_server(store, port=8765, chat_runner=None, install_id='development'):
             except KeyError as error:
                 self.reply(404, {'error': str(error.args[0])})
             except sqlite3.Error:
+                self.close_connection = True
                 self.reply(500, {'error': 'Could not save changes. Try again. Check the gallery log if this continues.'})
                 raise
             finally:
