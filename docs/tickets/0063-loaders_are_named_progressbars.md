@@ -1,7 +1,7 @@
 ---
 title: The gallery's loading indicators carry a name ARIA prohibits on their element
 type: Bug
-state: In Progress
+state: Done
 priority: 2
 assignee: agent
 milestone:
@@ -16,8 +16,8 @@ Every loading indicator in the gallery is an indeterminate progress bar whose na
 
 ## Acceptance
 
-- [ ] The test `desktop and mobile are accessible, fit the viewport and load bundled photos` holds the listing request, checks accessibility with the listing still loading and its progress bar named "Loading listing" visible, then releases the request and checks again with the listing shown.
-- [ ] The CI workflow is green on Linux, macOS and Windows.
+- [x] The test `desktop and mobile are accessible, fit the viewport and load bundled photos` holds the listing request, checks accessibility with the listing still loading and its progress bar named "Loading listing" visible, then releases the request and checks again with the listing shown.
+- [x] The CI workflow is green on Linux, macOS and Windows.
 
 ## Spec
 
@@ -34,3 +34,5 @@ The test no longer depends on timing: it holds the listing request with a route 
 ## Deviations
 
 ## Result
+
+The first run of the held test, at `dc10936` (run 41700518990), failed on Ubuntu with `color-contrast` on the drawer title while the drawer faded in; the wait for the drawer's full opacity, recorded under Design, fixed it. The next run, at `8fde086` (run 41702398162), failed only the macOS rerank timing test, which ticket 0065 fixes. With that fix merged in, `671fa1a` passed on Linux, macOS and Windows (run 41711136564), and the change merged as `a2a8c9c`. `main` with every fix merged, `436b2ec` (run 41715244461), passed on Linux, macOS and Windows.

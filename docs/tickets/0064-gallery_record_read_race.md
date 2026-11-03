@@ -1,7 +1,7 @@
 ---
 title: Stopping the gallery fails when the server deletes its record as the launcher reads it
 type: Bug
-state: In Progress
+state: Done
 priority: 2
 assignee: agent
 milestone:
@@ -16,8 +16,8 @@ related: [0062, 0063]
 
 ## Acceptance
 
-- [ ] A test deletes the record between the launcher's decision to read it and the read itself, and the launcher reports no record instead of failing.
-- [ ] The CI workflow is green on Linux, macOS and Windows.
+- [x] A test deletes the record between the launcher's decision to read it and the read itself, and the launcher reports no record instead of failing.
+- [x] The CI workflow is green on Linux, macOS and Windows.
 
 ## Spec
 
@@ -32,3 +32,5 @@ The macOS run of the Python suite on main after #62 failed `test_open_returns_a_
 ## Deviations
 
 ## Result
+
+`test_a_record_the_server_deletes_during_the_read_counts_as_no_record` replaces `Path.read_text` with one that deletes the record and then reads it, so the delete always lands between the decision to read and the read. It was not run against the old `read_connection`, where `is_file()` would return true before that delete and the read would raise the `FileNotFoundError` of the macOS run. CI on `2d1494d` passed on Linux, macOS and Windows (run 41701620296), and so did `main` after the merge, `2a01c36` (run 41706306574).

@@ -1,7 +1,7 @@
 ---
 title: basedpyright at its strictest
 type: Chore
-state: In Progress
+state: Done
 priority: 2
 assignee: agent
 milestone:
@@ -16,12 +16,12 @@ Every Python file of the profile and the test suite type-checks under basedpyrig
 
 ## Acceptance
 
-- [ ] `pyrightconfig.json` sets `typeCheckingMode` to `all`, every rule reports an error, and `basedpyright` over `tests`, `skills`, `scripts` and `typings` reports zero errors on all three CI platforms.
-- [ ] No `# type: ignore` in the repository. Each `# pyright: ignore` names its rule and, on the same line, why the type system cannot state the truth there; Design lists them all, with each rule relaxed in `pyrightconfig.json` and its reason.
-- [ ] `typings/` holds real stubs for the modules the test environment lacks, declaring the names the code uses with their real types, and `typings/README.md` says which module each stub stands for.
-- [ ] `tests/run.sh` and `tests/run.ps1` run basedpyright right after Ruff, from `tests/requirements.txt`, which pins it.
-- [ ] README and AGENTS.md name the check.
-- [ ] The Python suite still passes with zero skips on every platform: behavior did not change.
+- [x] `pyrightconfig.json` sets `typeCheckingMode` to `all`, every rule reports an error, and `basedpyright` over `tests`, `skills`, `scripts` and `typings` reports zero errors on all three CI platforms.
+- [x] No `# type: ignore` in the repository. Each `# pyright: ignore` names its rule and, on the same line, why the type system cannot state the truth there; Design lists them all, with each rule relaxed in `pyrightconfig.json` and its reason.
+- [x] `typings/` holds real stubs for the modules the test environment lacks, declaring the names the code uses with their real types, and `typings/README.md` says which module each stub stands for.
+- [x] `tests/run.sh` and `tests/run.ps1` run basedpyright right after Ruff, from `tests/requirements.txt`, which pins it.
+- [x] README and AGENTS.md name the check.
+- [x] The Python suite still passes with zero skips on every platform: behavior did not change.
 
 ## Spec
 
@@ -63,4 +63,4 @@ Typing the code changed a few edge behaviors, each listed here because the suite
 
 ## Result
 
-basedpyright reported 21,203 errors in 100 files when the configuration was added, all of `typeCheckingMode` `all`'s rules, led by the unknown-type family on unannotated functions and JSON dicts. Every Python file now passes with 0 errors and 0 warnings, 119 files analyzed, with two rules relaxed and five ignores, each listed under Design. Ruff passes. CI results on the pull request: pending.
+basedpyright reported 21,203 errors in 100 files when the configuration was added, all of `typeCheckingMode` `all`'s rules, led by the unknown-type family on unannotated functions and JSON dicts. Every Python file now passes with 0 errors and 0 warnings, 119 files analyzed, with two rules relaxed and five ignores, each listed under Design. Ruff passes. CI on the pull request's last commit, `7b7db31`, passed on Linux, macOS and Windows (GitHub Actions run 41170379646), and so did `main` after the merge, `fee551d` (run 41172063574). Each platform's check fails on any basedpyright error and on any skipped test.
