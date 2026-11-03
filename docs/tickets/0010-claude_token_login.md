@@ -29,6 +29,6 @@ The plugin accepts `CLAUDE_CODE_OAUTH_TOKEN` from Hermes' environment. The token
 
 ## Deviations
 
-A token in the `apt-scraper` profile `.env` never reaches Claude Code under Hermes 0.22.5, because the host gateway serves every profile from the default profile's environment. The owner deferred the ticket (`0011`); the installer change is on the draft pull request of `feat/claude_setup_token_login`.
+A token in the `apt-scraper` profile `.env` never reaches Claude Code under Hermes 0.22.5, because the host gateway serves every profile from the default profile's environment. The owner deferred the ticket (`0011`). Its installer change, draft pull request #6, was closed unmerged: #59 replaced the installers it edited, so the token step is written against the current `install.sh` and `install.ps1` once the plugin reads the token from the profile's secret scope.
 
 ## Result

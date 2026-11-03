@@ -25,7 +25,7 @@ Verified on the owner's machine: with a bogus `CLAUDE_CODE_OAUTH_TOKEN` in `prof
 
 `gateway.standalone: true` in the profile's `config.yaml` would also load the profile's `.env`. The Hermes docs call it a temporary shim that will be removed, so it is not an option.
 
-Recommendation: option 2. It keeps the token scoped to the profile that uses it, and the installer change on `feat/claude_setup_token_login` already writes it there. Option 1 is the fallback if upstream declines or is slow.
+Recommendation: option 2. It keeps the token scoped to the profile that uses it, and the installer change drafted in pull request #6 wrote it there. Option 1 is the fallback if upstream declines or is slow.
 
 ## Decision
 
@@ -37,4 +37,4 @@ Logging in with the Claude subscription already works through `claude auth login
 
 ## Consequences
 
-`0010` returns to the backlog with its draft pull request left open, so the installer change can be finished once the plugin reads the token from the profile's secret scope.
+`0010`'s installer change waits until the plugin reads the token from the profile's secret scope.
