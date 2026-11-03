@@ -37,4 +37,4 @@ Logging in with the Claude subscription already works through `claude auth login
 
 ## Consequences
 
-`0010` returns to the backlog. Its installer change waits until the plugin reads the token from the profile's secret scope.
+`0010`'s installer change waits until the plugin reads the token from the profile's secret scope.
