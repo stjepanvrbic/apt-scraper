@@ -11,7 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/ranking/scripts'))
 
-from test_rerank import SETTINGS, StoreTestCase, cpu_budget, fill, least_cpu_seconds, speed_factor  # noqa: E402
+from test_rerank import RERANK_SECONDS, SETTINGS, StoreTestCase, fill, least_scaled_cpu_seconds  # noqa: E402
 from rerank import RerankReport, rerank  # noqa: E402
 from hypotheses import Citation, HypothesisTask, prepare, save, save_judgments, pending_judgments, decide, active, assess  # noqa: E402
 from learning import PairPrediction, RankPrediction  # noqa: E402
@@ -398,11 +398,10 @@ class HypothesisTests(StoreTestCase):
     def test_six_hypotheses_keep_the_300_listing_50_favorite_rerank_under_two_seconds(self) -> None:
         from ranking_hypothesis_experiment import populate_benchmark
         populate_benchmark(self.store)
-        seconds: float
         result: RerankReport
-        seconds, result = least_cpu_seconds(lambda: rerank(self.store, seed=1))
+        measurement, result = least_scaled_cpu_seconds(lambda: rerank(self.store, seed=1))
         self.assertEqual(sum(name.startswith('hypothesis:') for name in result['weights']), 6)
-        self.assertLess(seconds, cpu_budget(), speed_factor())
+        self.assertLess(measurement.on_owner_pc, RERANK_SECONDS, measurement)
 
     def test_a_predictive_fixture_hypothesis_survives_twenty_new_labels(self) -> None:
         from ranking_hypothesis_experiment import run
