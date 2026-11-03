@@ -7,7 +7,7 @@ from urllib.error import HTTPError
 from unittest.mock import patch
 
 from test_gallery_server import GalleryServerCase
-from test_rerank import SETTINGS, cpu_budget, fill, speed_factor
+from test_rerank import RERANK_SECONDS, SETTINGS, fill, scaled
 from queries import BrowseItem, Page
 from rerank import RerankReport, rerank, save_review
 from review import Rerank, ReviewState
@@ -134,16 +134,19 @@ class RerankServerTests(GalleryServerCase):
 
     def test_http_rerank_and_order_read_fit_the_two_second_budget(self) -> None:
         _ = fill(self.store, 300, 50)
-        budget = cpu_budget()
-        started = time.perf_counter()
-        # The budget is CPU time; a wall-clock timeout with a margin lets a slow run fail on the assertion, which
-        # reports the measured values, instead of on the socket.
-        summary = cast(RerankReport, self.request('/api/rerank', {}, timeout=max(10, 3 * budget)))
-        items = cast(Page, self.request('/api/listings'))['items']
-        elapsed = time.perf_counter() - started
+
+        def rerank_and_read() -> tuple[float, tuple[RerankReport, list[BrowseItem]]]:
+            started = time.perf_counter()
+            # A timeout far above any budget lets a slow run fail on the assertion, which reports the measured
+            # values, instead of on the socket.
+            summary = cast(RerankReport, self.request('/api/rerank', {}, timeout=60))
+            items = cast(Page, self.request('/api/listings'))['items']
+            return time.perf_counter() - started, (summary, items)
+
+        measurement, (summary, items) = scaled(rerank_and_read)
         self.assertEqual((summary['ranked'], len(summary['held_out'])), (300, 50))
         self.assertEqual(items[0]['rank'], 1)
-        self.assertLess(elapsed, budget, speed_factor())
+        self.assertLess(measurement.on_owner_pc, RERANK_SECONDS, measurement)
 
     def test_pending_reasons_follow_current_features_and_never_expose_an_old_explanation(self) -> None:
         identifiers = fill(self.store, 25, 3)

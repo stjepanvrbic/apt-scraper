@@ -16,7 +16,8 @@ ${code}
 }
 
 // The spec's two seconds are judged on the owner's PC; a slower machine, such as a shared CI runner, gets the budget
-// scaled by tests/test_rerank.py's speed_factor, the same calibration the Python suite's timing tests use.
+// scaled by tests/test_rerank.py's speed_factor, the calibration the Python suite's timing tests use, timed right
+// before and right after the measurement because a shared runner's speed drifts within minutes.
 function speedFactor(): number {
   return Number(execFileSync('python', ['-c', `
 import sys
@@ -74,11 +75,12 @@ test('Score and rerank applies real ranks and every favorite check within two se
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
   });
   const response = page.waitForResponse(response => response.url().endsWith('/api/rerank') && response.request().method() === 'POST');
+  const factorBefore = speedFactor();
   await page.getByRole('button', { name: 'Score and rerank', exact: true }).click();
   const completed = await (await response).json();
   await page.waitForFunction(() => performance.getEntriesByName('rerank-visible').length > 0);
   const elapsed = await page.evaluate(() => performance.getEntriesByName('rerank-visible')[0].duration);
-  const factor = speedFactor();
+  const factor = (factorBefore + speedFactor()) / 2;
   console.info(`Rerank click to visible order and all 50 held-out ranks: ${elapsed.toFixed(0)}ms; server: ${completed.seconds}s; budget ${(2000 * factor).toFixed(0)}ms`);
   expect(elapsed).toBeLessThan(2000 * factor);
   await expect(page.getByText('300 ranked', { exact: true })).toBeVisible();
