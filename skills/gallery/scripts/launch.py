@@ -81,8 +81,11 @@ def save_connection(database: str | Path, server: GalleryServer) -> Connection:
 
 
 def read_connection(database: str | Path, port: int) -> Connection | None:
-    path = connection_file(database, port)
-    return cast(Connection, json.loads(path.read_text(encoding='utf-8'))) if path.is_file() else None
+    # The server deletes its record as it exits, which can happen at any moment of a read.
+    try:
+        return cast(Connection, json.loads(connection_file(database, port).read_text(encoding='utf-8')))
+    except FileNotFoundError:
+        return None
 
 
 def forget_connection(database: str | Path, port: int, token: str) -> None:
