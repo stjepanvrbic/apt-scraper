@@ -1,10 +1,14 @@
-import { expect } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import AxeBuilder from '@axe-core/playwright';
 import { test } from './fixtures';
 
 const script = resolve('../skills/gallery/scripts/gallery.py');
+
+async function accessibilityViolations(page: Page) {
+  return (await new AxeBuilder({ page }).analyze()).violations.map(item => ({ id: item.id, nodes: item.nodes.map(node => node.html) }));
+}
 
 test('browse ordered tabs, complete listing details, photos and original source', async ({ page, gallery }) => {
   await page.goto(gallery.url);
@@ -136,7 +140,7 @@ test('desktop and mobile are accessible, fit the viewport and load bundled photo
   await page.goto(gallery.url);
   await expect(page.getByRole('article')).toHaveCount(4);
   await expect.poll(() => page.locator('article img').evaluateAll(images => images.every(image => (image as HTMLImageElement).naturalWidth > 0))).toBe(true);
-  expect((await new AxeBuilder({ page }).analyze()).violations.map(item => ({ id: item.id, nodes: item.nodes.map(node => node.html) }))).toEqual([]);
+  expect(await accessibilityViolations(page)).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath('desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   for (const name of ['Rankings', 'Favorites', 'Compare', 'Contacted', 'Viewings', 'Notes']) {
@@ -149,8 +153,17 @@ test('desktop and mobile are accessible, fit the viewport and load bundled photo
   await expect(page.getByRole('tab', { name: 'Favorites' })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByText('No favorites yet')).toBeVisible();
   await page.getByRole('tab', { name: 'Rankings' }).click();
+  let release: () => void = () => {};
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/listings/sample*', async route => { await held; await route.continue(); });
   await page.getByRole('button', { name: 'View Sunlit home in Lincoln Park', exact: true }).click();
-  expect((await new AxeBuilder({ page }).analyze()).violations.map(item => ({ id: item.id, nodes: item.nodes.map(node => node.html) }))).toEqual([]);
+  await expect(page.getByRole('progressbar', { name: 'Loading listing' })).toBeVisible();
+  // The drawer fades in as it opens, and axe measures text contrast through that opacity.
+  await expect(page.getByRole('dialog')).toHaveCSS('opacity', '1');
+  expect(await accessibilityViolations(page)).toEqual([]);
+  release();
+  await expect(page.getByRole('dialog').getByRole('heading', { name: 'Sunlit home in Lincoln Park' })).toBeVisible();
+  expect(await accessibilityViolations(page)).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath('detail-mobile.png'), fullPage: true });
 });
 
@@ -198,11 +211,11 @@ test('Notes uses a chat composer, streamed reply, tool timeline and choices', as
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   await expect(page.getByText('Which street?', { exact: true })).toBeVisible();
   await expect(page.getByText('read preferences', { exact: true })).toBeVisible();
-  expect((await new AxeBuilder({ page }).analyze()).violations.map(item => ({ id: item.id, nodes: item.nodes.map(node => node.html) }))).toEqual([]);
+  expect(await accessibilityViolations(page)).toEqual([]);
   await page.getByRole('button', { name: 'Oak', exact: true }).focus();
   await page.keyboard.press('Enter');
   await expect(page.getByText('Oak Street is your preference.', { exact: true })).toBeVisible();
-  expect((await new AxeBuilder({ page }).analyze()).violations.map(item => ({ id: item.id, nodes: item.nodes.map(node => node.html) }))).toEqual([]);
+  expect(await accessibilityViolations(page)).toEqual([]);
 });
 
 test('cards show availability, rental period, author and correspondence without opening details', async ({ page, gallery }) => {
