@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from test_gallery_store import listing, present
 from test_gallery_server import GalleryServerCase
-from test_rerank import StoreTestCase, cpu_budget, fill, least_cpu_seconds, speed_factor
+from test_rerank import RERANK_SECONDS, StoreTestCase, fill, least_scaled_cpu_seconds
 from rerank import pairwise_questions, rerank
 from schema import MIGRATIONS
 from implicit_signals import weak_labels
@@ -166,9 +166,9 @@ class SignalRerankTests(StoreTestCase):
             _ = self.store.record_signals([event(self.store, **values),
                                           event(self.store, 'dwell', duration_ms=60000 if index < 50 else 1000, **values),
                                           event(self.store, 'close', **values)])
-        seconds, result = least_cpu_seconds(lambda: rerank(self.store, seed=1))
+        measurement, result = least_scaled_cpu_seconds(lambda: rerank(self.store, seed=1))
         self.assertEqual(present(result.get('implicit_signals'))['weak_labels'], 250)
-        self.assertLess(seconds, cpu_budget(), speed_factor())
+        self.assertLess(measurement.on_owner_pc, RERANK_SECONDS, measurement)
 
     def test_diagnostic_weak_labels_never_change_ranks_explanations_or_questions(self) -> None:
         identifiers = fill(self.store, 24, 4)

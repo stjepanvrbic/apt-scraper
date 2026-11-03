@@ -1,4 +1,3 @@
-import functools
 import json
 import os
 import sqlite3
@@ -11,7 +10,7 @@ import unittest
 from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
-from typing import TypedDict, cast, override
+from typing import NamedTuple, TypedDict, cast, override
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
 
@@ -101,25 +100,29 @@ def fill(store: ListingStore, count: int, favorites: int, *, seed: int = 7) -> l
     return identifiers
 
 
+def cpu_seconds[T](call: Callable[[], T]) -> tuple[float, T]:
+    """The CPU time of one call and its result. CPU time leaves out the time other processes hold the cores."""
+    started = time.process_time()
+    result = call()
+    return time.process_time() - started, result
+
+
 def least_cpu_seconds[T](call: Callable[[], T], runs: int = TIMING_RUNS) -> tuple[float, T]:
-    """The least CPU time of runs calls and the last call's result. CPU time leaves out the time other processes hold
-    the cores, and the least of several runs leaves out runs slowed further by work sharing their core."""
-    times: list[float] = []
-    results: list[T] = []
-    for _ in range(runs):
-        started = time.process_time()
-        result = call()
-        times.append(time.process_time() - started)
-        results.append(result)
-    return min(times), results[-1]
+    """The least CPU time of runs calls and the last call's result. The least of several runs leaves out runs slowed
+    further by work sharing their core."""
+    measured = [cpu_seconds(call) for _ in range(runs)]
+    return min(seconds for seconds, _ in measured), measured[-1][1]
 
 
 # The spec's two seconds are judged on the owner's PC, where reference_work takes REFERENCE_SECONDS of CPU time
-# (Python 3.14, least of five runs). A slower machine, such as a shared CI runner or a sandbox, is given the
-# budget scaled by how much slower it runs the same work, timed once per process; a faster machine keeps the
-# spec's budget. The work is plain Python arithmetic, as the rerank's scoring is: a numpy workload would count
-# the threads of its BLAS, which the rerank never uses.
+# (Python 3.14, least of five runs). A slower machine, such as a shared CI runner or a sandbox, has its measurement
+# scaled by how much slower it runs the same work; a faster machine keeps the spec's budget. A shared runner's
+# speed drifts within minutes (a macOS runner took 0.46 to 0.88 seconds for the reference work within one job), so
+# the reference work is timed right before and right after each measurement, never once for a whole run. The work
+# is plain Python arithmetic, as the rerank's scoring is: a numpy workload would count the threads of its BLAS,
+# which the rerank never uses.
 REFERENCE_SECONDS = 0.35
+RERANK_SECONDS = 2.0
 
 
 def reference_work() -> float:
@@ -129,15 +132,32 @@ def reference_work() -> float:
     return total
 
 
-@functools.cache
 def speed_factor() -> float:
-    """How many times slower than the owner's PC this machine runs the reference work, at least 1."""
-    return max(1.0, least_cpu_seconds(reference_work, runs=5)[0] / REFERENCE_SECONDS)
+    """How many times slower than the owner's PC this machine runs the reference work now, at least 1."""
+    return max(1.0, cpu_seconds(reference_work)[0] / REFERENCE_SECONDS)
 
 
-def cpu_budget(seconds: float = 2.0) -> float:
-    """The spec's budget of `seconds` on the owner's PC, scaled for this machine."""
-    return seconds * speed_factor()
+class Scaled(NamedTuple):
+    """Seconds measured on this machine and its speed factor around the measurement."""
+    seconds: float
+    factor: float
+
+    @property
+    def on_owner_pc(self) -> float:
+        return self.seconds / self.factor
+
+
+def scaled[T](measure: Callable[[], tuple[float, T]]) -> tuple[Scaled, T]:
+    """measure's seconds with the mean of the speed factors right before and right after it, and its result."""
+    before = speed_factor()
+    seconds, result = measure()
+    return Scaled(seconds, (before + speed_factor()) / 2), result
+
+
+def least_scaled_cpu_seconds[T](call: Callable[[], T], runs: int = TIMING_RUNS) -> tuple[Scaled, T]:
+    """Of runs calls, the CPU time least on the owner's PC, and the last call's result."""
+    measured = [scaled(lambda: cpu_seconds(call)) for _ in range(runs)]
+    return min((measurement for measurement, _ in measured), key=lambda measurement: measurement.on_owner_pc), measured[-1][1]
 
 
 def feature_lists(reason: Reason) -> FeatureReason:
@@ -244,9 +264,9 @@ class RerankTests(StoreTestCase):
     def test_spec_rerank_timing_with_300_listings_and_50_favorites(self) -> None:
         """Spec › Acceptance "Rerank": the new order and the leave-one-out check within 2 seconds."""
         _ = fill(self.store, 300, 50)
-        seconds, summary = least_cpu_seconds(lambda: rerank(self.store, seed=1))
+        measurement, summary = least_scaled_cpu_seconds(lambda: rerank(self.store, seed=1))
         self.assertEqual((summary['ranked'], len(summary['held_out'])), (300, 50))
-        self.assertLess(seconds, cpu_budget(), (speed_factor(), summary))
+        self.assertLess(measurement.on_owner_pc, RERANK_SECONDS, (measurement, summary))
 
 
 class MigrationTests(unittest.TestCase):

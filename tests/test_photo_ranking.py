@@ -22,7 +22,7 @@ from photo_catalog import GATE_PROBES, MATCH_ROOMS, PROBE_PROMPTS, vocabulary  #
 from rerank import rerank  # noqa: E402
 from scoring import Design, design, display, fit, fit_model, held_out_observations, leave_one_out, scores  # noqa: E402
 from store import ListingStore, PhotoFeatures, PhotoSimilarity  # noqa: E402
-from test_rerank import StoreTestCase, cpu_budget, fill, least_cpu_seconds, speed_factor  # noqa: E402
+from test_rerank import RERANK_SECONDS, StoreTestCase, fill, least_scaled_cpu_seconds  # noqa: E402
 
 MODEL = 'model-a'
 Similarity = Mapping[str, Mapping[tuple[str, str], float]]
@@ -356,9 +356,9 @@ class TimingTests(EncoderTestCase):
             ('like', 'Lots of daylight', [{'feature': 'photo:bright rooms', 'direction': 'like'}])])
         columns = {column.name for column in fit_model(self.store.ranking_inputs()).design.columns}
         self.assertTrue({'photo:carpet', 'photo:bright rooms', *(f'looks_like:{room}' for room in MATCH_ROOMS)} <= columns)
-        seconds, summary = least_cpu_seconds(lambda: rerank(self.store, seed=1))
+        measurement, summary = least_scaled_cpu_seconds(lambda: rerank(self.store, seed=1))
         self.assertEqual((summary['ranked'], len(summary['held_out'])), (300, 50))
-        self.assertLess(seconds, cpu_budget(), speed_factor())
+        self.assertLess(measurement.on_owner_pc, RERANK_SECONDS, measurement)
 
 
 assert set(GATE_PROBES) <= set(PROBE_PROMPTS)
