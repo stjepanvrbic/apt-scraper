@@ -1,7 +1,7 @@
 ---
 title: The rerank favorites table's Home key is lost on the last frame of End's scroll animation
 type: Bug
-state: In Progress
+state: Done
 priority: 2
 assignee: agent
 milestone:
@@ -17,7 +17,7 @@ The gallery's Playwright test of the favorites table's keyboard scrolling passes
 ## Acceptance
 
 - [x] `rerank results and full explanations are accessible on desktop` and `on mobile` pass 24 of 24 repeats on a macOS runner, where before the fix 3 of 24 failed, and with the first attempt at a fix, the equality wait, 12 of 24.
-- [ ] The CI workflow is green on Linux, macOS and Windows.
+- [x] The CI workflow is green on Linux, macOS and Windows.
 
 ## Spec
 
@@ -36,3 +36,5 @@ The test pressed Home as soon as `scrollTop` was greater than zero, that is, at 
 ## Result
 
 The 24-repeat run on a macOS runner passed 24 of 24 with the settled-scroll wait (GitHub Actions run 41160544247), against 3 of 24 failures before the fix (run 41159156179) and 12 of 24 with the equality wait (run 41159962501). The diagnostic branch that ran them was temporary and is deleted.
+
+CI on the pull request's last commit, `426ec7b`, passed on Linux, macOS and Windows (run 41161075484), and so did `main` after the merge, `374ecd0` (run 41163104237).

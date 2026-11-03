@@ -1,7 +1,7 @@
 ---
 title: The rerank timing tests scale their budget by a speed measured minutes before the rerank
 type: Bug
-state: In Progress
+state: Done
 priority: 2
 assignee: agent
 milestone:
@@ -16,8 +16,8 @@ The two-second rerank checks judge the rerank against the machine's speed at the
 
 ## Acceptance
 
-- [ ] Every rerank timing check, the four CPU-time tests, the HTTP rerank test and the gallery's Playwright rerank test, scales its measurement by the reference work timed right before and right after it.
-- [ ] The CI workflow is green on Linux, macOS and Windows.
+- [x] Every rerank timing check, the four CPU-time tests, the HTTP rerank test and the gallery's Playwright rerank test, scales its measurement by the reference work timed right before and right after it.
+- [x] The CI workflow is green on Linux, macOS and Windows.
 
 ## Spec
 
@@ -42,3 +42,5 @@ On macOS the machine's speed changed by up to 1.9 times within one job, and the 
 ## Deviations
 
 ## Result
+
+CI on `c7c1d54` passed on Linux, macOS and Windows (run 41707481910), and the change merged as `5ff996b`. The Playwright rerank test there measured 1.9 s against a scaled budget of 5.3 s on Ubuntu, 3.0 s against 5.3 s on Windows and 1.6 s against 3.6 s on macOS. `main` with every fix merged, `436b2ec` (run 41715244461), passed on Linux, macOS and Windows.

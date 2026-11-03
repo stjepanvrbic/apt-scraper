@@ -1,7 +1,7 @@
 ---
 title: The gallery server closes a connection per request, which exhausts Windows's ports under the Playwright suite
 type: Bug
-state: In Progress
+state: Done
 priority: 2
 assignee: agent
 milestone:
@@ -16,9 +16,9 @@ The gallery server speaks HTTP/1.1 and keeps a browser's connections open across
 
 ## Acceptance
 
-- [ ] A test opens one connection to the server and gets three responses over it, each HTTP/1.1 without a `Connection: close` header.
+- [x] A test opens one connection to the server and gets three responses over it, each HTTP/1.1 without a `Connection: close` header.
 - [x] Twenty thousand sequential requests to the server on a Windows runner complete over a handful of connections with the `TIME_WAIT` count flat, where against the HTTP/1.0 server each request opened a connection and the count climbed into the thousands.
-- [ ] The CI workflow is green on Linux, macOS and Windows.
+- [x] The CI workflow is green on Linux, macOS and Windows.
 
 ## Spec
 
@@ -46,3 +46,5 @@ Measured on a `windows-latest` runner, dynamic port range 49152 with 16,384 port
 | HTTP/1.1, after (run 41165930197) | 1 | 3 / 3 / 3 / 3 | 6.5 s |
 
 Against the old server the `TIME_WAIT` count rose one per request until it covered the whole dynamic range, then held at about 16,150 while requests kept succeeding, so the sequential loop alone did not reach `ENOBUFS`; the navigation failure appeared in the real suite when the browser's parallel connections and the Python suite's own sockets came on top of a saturated range. Against the fixed server the loop used one connection, left the count where it started, and ran four times faster. The diagnostic branch that ran both was temporary and is deleted.
+
+`test_one_connection_serves_several_requests` sends three requests over one connection, the second declaring an empty body, and gets three HTTP/1.1 responses without `Connection: close` on the same socket. CI on the pull request's last commit, `7f21df3`, passed on Linux, macOS and Windows (run 41168414572). The first `main` run after the merge, `4837905` (run 41170295121), failed one macOS test: the gallery launcher's stop read its connection record as the exiting server deleted it, which ticket 0064 fixes. The next `main` run, `fee551d` (run 41172063574), passed.
