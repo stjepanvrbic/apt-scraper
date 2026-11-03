@@ -29,7 +29,7 @@ The Ubuntu run of the Playwright suite failed that test with one axe violation, 
 
 The theme gives every `Loader` the role `progressbar` as a default prop, next to the existing `Pagination` default. A progress bar without `aria-valuenow` is indeterminate, and its role requires the name the loaders already carry. The loader inside a Mantine button sits in an `aria-hidden` span, and the rerank panel's review loader is `aria-hidden` itself, so both stay out of the accessibility tree and need no name.
 
-The test no longer depends on timing: it holds the listing request with a route until it has checked the loading state, then checks the loaded drawer. The four copies of the axe call in the spec share a helper.
+The test no longer depends on timing: it holds the listing request with a route until it has checked the loading state, then checks the loaded drawer. Before the loading-state check it waits for the drawer to finish opening. Mantine's drawer slides in with its opacity going from 0 to 1, and the first run of the held check caught the drawer mid-fade: axe reported `color-contrast` on the drawer title "Listing details", because it measures text through the drawer's opacity. The four copies of the axe call in the spec share a helper.
 
 ## Deviations
 

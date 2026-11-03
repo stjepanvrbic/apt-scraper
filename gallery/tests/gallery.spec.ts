@@ -158,6 +158,8 @@ test('desktop and mobile are accessible, fit the viewport and load bundled photo
   await page.route('**/api/listings/sample*', async route => { await held; await route.continue(); });
   await page.getByRole('button', { name: 'View Sunlit home in Lincoln Park', exact: true }).click();
   await expect(page.getByRole('progressbar', { name: 'Loading listing' })).toBeVisible();
+  // The drawer fades in as it opens, and axe measures text contrast through that opacity.
+  await expect(page.getByRole('dialog')).toHaveCSS('opacity', '1');
   expect(await accessibilityViolations(page)).toEqual([]);
   release();
   await expect(page.getByRole('dialog').getByRole('heading', { name: 'Sunlit home in Lincoln Park' })).toBeVisible();
