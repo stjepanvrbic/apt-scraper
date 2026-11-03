@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, urlsplit
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/gallery/scripts'))
-from launch import Connection, Health, api_request
+from launch import Connection, Health, api_request, connection_file, read_connection
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'skills/gallery/scripts/gallery.py'
 
@@ -100,6 +100,20 @@ class GalleryLauncherTests(unittest.TestCase):
                 stopped = subprocess.run([*command, 'stop'], capture_output=True, text=True, timeout=10)
                 self.assertEqual(stopped.returncode, 0, stopped.stderr)
             self.assertEqual(list(records.iterdir()), [])
+
+    def test_a_record_the_server_deletes_during_the_read_counts_as_no_record(self) -> None:
+        database = self.home / 'listings.sqlite3'
+        record = connection_file(database, 8765)
+        record.parent.mkdir(parents=True)
+        _ = record.write_text(json.dumps({'url': 'http://127.0.0.1:8765', 'token': 'test-only'}), encoding='utf-8')
+        read_text = Path.read_text
+
+        def read_after_the_server_deleted_it(path: Path, encoding: str | None = None, errors: str | None = None, newline: str | None = None) -> str:
+            path.unlink()
+            return read_text(path, encoding=encoding, errors=errors, newline=newline)
+
+        with patch.object(Path, 'read_text', read_after_the_server_deleted_it):
+            self.assertIsNone(read_connection(database, 8765))
 
     def test_open_restarts_a_changed_install_and_rotates_its_secret(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
